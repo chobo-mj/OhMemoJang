@@ -1491,7 +1491,100 @@ fn font_id(ui: &egui::Ui, size: f32, name: &str, bold: bool) -> FontId {
         },
     )
 }
+/// For every character, the index of the last span that covers it (the
+/// one that wins), or `u32::MAX`. Each character is written once however
+/// many spans there are or however they overlap: spans are taken from the
+/// last, and `next[i]` skips the characters already decided.
+fn winning_spans(spans: &[Span], chars: usize) -> Vec<u32> {
+    let mut winner = vec![u32::MAX; chars];
+    // `next[i]`: an undecided character at or after `i` (`chars` if none).
+    let mut next: Vec<u32> = (0..=chars as u32).collect();
+    for (k, span) in spans.iter().enumerate().rev() {
+        let end = span.range.end.min(chars);
+        let mut i = span.range.start;
+        while i < end {
+            // Find the first undecided character, shortening the path to it.
+            let mut free = i;
+            while next[free] as usize != free {
+                free = next[free] as usize;
+            }
+            while next[i] as usize != i {
+                let step = next[i] as usize;
+                next[i] = free as u32;
+                i = step;
+            }
+            if free >= end {
+                break;
+            }
+            winner[free] = k as u32;
+            next[free] = free as u32 + 1;
+            i = free + 1;
+        }
+    }
+    winner
+}
+/// One section per character (so no kerning or letter spacing is applied
+/// between characters, and a picture or table placeholder is a section of
+/// its own), in the format of the last span covering it.
 fn layout(
+    text: &str,
+    spans: &[Span],
+    base: &Format,
+    font: FontId,
+    bold_font: FontId,
+    color: Color32,
+) -> LayoutJob {
+    let winner = if spans.is_empty() {
+        vec![]
+    } else {
+        winning_spans(spans, text.chars().count())
+    };
+    let stroke = Stroke::new(1.0_f32, color);
+    let link = Color32::from_rgb(61, 105, 166);
+    let mut job = LayoutJob {
+        text: text.to_owned(),
+        ..Default::default()
+    };
+    job.sections.reserve(winner.len().max(text.len() / 3));
+    // Whether the word being read starts with a URL scheme; asked once per word.
+    let mut token_is_link = text.starts_with("https://") || text.starts_with("http://");
+    for (i, (byte, ch)) in text.char_indices().enumerate() {
+        let f = match winner.get(i) {
+            Some(&k) if k != u32::MAX => &spans[k as usize].format,
+            _ => base,
+        };
+        let mut format = TextFormat {
+            font_id: if f.bold {
+                bold_font.clone()
+            } else {
+                font.clone()
+            },
+            color,
+            italics: f.italic,
+            extra_letter_spacing: if f.bold { 0.25 } else { 0. },
+            underline: if f.underline { stroke } else { Stroke::NONE },
+            strikethrough: if f.strike { stroke } else { Stroke::NONE },
+            ..Default::default()
+        };
+        let end = byte + ch.len_utf8();
+        // Automatic link emphasis uses the URL's exact lexical extent.
+        if ch.is_whitespace() {
+            let rest = &text[end..];
+            token_is_link = rest.starts_with("https://") || rest.starts_with("http://");
+        } else if token_is_link {
+            format.color = link;
+            format.underline = Stroke::new(1.0_f32, link);
+        }
+        job.sections.push(egui::text::LayoutSection {
+            leading_space: 0.,
+            byte_range: byte..end,
+            format,
+        });
+    }
+    job
+}
+#[cfg(test)]
+fn layout_reference(
     text: &str,
     spans: &[Span],
     base: &Format,
@@ -6148,7 +6241,8 @@ mod spacer_tests {
         let _ = ctx.run(Default::default(), |ctx| {
             let family = FontFamily::Name(SPACER_FONT.into());
             for size in [10., 100., 1500.] {
-                let w = ctx.fonts(|f| f.glyph_width(&FontId::new(size, family.clone()), '\u{3000}'));
+                let w =
+                    ctx.fonts(|f| f.glyph_width(&FontId::new(size, family.clone()), '\u{3000}'));
                 assert!((w - size).abs() < 0.01, "{size}: {w}");
             }
         });
@@ -6197,7 +6291,13 @@ mod spacer_tests {
         frame(&ctx, &mut doc, &mut body, Vec2::new(1920., 1040.), 3);
         let before = ctx.fonts(|f| f.font_image_size());
         for i in 4..40 {
-            frame(&ctx, &mut doc, &mut body, Vec2::new(500. + i as f32 * 30., 700.), i);
+            frame(
+                &ctx,
+                &mut doc,
+                &mut body,
+                Vec2::new(500. + i as f32 * 30., 700.),
+                i,
+            );
         }
         frame(&ctx, &mut doc, &mut body, Vec2::new(1920., 1040.), 40);
         assert_eq!(ctx.fonts(|f| f.font_image_size()), before);
@@ -6217,6 +6317,148 @@ mod spacer_tests {
             println!(
                 "spacer font {spacer}: maximize frame {ms:.2} ms, atlas {:?}",
                 ctx.fonts(|f| f.font_image_size())
+            );
+        }
+    }
+}
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+    /// A small deterministic generator (no extra crate for tests).
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self, below: usize) -> usize {
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((self.0 >> 33) as usize) % below.max(1)
+        }
+    }
+    fn fonts() -> (FontId, FontId) {
+        (
+            FontId::proportional(14.),
+            FontId::new(14., FontFamily::Name("bold".into())),
+        )
+    }
+    fn random_spans(rng: &mut Rng, chars: usize, count: usize) -> Vec<Span> {
+        (0..count)
+            .map(|_| {
+                // Past the end, empty and reversed ranges are all possible.
+                let a = rng.next(chars + 4);
+                let b = match rng.next(6) {
+                    0 => a,
+                    1 => a.saturating_sub(rng.next(5)),
+                    2 => chars + rng.next(9),
+                    _ => a + rng.next(12),
+                };
+                let bits = rng.next(16);
+                Span {
+                    range: a..b,
+                    format: Format {
+                        bold: bits & 1 != 0,
+                        italic: bits & 2 != 0,
+                        underline: bits & 4 != 0,
+                        strike: bits & 8 != 0,
+                    },
+                }
+            })
+            .collect()
+    }
+    /// The quick `layout` gives exactly the job the original one did.
+    #[test]
+    fn layout_matches_the_reference_for_any_spans_and_links() {
+        let (font, bold) = fonts();
+        let color = Color32::from_rgb(20, 30, 40);
+        let pieces = [
+            "한글 메모 ",
+            "plain ",
+            "https://example.com/a?b=c ",
+            "http://x.kr\n",
+            "\n",
+            "☐ 할 일\t",
+            "xhttps://not.a.link ",
+            "https://",
+            "  ",
+            "\u{3000}",
+            "끝",
+            "http:/no ",
+            "https://a\u{3000}b ",
+            "\u{1F642} ",
+        ];
+        let mut rng = Rng(7);
+        for round in 0..400 {
+            let mut text = String::new();
+            for _ in 0..rng.next(14) {
+                text.push_str(pieces[rng.next(pieces.len())]);
+            }
+            if round % 9 == 0 {
+                text.push(placeholder(3));
+            }
+            let chars = text.chars().count();
+            let count = rng.next(9);
+            let spans = random_spans(&mut rng, chars, count);
+            let base = Format {
+                bold: round % 5 == 0,
+                ..Default::default()
+            };
+            let got = layout(&text, &spans, &base, font.clone(), bold.clone(), color);
+            let want = layout_reference(&text, &spans, &base, font.clone(), bold.clone(), color);
+            assert!(got == want, "round {round}: {text:?} {spans:?}");
+        }
+        for text in [
+            "",
+            "https://only",
+            " https://after.space",
+            "\nhttp://after.line",
+        ] {
+            let base = Format::default();
+            let got = layout(text, &[], &base, font.clone(), bold.clone(), color);
+            let want = layout_reference(text, &[], &base, font.clone(), bold.clone(), color);
+            assert!(got == want, "{text:?}");
+        }
+    }
+    fn long_memo(spans: usize) -> (String, Vec<Span>) {
+        let text =
+            "긴 메모의 한 줄입니다. plain text and 한글 https://example.com/page\n".repeat(400);
+        let chars = text.chars().count();
+        let mut rng = Rng(11);
+        let spans = (0..spans)
+            .map(|_| {
+                let a = rng.next(chars);
+                Span {
+                    range: a..a + 1 + rng.next(30),
+                    format: Format {
+                        bold: true,
+                        ..Default::default()
+                    },
+                }
+            })
+            .collect();
+        (text, spans)
+    }
+    /// `cargo test --release layout_build_time -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn layout_build_time() {
+        let (font, bold) = fonts();
+        let base = Format::default();
+        for count in [0, 50, 500, 3000] {
+            let (text, spans) = long_memo(count);
+            let time = |f: &dyn Fn() -> LayoutJob| {
+                let t = std::time::Instant::now();
+                for _ in 0..20 {
+                    std::hint::black_box(f());
+                }
+                t.elapsed().as_secs_f64() * 1000. / 20.
+            };
+            let black = Color32::BLACK;
+            let old =
+                time(&|| layout_reference(&text, &spans, &base, font.clone(), bold.clone(), black));
+            let new = time(&|| layout(&text, &spans, &base, font.clone(), bold.clone(), black));
+            println!(
+                "{} chars, {count} spans: before {old:.3} ms, after {new:.3} ms per frame",
+                text.chars().count()
             );
         }
     }
