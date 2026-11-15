@@ -121,7 +121,7 @@ pub fn family(ui: &egui::Ui, name: &str) -> egui::FontFamily {
         egui::FontFamily::Proportional
     }
 }
-pub fn infer_title(title: &mut String, body: &mut String) {
+pub fn infer_title(title: &mut String, body: &str) {
     if !title.trim().is_empty() {
         return;
     }
@@ -1328,35 +1328,41 @@ mod tests {
     #[test]
     fn first_real_line_becomes_title_without_consuming_project_directive() {
         let mut title = String::new();
-        let mut body = "#프로젝트 \n\n첫 제목\n본문입니다".to_owned();
-        infer_title(&mut title, &mut body);
+        let body = "#프로젝트 \n\n첫 제목\n본문입니다".to_owned();
+        infer_title(&mut title, &body);
         assert_eq!(title, "첫 제목");
-        assert_eq!(body, "#프로젝트 \n\n첫 제목\n본문입니다", "the line stays in the body");
-        infer_title(&mut title, &mut body);
+        assert_eq!(
+            body, "#프로젝트 \n\n첫 제목\n본문입니다",
+            "the line stays in the body"
+        );
+        infer_title(&mut title, &body);
         assert_eq!(title, "첫 제목");
     }
     #[test]
     fn a_first_line_list_item_gives_the_title_without_its_marker_and_stays_in_the_body() {
         let mut title = String::new();
         let mut body = "1. 첫 항목\n2. 둘째".to_owned();
-        infer_title(&mut title, &mut body);
+        infer_title(&mut title, &body);
         assert_eq!(title, "첫 항목");
         assert_eq!(body, "1. 첫 항목\n2. 둘째");
         // a title that is there is left alone, even when the body changes
         body = "  1. 바뀜\n".into();
-        infer_title(&mut title, &mut body);
+        infer_title(&mut title, &body);
         assert_eq!(title, "첫 항목");
         // marker-only lines are skipped; bullets and indentation do not matter
         let mut title = String::new();
-        let mut body = "  1. \n    - 글머리 항목\n".to_owned();
-        infer_title(&mut title, &mut body);
+        let body = "  1. \n    - 글머리 항목\n".to_owned();
+        infer_title(&mut title, &body);
         assert_eq!(title, "글머리 항목");
         assert_eq!(body, "  1. \n    - 글머리 항목\n");
         // an ordinary first line is copied up too and stays in the body
         let mut title = String::new();
-        let mut body = "그냥 제목\n1. 항목".to_owned();
-        infer_title(&mut title, &mut body);
-        assert_eq!((title.as_str(), body.as_str()), ("그냥 제목", "그냥 제목\n1. 항목"));
+        let body = "그냥 제목\n1. 항목".to_owned();
+        infer_title(&mut title, &body);
+        assert_eq!(
+            (title.as_str(), body.as_str()),
+            ("그냥 제목", "그냥 제목\n1. 항목")
+        );
     }
     #[test]
     fn trash_restore_keeps_original_identity_and_body() {

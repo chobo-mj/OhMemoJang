@@ -40,7 +40,9 @@ pub fn limit_of(key: &str) -> usize {
 /// UTF-16LE up to the first NUL, strictly valid, as a `String`.
 pub fn utf16le_to_string(bytes: &[u8]) -> Option<String> {
     let units: Vec<u16> = bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|c| u16::from_le_bytes([c[0], c[1]]))
         .take_while(|&u| u != 0)
         .collect();
@@ -198,7 +200,12 @@ pub fn html_table_with(
         let cells: Vec<String> = r
             .select(&cell)
             .map(|c| c.text().collect::<Vec<_>>().join(" "))
-            .map(|s| clip(&s.split_whitespace().collect::<Vec<_>>().join(" "), cell_chars))
+            .map(|s| {
+                clip(
+                    &s.split_whitespace().collect::<Vec<_>>().join(" "),
+                    cell_chars,
+                )
+            })
             .collect();
         cols = cols.max(cells.len());
         if grid.len() < max_rows {
@@ -338,6 +345,7 @@ fn u16_at(b: &[u8], o: usize) -> Option<u16> {
 
 /// Supported: uncompressed 24-bit and 32-bit (BI_RGB, or BI_BITFIELDS with
 /// the usual BGRA masks). Every size is computed with checked arithmetic.
+#[allow(clippy::needless_range_loop)]
 pub fn validate_dib(b: &[u8]) -> Option<Dib> {
     let header = u32_at(b, 0)? as usize;
     if !matches!(header, 40 | 108 | 124) || b.len() < header {
@@ -417,8 +425,11 @@ pub fn dib_to_rgba(b: &[u8], d: &Dib) -> Vec<u8> {
             }
         }
     }
-    if d.bits == 32 && out.chunks_exact(4).all(|p| p[3] == 0) {
-        out.chunks_exact_mut(4).for_each(|p| p[3] = 255);
+    if d.bits == 32 && out.as_chunks::<4>().0.iter().all(|p| p[3] == 0) {
+        out.as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .for_each(|p| p[3] = 255);
     }
     out
 }
@@ -474,7 +485,10 @@ pub fn fit_rgba(w: u32, h: u32, rgba: Vec<u8>, max_side: u32) -> Option<(u32, u3
     }
     let img = image::RgbaImage::from_raw(w, h, rgba)?;
     let k = max_side as f32 / w.max(h) as f32;
-    let (tw, th) = (((w as f32 * k).round() as u32).max(1), ((h as f32 * k).round() as u32).max(1));
+    let (tw, th) = (
+        ((w as f32 * k).round() as u32).max(1),
+        ((h as f32 * k).round() as u32).max(1),
+    );
     let small = image::imageops::thumbnail(&img, tw, th);
     Some((tw, th, small.into_raw()))
 }
@@ -528,20 +542,28 @@ mod tests {
 
     #[test]
     fn html_offsets_must_hit_char_boundaries() {
-        let mut v = b"StartHTML:-1\nEndHTML:-1\nStartFragment:0000000073\nEndFragment:0000000075\n".to_vec();
+        let mut v = b"StartHTML:-1\nEndHTML:-1\nStartFragment:0000000073\nEndFragment:0000000075\n"
+            .to_vec();
         v.extend("가나다라마바사".as_bytes());
         assert!(validate_html(&v).is_none());
     }
 
     #[test]
     fn table_from_html_and_text() {
-        let (g, r, c) =
-            html_table("<table><tr><td>a</td><td>b c</td></tr><tr><td></td><td>d</td></tr></table>")
-                .unwrap();
+        let (g, r, c) = html_table(
+            "<table><tr><td>a</td><td>b c</td></tr><tr><td></td><td>d</td></tr></table>",
+        )
+        .unwrap();
         assert_eq!((r, c), (2, 2));
         assert_eq!(g[0], vec!["a", "b c"]);
-        assert_eq!(html_to_text("<p>one</p><script>x()</script><p>two</p>"), "one\ntwo");
-        assert_eq!(html_to_text("<table><tr><td>a</td><td>b</td></tr></table>"), "a\tb");
+        assert_eq!(
+            html_to_text("<p>one</p><script>x()</script><p>two</p>"),
+            "one\ntwo"
+        );
+        assert_eq!(
+            html_to_text("<table><tr><td>a</td><td>b</td></tr></table>"),
+            "a\tb"
+        );
     }
 
     #[test]
@@ -571,7 +593,7 @@ mod tests {
     }
 
     fn dib24(w: i32, h: i32) -> Vec<u8> {
-        let stride = ((w as usize * 24 + 31) / 32) * 4;
+        let stride = (w as usize * 24).div_ceil(32) * 4;
         let mut v = vec![0u8; 40];
         v[0..4].copy_from_slice(&40u32.to_le_bytes());
         v[4..8].copy_from_slice(&w.to_le_bytes());

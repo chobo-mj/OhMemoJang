@@ -2,9 +2,9 @@
 mod alarm;
 mod app_icon;
 mod calendar_dock;
-mod clipboard_html;
 mod catalog;
 mod clipboard_history;
+mod clipboard_html;
 mod composer;
 mod content_collections;
 mod desktop;

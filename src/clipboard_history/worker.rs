@@ -2,9 +2,9 @@
 //! SQLite connection and applies retention. Deletes and stores are handled in
 //! one serial loop, so a delete can never be overtaken by a late insert.
 use super::formats::*;
-use eframe::egui;
 use super::store::{FormatRow, InsertError, ItemMeta, NewItem, Query, Store};
 use super::{Cmd, Event, Policy, Raw, RestoreOutcome, Settings, Shared, WinCmd};
+use eframe::egui;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
@@ -59,7 +59,9 @@ impl Worker {
                 Some(s)
             }
             Err(e) => {
-                let _ = tx.send(Event::Notice(format!("클립보드 기록 저장소를 열 수 없습니다: {e}")));
+                let _ = tx.send(Event::Notice(format!(
+                    "클립보드 기록 저장소를 열 수 없습니다: {e}"
+                )));
                 None
             }
         };
@@ -114,9 +116,8 @@ impl Worker {
                 // One bad item or request must not end the worker: nothing
                 // would be collected after it.
                 Ok(cmd) => {
-                    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        self.handle(cmd)
-                    }));
+                    let caught =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.handle(cmd)));
                     if caught.is_err() {
                         self.shared.counters.store_errors.fetch_add(1, Relaxed);
                         let _ = self.tx.send(Event::Notice(
@@ -210,7 +211,9 @@ impl Worker {
             self.shared.counters.unsupported.fetch_add(1, Relaxed);
             return false;
         };
-        let Some(store) = &mut self.store else { return false };
+        let Some(store) = &mut self.store else {
+            return false;
+        };
         match store.insert(&item, &self.policy, now_ms()) {
             Ok(_) => true,
             Err(InsertError::TooLarge) => {
@@ -220,9 +223,9 @@ impl Worker {
             Err(InsertError::Db(e)) => {
                 self.shared.counters.store_errors.fetch_add(1, Relaxed);
                 // The message names the failure, never the content.
-                let _ = self
-                    .tx
-                    .send(Event::Notice(format!("저장하지 못했습니다: {e} · 원인을 해결하면 다시 저장됩니다")));
+                let _ = self.tx.send(Event::Notice(format!(
+                    "저장하지 못했습니다: {e} · 원인을 해결하면 다시 저장됩니다"
+                )));
                 false
             }
         }
@@ -238,14 +241,23 @@ impl Worker {
         };
         let has_more = items.len() > want;
         items.truncate(want);
-        self.emit(Event::List { req, items: items as Vec<ItemMeta>, has_more, append });
+        self.emit(Event::List {
+            req,
+            items: items as Vec<ItemMeta>,
+            has_more,
+            append,
+        });
     }
 
     fn thumb(&mut self, id: i64) {
         let Some(s) = &self.store else { return };
         if let Ok(Some(png)) = s.preview(id, "thumb") {
             if let Some((w, h, rgba)) = png_to_rgba(&png) {
-                self.emit(Event::Thumb { id, size: [w as usize, h as usize], rgba });
+                self.emit(Event::Thumb {
+                    id,
+                    size: [w as usize, h as usize],
+                    rgba,
+                });
             }
         }
     }
@@ -259,24 +271,24 @@ impl Worker {
             .and_then(|b| utf16le_to_string(&b));
         // A larger table is read from the stored HTML (or cell text) now,
         // not kept in the database.
-        let from_html = s
-            .format(id, K_HTML)
-            .ok()
-            .flatten()
-            .and_then(|b| validate_html(&b))
-            .and_then(|h| {
-                html_table_with(&h.fragment, DETAIL_ROWS, DETAIL_COLS, DETAIL_CELL_CHARS).or_else(|| {
-                    h.document
-                        .as_deref()
-                        .and_then(|d| html_table_with(d, DETAIL_ROWS, DETAIL_COLS, DETAIL_CELL_CHARS))
-                })
-            });
+        let from_html =
+            s.format(id, K_HTML)
+                .ok()
+                .flatten()
+                .and_then(|b| validate_html(&b))
+                .and_then(|h| {
+                    html_table_with(&h.fragment, DETAIL_ROWS, DETAIL_COLS, DETAIL_CELL_CHARS)
+                        .or_else(|| {
+                            h.document.as_deref().and_then(|d| {
+                                html_table_with(d, DETAIL_ROWS, DETAIL_COLS, DETAIL_CELL_CHARS)
+                            })
+                        })
+                });
         let table = from_html
             .or_else(|| {
-                text_full
-                    .as_deref()
-                    .filter(|t| looks_like_tsv(t))
-                    .map(|t| trim_grid_with(parse_tsv(t), DETAIL_ROWS, DETAIL_COLS, DETAIL_CELL_CHARS))
+                text_full.as_deref().filter(|t| looks_like_tsv(t)).map(|t| {
+                    trim_grid_with(parse_tsv(t), DETAIL_ROWS, DETAIL_COLS, DETAIL_CELL_CHARS)
+                })
             })
             .or_else(|| {
                 s.preview(id, "table")
@@ -309,7 +321,11 @@ impl Worker {
             });
         if let Some((w, h, px)) = decoded {
             if let Some((w, h, px)) = fit_rgba(w, h, px, FULL_PREVIEW_SIDE) {
-                self.emit(Event::Full { id, size: [w as usize, h as usize], rgba: px });
+                self.emit(Event::Full {
+                    id,
+                    size: [w as usize, h as usize],
+                    rgba: px,
+                });
             }
         }
     }
@@ -376,7 +392,6 @@ pub fn build_item(raw: Raw) -> Option<NewItem> {
             text.as_deref()
                 .filter(|t| looks_like_tsv(t))
                 .map(|t| trim_grid(parse_tsv(t)))
-                .map(|(g, r, c)| (g, r, c))
         });
     let is_table = table.is_some();
 
@@ -404,7 +419,11 @@ pub fn build_item(raw: Raw) -> Option<NewItem> {
     let mut previews: Vec<(&'static str, Vec<u8>)> = vec![];
     let mut dims = (0u32, 0u32);
     if let Some(h) = &html {
-        formats.push(FormatRow { key: K_HTML.into(), derived: false, data: h.bytes.clone() });
+        formats.push(FormatRow {
+            key: K_HTML.into(),
+            derived: false,
+            data: h.bytes.clone(),
+        });
     }
     if image {
         let mut rgba: Option<(u32, u32, Vec<u8>)> = None;
@@ -416,7 +435,11 @@ pub fn build_item(raw: Raw) -> Option<NewItem> {
             rgba = Some((d.width, d.height, dib_to_rgba(data, d)));
         }
         if let Some((data, _, _)) = &png {
-            formats.push(FormatRow { key: K_PNG.into(), derived: false, data: data.clone() });
+            formats.push(FormatRow {
+                key: K_PNG.into(),
+                derived: false,
+                data: data.clone(),
+            });
             if dib.is_none() {
                 if let Some((w, h, px)) = png_to_rgba(data) {
                     formats.push(FormatRow {
@@ -431,7 +454,11 @@ pub fn build_item(raw: Raw) -> Option<NewItem> {
             }
         }
         if let Some((key, data, _)) = &dib {
-            formats.push(FormatRow { key: (*key).into(), derived: false, data: data.clone() });
+            formats.push(FormatRow {
+                key: (*key).into(),
+                derived: false,
+                data: data.clone(),
+            });
         }
         if let Some((w, h, px)) = rgba {
             if let Some(t) = thumbnail_png(w, h, px) {
@@ -440,10 +467,18 @@ pub fn build_item(raw: Raw) -> Option<NewItem> {
         }
     }
     if let Some(u) = &url {
-        formats.push(FormatRow { key: K_URL.into(), derived: false, data: string_to_utf16le(u) });
+        formats.push(FormatRow {
+            key: K_URL.into(),
+            derived: false,
+            data: string_to_utf16le(u),
+        });
     }
     if let Some(t) = &text {
-        formats.push(FormatRow { key: K_TEXT.into(), derived: derived_text, data: string_to_utf16le(t) });
+        formats.push(FormatRow {
+            key: K_TEXT.into(),
+            derived: derived_text,
+            data: string_to_utf16le(t),
+        });
     }
     if formats.is_empty() {
         return None;
@@ -453,13 +488,21 @@ pub fn build_item(raw: Raw) -> Option<NewItem> {
         let first = grid.first().map(|row| row.join(" | ")).unwrap_or_default();
         ("table", summarize(&first, 120), format!("{r}×{c}"))
     } else if image {
-        ("image", format!("이미지 {}×{}", dims.0, dims.1), format!("{}×{}", dims.0, dims.1))
+        (
+            "image",
+            format!("이미지 {}×{}", dims.0, dims.1),
+            format!("{}×{}", dims.0, dims.1),
+        )
     } else if text.as_deref().is_some_and(is_link) || url.is_some() {
         let u = url.clone().or(text.clone()).unwrap_or_default();
         ("link", summarize(&u, 160), String::new())
     } else {
         let t = text.as_deref().unwrap_or("");
-        ("text", summarize(t, 120), format!("{}자", t.chars().count()))
+        (
+            "text",
+            summarize(t, 120),
+            format!("{}자", t.chars().count()),
+        )
     };
     if let Some((grid, _, _)) = &table {
         if let Ok(j) = serde_json::to_vec(grid) {
@@ -487,7 +530,13 @@ mod tests {
     use super::*;
 
     fn raw(formats: Vec<(&'static str, Vec<u8>)>) -> Raw {
-        Raw { seq: 1, generation: 1, captured_ms: 5, reduced: false, formats }
+        Raw {
+            seq: 1,
+            generation: 1,
+            captured_ms: 5,
+            reduced: false,
+            formats,
+        }
     }
     fn u16s(s: &str) -> Vec<u8> {
         let mut v = string_to_utf16le(s);
@@ -509,7 +558,8 @@ mod tests {
         let it = build_item(raw(vec![(K_TEXT, u16s("a\tb\r\n1\t2\r\n"))])).unwrap();
         assert_eq!(it.kind, "table");
         assert_eq!(it.meta, "2×2");
-        let stored = utf16le_to_string(&it.formats.iter().find(|f| f.key == "text").unwrap().data).unwrap();
+        let stored =
+            utf16le_to_string(&it.formats.iter().find(|f| f.key == "text").unwrap().data).unwrap();
         assert_eq!(stored, "a\tb\r\n1\t2\r\n");
     }
 

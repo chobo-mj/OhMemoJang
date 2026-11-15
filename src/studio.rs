@@ -1006,7 +1006,13 @@ pub fn viewport(i: usize) -> egui::ViewportId {
     egui::ViewportId::from_hash_of(("memo", i))
 }
 impl App {
-    pub fn begin_sticker_drag(&mut self, ctx: &egui::Context, note: usize, mode: Mode, restore: bool) {
+    pub fn begin_sticker_drag(
+        &mut self,
+        ctx: &egui::Context,
+        note: usize,
+        mode: Mode,
+        restore: bool,
+    ) {
         let origin = ctx
             .input(|v| v.viewport().outer_rect.map(|r| r.min))
             .unwrap_or(Pos2::ZERO);
@@ -1040,7 +1046,8 @@ impl App {
             return;
         }
         let ppp = ctx.pixels_per_point().max(0.5);
-        let at = crate::system::cursor_pos().map(|(x, y)| Pos2::new(x as f32 / ppp, y as f32 / ppp));
+        let at =
+            crate::system::cursor_pos().map(|(x, y)| Pos2::new(x as f32 / ppp, y as f32 / ppp));
         let date = at.and_then(|p| self.calendar_date_at(p, now));
         self.drop_sticker(&d, date);
     }
@@ -1510,7 +1517,11 @@ impl App {
                                 ui,
                                 &mut self.data.notes[i].document,
                                 ("memo_document", i),
-                                if engaged { CORNER_ICONS_W + CORNER_ICONS_GAP } else { 0. },
+                                if engaged {
+                                    CORNER_ICONS_W + CORNER_ICONS_GAP
+                                } else {
+                                    0.
+                                },
                                 mode == Mode::Editor,
                             );
                             if engaged {
@@ -1582,7 +1593,7 @@ impl App {
                         && (!focused || self.data.notes[i].body.contains('\n'))
                     {
                         let n = &mut self.data.notes[i];
-                        crate::desktop::infer_title(&mut n.title, &mut n.body);
+                        crate::desktop::infer_title(&mut n.title, &n.body);
                     }
                 }
                 if w.mode != mode || !w.open {
@@ -1792,8 +1803,9 @@ impl App {
                     Some(d) => format!("일정 · {} · {}", d.format("%m.%d"), n.repeat.describe(d)),
                     None => "일정 설정".into(),
                 };
-                let r = crate::icons::icon_button_drag(ui, Icon::Calendar, &tip)
-                    .on_hover_text("클릭: 일정 설정 · 끌어서 캘린더의 날짜에 놓으면 그 날짜의 일정이 됩니다");
+                let r = crate::icons::icon_button_drag(ui, Icon::Calendar, &tip).on_hover_text(
+                    "클릭: 일정 설정 · 끌어서 캘린더의 날짜에 놓으면 그 날짜의 일정이 됩니다",
+                );
                 if r.clicked() {
                     self.open_schedule(i);
                 } else if r.drag_started() && mode == Mode::Sticker {
@@ -1803,8 +1815,12 @@ impl App {
                     w.mode = Mode::Title;
                     // Fold it right now, before the drag begins, not on the next frame.
                     w.native.cancel();
-                    ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(Vec2::new(160., 40.)));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::MaxInnerSize(Vec2::new(1600., 40.)));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(Vec2::new(
+                        160., 40.,
+                    )));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::MaxInnerSize(Vec2::new(
+                        1600., 40.,
+                    )));
                     ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(w.size()));
                     w.applied = Some((Mode::Title, false));
                     w.native.start_drag(ctx);

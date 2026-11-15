@@ -176,7 +176,12 @@ impl Store {
     /// Stores one item and applies the retention rules in the same
     /// transaction. An item larger than the whole budget is skipped without
     /// deleting anything.
-    pub fn insert(&mut self, item: &NewItem, policy: &Policy, now_ms: i64) -> Result<i64, InsertError> {
+    pub fn insert(
+        &mut self,
+        item: &NewItem,
+        policy: &Policy,
+        now_ms: i64,
+    ) -> Result<i64, InsertError> {
         let total: u64 = item.formats.iter().map(|f| f.data.len() as u64).sum();
         if total > policy.max_total_bytes {
             return Err(InsertError::TooLarge);
@@ -310,11 +315,14 @@ impl Store {
         Ok(n)
     }
     pub fn count(&self) -> rusqlite::Result<i64> {
-        self.conn.query_row("SELECT COUNT(*) FROM items", [], |r| r.get(0))
+        self.conn
+            .query_row("SELECT COUNT(*) FROM items", [], |r| r.get(0))
     }
     pub fn total_bytes(&self) -> rusqlite::Result<i64> {
         self.conn
-            .query_row("SELECT COALESCE(SUM(total_bytes),0) FROM items", [], |r| r.get(0))
+            .query_row("SELECT COALESCE(SUM(total_bytes),0) FROM items", [], |r| {
+                r.get(0)
+            })
     }
 }
 
@@ -329,9 +337,13 @@ fn retention(tx: &Connection, p: &Policy, now_ms: i64) -> rusqlite::Result<usize
          (SELECT id FROM items ORDER BY captured_at DESC, id DESC LIMIT -1 OFFSET ?1)",
         [p.max_items as i64],
     )?;
-    let mut total: i64 = tx.query_row("SELECT COALESCE(SUM(total_bytes),0) FROM items", [], |r| r.get(0))?;
+    let mut total: i64 =
+        tx.query_row("SELECT COALESCE(SUM(total_bytes),0) FROM items", [], |r| {
+            r.get(0)
+        })?;
     if total as u64 > p.max_total_bytes {
-        let mut st = tx.prepare("SELECT id,total_bytes FROM items ORDER BY captured_at ASC, id ASC")?;
+        let mut st =
+            tx.prepare("SELECT id,total_bytes FROM items ORDER BY captured_at ASC, id ASC")?;
         let rows: Vec<(i64, i64)> = st
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<Result<_, _>>()?;
@@ -368,17 +380,24 @@ mod tests {
     }
 
     fn ids(s: &Store) -> Vec<i64> {
-        s.list(&Query { limit: 1000, ..Default::default() })
-            .unwrap()
-            .into_iter()
-            .map(|m| m.id)
-            .collect()
+        s.list(&Query {
+            limit: 1000,
+            ..Default::default()
+        })
+        .unwrap()
+        .into_iter()
+        .map(|m| m.id)
+        .collect()
     }
 
     #[test]
     fn keeps_latest_n_on_insert() {
         let mut s = Store::memory();
-        let p = Policy { max_items: 100, retention_days: 0, ..Default::default() };
+        let p = Policy {
+            max_items: 100,
+            retention_days: 0,
+            ..Default::default()
+        };
         for i in 0..101 {
             s.insert(&item(1000 + i, "x", 1), &p, 2000).unwrap();
         }
@@ -391,15 +410,39 @@ mod tests {
     #[test]
     fn expiry_boundary_is_exact_and_ties_use_id() {
         let mut s = Store::memory();
-        let p = Policy { max_items: 100, retention_days: 7, ..Default::default() };
+        let p = Policy {
+            max_items: 100,
+            retention_days: 7,
+            ..Default::default()
+        };
         let now = 100 * DAY_MS;
         let cutoff = now - 7 * DAY_MS;
-        s.insert(&item(cutoff - 1, "old", 1), &Policy { retention_days: 0, ..p }, now).unwrap();
-        s.insert(&item(cutoff, "edge", 1), &Policy { retention_days: 0, ..p }, now).unwrap();
+        s.insert(
+            &item(cutoff - 1, "old", 1),
+            &Policy {
+                retention_days: 0,
+                ..p
+            },
+            now,
+        )
+        .unwrap();
+        s.insert(
+            &item(cutoff, "edge", 1),
+            &Policy {
+                retention_days: 0,
+                ..p
+            },
+            now,
+        )
+        .unwrap();
         assert_eq!(s.apply_retention(&p, now).unwrap(), 1);
         assert_eq!(ids(&s), vec![2]);
         // same instant: the smaller id goes first when the count is exceeded
-        let tight = Policy { max_items: 1, retention_days: 0, ..p };
+        let tight = Policy {
+            max_items: 1,
+            retention_days: 0,
+            ..p
+        };
         s.insert(&item(cutoff, "tie", 1), &tight, now).unwrap();
         assert_eq!(ids(&s), vec![3]);
     }
@@ -407,31 +450,55 @@ mod tests {
     #[test]
     fn capacity_deletes_oldest_and_skips_oversized() {
         let mut s = Store::memory();
-        let p = Policy { max_items: 100, retention_days: 0, max_total_bytes: 100 };
+        let p = Policy {
+            max_items: 100,
+            retention_days: 0,
+            max_total_bytes: 100,
+        };
         s.insert(&item(1, "a", 60), &p, 10).unwrap();
         s.insert(&item(2, "b", 60), &p, 10).unwrap();
         assert_eq!(ids(&s), vec![2]);
-        assert!(matches!(s.insert(&item(3, "c", 101), &p, 10), Err(InsertError::TooLarge)));
+        assert!(matches!(
+            s.insert(&item(3, "c", 101), &p, 10),
+            Err(InsertError::TooLarge)
+        ));
         assert_eq!(ids(&s), vec![2]);
     }
 
     #[test]
     fn search_filter_paging_and_escaping() {
         let mut s = Store::memory();
-        let p = Policy { retention_days: 0, ..Default::default() };
+        let p = Policy {
+            retention_days: 0,
+            ..Default::default()
+        };
         s.insert(&item(1, "100% 한글", 1), &p, 10).unwrap();
         s.insert(&item(2, "abc", 1), &p, 10).unwrap();
         let mut link = item(3, "https://a.com", 1);
         link.kind = "link";
         s.insert(&link, &p, 10).unwrap();
-        let q = |search: &str, kind: &str| Query { search: search.into(), kind: kind.into(), limit: 10, after: None };
+        let q = |search: &str, kind: &str| Query {
+            search: search.into(),
+            kind: kind.into(),
+            limit: 10,
+            after: None,
+        };
         assert_eq!(s.list(&q("%", "")).unwrap().len(), 1);
         assert_eq!(s.list(&q("한글", "")).unwrap().len(), 1);
         assert_eq!(s.list(&q("", "link")).unwrap().len(), 1);
-        let first = s.list(&Query { limit: 2, ..Default::default() }).unwrap();
+        let first = s
+            .list(&Query {
+                limit: 2,
+                ..Default::default()
+            })
+            .unwrap();
         let last = first.last().unwrap();
         let rest = s
-            .list(&Query { limit: 2, after: Some((last.captured_ms, last.id)), ..Default::default() })
+            .list(&Query {
+                limit: 2,
+                after: Some((last.captured_ms, last.id)),
+                ..Default::default()
+            })
             .unwrap();
         assert_eq!(rest.len(), 1);
     }

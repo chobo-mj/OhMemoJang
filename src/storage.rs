@@ -1659,7 +1659,12 @@ mod cell_look_tests {
         let old = r#"{"text":"가","format":[false,false,false,false],"col_span":1,"row_span":1,"covered":false}"#;
         let rec: CellRec = serde_json::from_str(old).unwrap();
         assert_eq!((rec.fill, rec.text_color, rec.align), (None, None, 0));
-        let new = CellRec { fill: Some([1, 2, 3]), text_color: Some([4, 5, 6]), align: 2, ..rec };
+        let new = CellRec {
+            fill: Some([1, 2, 3]),
+            text_color: Some([4, 5, 6]),
+            align: 2,
+            ..rec
+        };
         let back: CellRec = serde_json::from_str(&serde_json::to_string(&new).unwrap()).unwrap();
         assert!(back == new);
     }

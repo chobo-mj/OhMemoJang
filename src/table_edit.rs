@@ -54,6 +54,7 @@ pub fn span_rect(t: &Table, r: usize, c: usize) -> Rng {
 }
 
 /// Grows the rectangle until no merged cell is cut by its edge.
+#[allow(clippy::mut_range_bound)]
 pub fn expand(t: &Table, rng: Rng) -> Rng {
     let (mut r0, mut c0, mut r1, mut c1) = rng;
     r1 = r1.min(rows(t) - 1);
@@ -127,7 +128,12 @@ pub fn tsv_quote(text: &str) -> String {
 pub fn grid_tsv(grid: &[Vec<String>]) -> String {
     let mut out = String::new();
     for row in grid {
-        out.push_str(&row.iter().map(|c| tsv_quote(c)).collect::<Vec<_>>().join("\t"));
+        out.push_str(
+            &row.iter()
+                .map(|c| tsv_quote(c))
+                .collect::<Vec<_>>()
+                .join("\t"),
+        );
         out.push_str("\r\n");
     }
     out
@@ -329,10 +335,16 @@ fn html_cell_text(cell: scraper::ElementRef) -> String {
                 }
                 // Excel's own marker for spaces it wrote on purpose: every
                 // character in it is one space.
-                if e.attr("style").is_some_and(|st| st.contains("mso-spacerun:yes")) {
+                if e.attr("style")
+                    .is_some_and(|st| st.contains("mso-spacerun:yes"))
+                {
                     for child in node.children() {
                         if let Node::Text(t) = child.value() {
-                            out.extend(t.chars().filter(|c| matches!(c, ' ' | '\u{a0}')).map(|_| NBSP));
+                            out.extend(
+                                t.chars()
+                                    .filter(|c| matches!(c, ' ' | '\u{a0}'))
+                                    .map(|_| NBSP),
+                            );
                         }
                     }
                     return;
@@ -344,7 +356,10 @@ fn html_cell_text(cell: scraper::ElementRef) -> String {
                 if matches!(name, "td" | "th") && !out.is_empty() && !out.ends_with(['\n', ' ']) {
                     out.push(' ');
                 }
-                let block = matches!(name, "p" | "div" | "li" | "tr" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6");
+                let block = matches!(
+                    name,
+                    "p" | "div" | "li" | "tr" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
+                );
                 if block && !out.is_empty() && !out.ends_with('\n') {
                     out.push('\n');
                 }
@@ -367,7 +382,10 @@ fn html_cell_text(cell: scraper::ElementRef) -> String {
         walk(child, &mut out);
     }
     out.lines()
-        .map(|l| l.trim_start_matches(' ').trim_end_matches([' ', NBSP_PLAIN]))
+        .map(|l| {
+            l.trim_start_matches(' ')
+                .trim_end_matches([' ', NBSP_PLAIN])
+        })
         .collect::<Vec<_>>()
         .join("\n")
         .trim_matches('\n')
@@ -395,18 +413,27 @@ struct Css {
 }
 
 fn parse_css(html: &str) -> Css {
-    let mut css = Css { classes: HashMap::new(), td: vec![] };
+    let mut css = Css {
+        classes: HashMap::new(),
+        td: vec![],
+    };
     let lower = html.to_ascii_lowercase();
     let mut from = 0;
     while let Some(a) = lower[from..].find("<style") {
         let a = from + a;
-        let Some(gt) = lower[a..].find('>') else { break };
+        let Some(gt) = lower[a..].find('>') else {
+            break;
+        };
         let start = a + gt + 1;
-        let Some(end) = lower[start..].find("</style") else { break };
+        let Some(end) = lower[start..].find("</style") else {
+            break;
+        };
         let end = start + end;
         let text = html[start..end].replace("<!--", "").replace("-->", "");
         for rule in text.split('}') {
-            let Some((selectors, body)) = rule.split_once('{') else { continue };
+            let Some((selectors, body)) = rule.split_once('{') else {
+                continue;
+            };
             let decls = parse_decls(body);
             for sel in selectors.split(',') {
                 let sel = sel.trim().to_ascii_lowercase();
@@ -414,9 +441,11 @@ fn parse_css(html: &str) -> Css {
                     continue;
                 }
                 match sel.rsplit_once('.') {
-                    Some((_, class)) if !class.is_empty() => {
-                        css.classes.entry(class.to_owned()).or_default().extend(decls.clone())
-                    }
+                    Some((_, class)) if !class.is_empty() => css
+                        .classes
+                        .entry(class.to_owned())
+                        .or_default()
+                        .extend(decls.clone()),
                     _ if sel == "td" || sel == "th" => css.td.extend(decls.clone()),
                     _ => {}
                 }
@@ -430,7 +459,10 @@ fn parse_css(html: &str) -> Css {
 fn parse_color(v: &str) -> Option<[u8; 3]> {
     for tok in v.split_whitespace() {
         if let Some(hex) = tok.strip_prefix('#') {
-            let h: Vec<u8> = hex.bytes().filter_map(|b| (b as char).to_digit(16).map(|d| d as u8)).collect();
+            let h: Vec<u8> = hex
+                .bytes()
+                .filter_map(|b| (b as char).to_digit(16).map(|d| d as u8))
+                .collect();
             if h.len() != hex.len() {
                 continue;
             }
@@ -501,17 +533,31 @@ fn cell_look(
     if let Some(st) = el.value().attr("style") {
         decls.extend(parse_decls(st));
     }
-    let get = |k: &str| decls.iter().rev().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+    let get = |k: &str| {
+        decls
+            .iter()
+            .rev()
+            .find(|(n, _)| n == k)
+            .map(|(_, v)| v.as_str())
+    };
     let fill = get("background-color")
         .and_then(parse_color)
         .or_else(|| get("background").and_then(parse_color));
-    let color = get("color").and_then(parse_color).filter(|c| *c != [0, 0, 0]);
+    let color = get("color")
+        .and_then(parse_color)
+        .filter(|c| *c != [0, 0, 0]);
     // `text-align:general` is Excel's own value, not CSS: a browser ignores
     // it, so an earlier (or `align=`) value stays.
     let align_value = decls
         .iter()
         .rev()
-        .find(|(n, v)| n == "text-align" && matches!(v.as_str(), "left" | "center" | "right" | "justify" | "start" | "end"))
+        .find(|(n, v)| {
+            n == "text-align"
+                && matches!(
+                    v.as_str(),
+                    "left" | "center" | "right" | "justify" | "start" | "end"
+                )
+        })
         .map(|(_, v)| v.as_str());
     let align = match align_value {
         Some("left") => CellAlign::Left,
@@ -521,8 +567,9 @@ fn cell_look(
     };
     let deco = get("text-decoration").unwrap_or("");
     let format = Format {
-        bold: get("font-weight")
-            .is_some_and(|w| matches!(w, "bold" | "bolder") || w.parse::<u32>().is_ok_and(|n| n >= 600)),
+        bold: get("font-weight").is_some_and(|w| {
+            matches!(w, "bold" | "bolder") || w.parse::<u32>().is_ok_and(|n| n >= 600)
+        }),
         italic: get("font-style").is_some_and(|v| v.contains("italic") || v.contains("oblique")),
         underline: deco.contains("underline"),
         strike: deco.contains("line-through"),
@@ -531,7 +578,11 @@ fn cell_look(
 }
 
 fn html_number(v: Option<&str>) -> Option<usize> {
-    v?.trim().trim_end_matches("px").trim().parse::<usize>().ok()
+    v?.trim()
+        .trim_end_matches("px")
+        .trim()
+        .parse::<usize>()
+        .ok()
 }
 
 /// Reads the table on the clipboard into a table, the way a browser lays
@@ -603,8 +654,18 @@ pub fn table_from_html(html: &str) -> Option<Table> {
         .collect();
     let (mut lcs, mut n_rows) = layout_rows(&trs, &css, 0);
     // A first row shorter than the later ones: its leading cells were not copied.
-    let row0 = lcs.iter().filter(|l| l.r == 0).map(|l| l.c + l.cs).max().unwrap_or(0);
-    let later = lcs.iter().filter(|l| l.r > 0).map(|l| l.c + l.cs).max().unwrap_or(0);
+    let row0 = lcs
+        .iter()
+        .filter(|l| l.r == 0)
+        .map(|l| l.c + l.cs)
+        .max()
+        .unwrap_or(0);
+    let later = lcs
+        .iter()
+        .filter(|l| l.r > 0)
+        .map(|l| l.c + l.cs)
+        .max()
+        .unwrap_or(0);
     // How many later rows reach that width on their own, and whether they
     // do it with plain cells (a single wide merged row proves nothing).
     let full_rows = (1..n_rows)
@@ -627,7 +688,9 @@ pub fn table_from_html(html: &str) -> Option<Table> {
             continue;
         }
         let w = html_number(col.value().attr("width")).map(|w| (w as f32).clamp(60., 400.));
-        let span = html_number(col.value().attr("span")).unwrap_or(1).clamp(1, MAX_COLS);
+        let span = html_number(col.value().attr("span"))
+            .unwrap_or(1)
+            .clamp(1, MAX_COLS);
         for _ in 0..span {
             widths.push(w.unwrap_or(120.));
         }
@@ -659,9 +722,16 @@ fn layout_rows(trs: &[scraper::ElementRef], css: &Css, first_offset: usize) -> (
             if col >= MAX_COLS {
                 break;
             }
-            let want_cs = html_number(cell.value().attr("colspan")).unwrap_or(1).clamp(1, MAX_COLS - col);
-            let want_rs = html_number(cell.value().attr("rowspan")).unwrap_or(1).clamp(1, MAX_ROWS - r);
-            let cs = (col..col + want_cs).take_while(|&c| !occupied[r][c]).count().max(1);
+            let want_cs = html_number(cell.value().attr("colspan"))
+                .unwrap_or(1)
+                .clamp(1, MAX_COLS - col);
+            let want_rs = html_number(cell.value().attr("rowspan"))
+                .unwrap_or(1)
+                .clamp(1, MAX_ROWS - r);
+            let cs = (col..col + want_cs)
+                .take_while(|&c| !occupied[r][c])
+                .count()
+                .max(1);
             if occupied.len() < r + want_rs {
                 occupied.resize(r + want_rs, vec![false; MAX_COLS]);
             }
@@ -680,7 +750,14 @@ fn layout_rows(trs: &[scraper::ElementRef], css: &Css, first_offset: usize) -> (
                 c: col,
                 rs,
                 cs,
-                cell: Cell { text: html_cell_text(cell), fill, text_color, align, format, ..Cell::plain() },
+                cell: Cell {
+                    text: html_cell_text(cell),
+                    fill,
+                    text_color,
+                    align,
+                    format,
+                    ..Cell::plain()
+                },
             });
             col += cs;
         }
@@ -741,7 +818,12 @@ pub fn parse_tsv(text: &str) -> Vec<Vec<String>> {
 
 pub fn table_from_grid(grid: Vec<Vec<String>>) -> Table {
     let grid: Vec<Vec<String>> = grid.into_iter().take(MAX_ROWS).collect();
-    let n_cols = grid.iter().map(Vec::len).max().unwrap_or(1).clamp(1, MAX_COLS);
+    let n_cols = grid
+        .iter()
+        .map(Vec::len)
+        .max()
+        .unwrap_or(1)
+        .clamp(1, MAX_COLS);
     let mut t = Table::new(grid.len().max(1), n_cols);
     for (r, row) in grid.into_iter().enumerate() {
         for (c, text) in row.into_iter().take(MAX_COLS).enumerate() {
@@ -783,7 +865,10 @@ pub fn merge_range(t: &mut Table, rng: Rng) -> bool {
     let proto = t.cells[r0][c0].clone();
     for r in r0..=r1 {
         for c in c0..=c1 {
-            t.cells[r][c] = Cell { covered: true, ..Cell::plain() };
+            t.cells[r][c] = Cell {
+                covered: true,
+                ..Cell::plain()
+            };
         }
     }
     t.cells[r0][c0] = Cell {
@@ -842,6 +927,7 @@ fn logical(t: &Table) -> Vec<Lc> {
     out
 }
 
+#[allow(clippy::needless_range_loop)]
 fn rebuild(t: &mut Table, n_rows: usize, n_cols: usize, lcs: Vec<Lc>) {
     let mut grid = vec![vec![Cell::plain(); n_cols]; n_rows];
     for lc in lcs {
@@ -852,10 +938,18 @@ fn rebuild(t: &mut Table, n_rows: usize, n_cols: usize, lcs: Vec<Lc>) {
         let cs = lc.cs.min(n_cols - lc.c);
         for r in lc.r..lc.r + rs {
             for c in lc.c..lc.c + cs {
-                grid[r][c] = Cell { covered: true, ..Cell::plain() };
+                grid[r][c] = Cell {
+                    covered: true,
+                    ..Cell::plain()
+                };
             }
         }
-        grid[lc.r][lc.c] = Cell { row_span: rs, col_span: cs, covered: false, ..lc.cell };
+        grid[lc.r][lc.c] = Cell {
+            row_span: rs,
+            col_span: cs,
+            covered: false,
+            ..lc.cell
+        };
     }
     t.cells = grid;
 }
@@ -992,6 +1086,7 @@ pub fn paste_table(t: &mut Table, r: usize, c: usize, src: &Table) -> Rng {
 /// Checks the invariants: every position belongs to exactly one logical
 /// cell, spans stay inside the table.
 #[cfg(test)]
+#[allow(clippy::needless_range_loop)]
 pub fn is_valid(t: &Table) -> bool {
     let (nr, nc) = (rows(t), cols(t));
     if nr == 0 || nc == 0 || t.cells.iter().any(|r| r.len() != nc) || t.col_widths.len() != nc {
@@ -1004,7 +1099,11 @@ pub fn is_valid(t: &Table) -> bool {
             if cell.covered {
                 continue;
             }
-            if cell.row_span < 1 || cell.col_span < 1 || r + cell.row_span > nr || c + cell.col_span > nc {
+            if cell.row_span < 1
+                || cell.col_span < 1
+                || r + cell.row_span > nr
+                || c + cell.col_span > nc
+            {
                 return false;
             }
             for rr in r..r + cell.row_span {
@@ -1039,8 +1138,14 @@ mod tests {
         assert_eq!(tsv_quote("plain"), "plain");
         assert_eq!(tsv_quote("a\tb"), "\"a\tb\"");
         assert_eq!(tsv_quote("줄1\r\n줄2"), "\"줄1\n줄2\"");
-        assert_eq!(tsv_quote("그가 \"안녕\" 했다"), "\"그가 \"\"안녕\"\" 했다\"");
-        let g = vec![vec!["a".to_string(), "x\ty".into(), "".into()], vec!["q\"r\ns".into(), "b".into(), "c".into()]];
+        assert_eq!(
+            tsv_quote("그가 \"안녕\" 했다"),
+            "\"그가 \"\"안녕\"\" 했다\""
+        );
+        let g = vec![
+            vec!["a".to_string(), "x\ty".into(), "".into()],
+            vec!["q\"r\ns".into(), "b".into(), "c".into()],
+        ];
         assert_eq!(parse_tsv(&grid_tsv(&g)), g);
     }
 
@@ -1061,7 +1166,10 @@ mod tests {
         assert!(h.contains("He said &quot;hi&quot; &amp; &lt;b&gt;"));
         assert!(h.contains("줄1<br style='mso-data-placement:same-cell;'>줄2"));
         assert!(h.contains("mso-number-format:\"\\@\";'>007</td>"));
-        assert!(!h.contains("\"hi\""), "no raw double quote inside cell text");
+        assert!(
+            !h.contains("\"hi\""),
+            "no raw double quote inside cell text"
+        );
     }
 
     #[test]
@@ -1071,7 +1179,10 @@ mod tests {
         t.cells[0][1].text = "그냥 한 칸".into();
         let html = table_html(&t);
         assert!(html.contains("<span style='mso-spacerun:yes'>&nbsp;</span>줄바꿈 앞 1칸"));
-        assert!(html.contains("그냥 한 칸"), "a single inner space stays a plain space");
+        assert!(
+            html.contains("그냥 한 칸"),
+            "a single inner space stays a plain space"
+        );
         let back = table_from_html(&html).unwrap();
         assert_eq!(back.cells[0][0].text, t.cells[0][0].text);
         assert_eq!(back.cells[0][1].text, "그냥 한 칸");
@@ -1172,7 +1283,10 @@ mod tests {
         assert_eq!(t.cells[0][1].text, "x");
         assert_eq!(t.cells[2][3].text, "z");
         assert!(is_valid(&t));
-        assert_eq!(t.cells[0][0].col_span, 1, "the merge under the paste was dissolved");
+        assert_eq!(
+            t.cells[0][0].col_span, 1,
+            "the merge under the paste was dissolved"
+        );
     }
 
     #[test]
@@ -1232,7 +1346,10 @@ mod tests {
         assert!(is_valid(&t));
         assert_eq!(t.cells[0][0].text, "병합1\n 줄바꿈 뒤 1칸\n  2칸");
         assert_eq!(t.cells[0][0].row_span, 3);
-        assert_eq!((t.cells[2][1].col_span, t.cells[2][1].text.as_str()), (2, "병합2"));
+        assert_eq!(
+            (t.cells[2][1].col_span, t.cells[2][1].text.as_str()),
+            (2, "병합2")
+        );
         assert_eq!(t.cells[2][3].text, "마");
         assert_eq!(t.col_widths, vec![265.0, 72.0, 72.0, 72.0]);
         assert!(table_from_html("<p>x</p>").is_none());
@@ -1240,14 +1357,23 @@ mod tests {
 
     #[test]
     fn html_overlapping_or_oversized_spans_are_made_valid() {
-        let h = "<table><tr><td rowspan=5>a</td><td>b</td></tr><tr><td colspan=9>c</td></tr></table>";
+        let h =
+            "<table><tr><td rowspan=5>a</td><td>b</td></tr><tr><td colspan=9>c</td></tr></table>";
         let t = table_from_html(h).unwrap();
         assert!(is_valid(&t));
         assert_eq!(rows(&t), 2);
-        assert_eq!(t.cells[0][0].row_span, 2, "a rowspan past the last row is cut to the table");
-        let nested = "<table><tr><td>바깥<table><tr><td>안</td><td>쪽</td></tr></table></td></tr></table>";
+        assert_eq!(
+            t.cells[0][0].row_span, 2,
+            "a rowspan past the last row is cut to the table"
+        );
+        let nested =
+            "<table><tr><td>바깥<table><tr><td>안</td><td>쪽</td></tr></table></td></tr></table>";
         let t = table_from_html(nested).unwrap();
-        assert_eq!((rows(&t), cols(&t)), (1, 2), "the table with more cells is the data");
+        assert_eq!(
+            (rows(&t), cols(&t)),
+            (1, 2),
+            "the table with more cells is the data"
+        );
         assert!(table_from_html("<p>표 아님</p>").is_none());
     }
 
@@ -1277,19 +1403,40 @@ mod tests {
         let t = table_from_html(EXCEL_STYLED).unwrap();
         assert!(is_valid(&t));
         let c = |r: usize, k: usize| &t.cells[r][k];
-        assert_eq!((c(0, 0).fill, c(0, 0).text_color, c(0, 0).align), (Some([255, 255, 0]), None, CellAlign::Center));
-        assert_eq!((c(0, 1).fill, c(0, 1).text_color), (None, Some([255, 0, 0])));
-        assert_eq!((c(0, 2).align, c(0, 2).format.bold), (CellAlign::Right, true));
+        assert_eq!(
+            (c(0, 0).fill, c(0, 0).text_color, c(0, 0).align),
+            (Some([255, 255, 0]), None, CellAlign::Center)
+        );
+        assert_eq!(
+            (c(0, 1).fill, c(0, 1).text_color),
+            (None, Some([255, 0, 0]))
+        );
+        assert_eq!(
+            (c(0, 2).align, c(0, 2).format.bold),
+            (CellAlign::Right, true)
+        );
         assert_eq!(c(1, 0).text_color, Some([0x00, 0x70, 0xC0]));
         assert_eq!(c(1, 0).fill, Some([0xC6, 0xE0, 0xB4]));
-        assert_eq!((c(1, 0).align, c(1, 0).format.underline), (CellAlign::Left, true));
+        assert_eq!(
+            (c(1, 0).align, c(1, 0).format.underline),
+            (CellAlign::Left, true)
+        );
         // inline style beats the class; rgb() works; italic comes from the class
-        assert_eq!((c(1, 1).fill, c(1, 1).text_color, c(1, 1).format.italic), (Some([255, 0, 255]), Some([10, 20, 30]), true));
+        assert_eq!(
+            (c(1, 1).fill, c(1, 1).text_color, c(1, 1).format.italic),
+            (Some([255, 0, 255]), Some([10, 20, 30]), true)
+        );
         assert_eq!(c(1, 2).align, CellAlign::Center);
         // the td default (text-align:general, black) means no explicit look
-        assert_eq!((c(2, 0).fill, c(2, 0).text_color, c(2, 0).align), (None, None, CellAlign::Default));
+        assert_eq!(
+            (c(2, 0).fill, c(2, 0).text_color, c(2, 0).align),
+            (None, None, CellAlign::Default)
+        );
         // presentation attributes, and an explicit "none" background
-        assert_eq!((c(2, 1).fill, c(2, 1).align), (Some([0xAB, 0xCD, 0xEF]), CellAlign::Right));
+        assert_eq!(
+            (c(2, 1).fill, c(2, 1).align),
+            (Some([0xAB, 0xCD, 0xEF]), CellAlign::Right)
+        );
         assert_eq!(c(2, 2).fill, None);
     }
 
@@ -1307,7 +1454,14 @@ mod tests {
         assert!(h.contains("background:#FFFF00;mso-pattern:black none;color:#FF0000;text-align:center;font-weight:700;"));
         assert!(h.contains("text-align:right;"));
         let back = table_from_html(&h).unwrap();
-        assert_eq!((back.cells[0][0].fill, back.cells[0][0].text_color, back.cells[0][0].align), (Some([255, 255, 0]), Some([255, 0, 0]), CellAlign::Center));
+        assert_eq!(
+            (
+                back.cells[0][0].fill,
+                back.cells[0][0].text_color,
+                back.cells[0][0].align
+            ),
+            (Some([255, 255, 0]), Some([255, 0, 0]), CellAlign::Center)
+        );
         assert!(back.cells[0][0].format.bold);
         assert_eq!(back.cells[0][1].align, CellAlign::Right);
     }
@@ -1318,14 +1472,20 @@ mod tests {
         t.cells[0][0].fill = Some([1, 2, 3]);
         t.cells[0][0].align = CellAlign::Right;
         assert!(merge_range(&mut t, (0, 0, 1, 1)));
-        assert_eq!((t.cells[0][0].fill, t.cells[0][0].align), (Some([1, 2, 3]), CellAlign::Right));
+        assert_eq!(
+            (t.cells[0][0].fill, t.cells[0][0].align),
+            (Some([1, 2, 3]), CellAlign::Right)
+        );
         let mut dest = Table::new(1, 1);
         paste_table(&mut dest, 0, 0, &t);
         assert_eq!(dest.cells[0][0].fill, Some([1, 2, 3]));
     }
 
     fn texts(t: &Table) -> Vec<Vec<String>> {
-        t.cells.iter().map(|r| r.iter().map(|c| c.text.clone()).collect()).collect()
+        t.cells
+            .iter()
+            .map(|r| r.iter().map(|c| c.text.clone()).collect())
+            .collect()
     }
 
     #[test]
@@ -1363,14 +1523,18 @@ mod tests {
         let t = table_from_html(h).unwrap();
         assert_eq!((rows(&t), cols(&t)), (2, 4));
         assert!(is_valid(&t));
-        assert_eq!((t.cells[0][2].text.as_str(), t.cells[0][2].row_span), ("c1", 2));
+        assert_eq!(
+            (t.cells[0][2].text.as_str(), t.cells[0][2].row_span),
+            ("c1", 2)
+        );
         assert_eq!(t.cells[1][0].text, "a2");
         assert_eq!(t.cells[1][3].text, "d2");
     }
 
     #[test]
     fn cells_or_rows_without_their_table_are_still_a_table() {
-        let t = table_from_html("<tr><td>가</td><td>나</td></tr><tr><td>다</td><td>라</td></tr>").unwrap();
+        let t = table_from_html("<tr><td>가</td><td>나</td></tr><tr><td>다</td><td>라</td></tr>")
+            .unwrap();
         assert_eq!(texts(&t), vec![vec!["가", "나"], vec!["다", "라"]]);
         let t = table_from_html("<td>가</td><td>나</td>").unwrap();
         assert_eq!(texts(&t), vec![vec!["가", "나"]]);

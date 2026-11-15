@@ -110,7 +110,10 @@ pub fn push_pending(shared: &Shared, raw: Raw) {
 /// UI → worker.
 pub enum Cmd {
     CaptureReady,
-    List { req: u64, query: Query },
+    List {
+        req: u64,
+        query: Query,
+    },
     Thumb(i64),
     Detail(i64),
     /// Enlarged image preview (decoded on demand).
@@ -118,8 +121,13 @@ pub enum Cmd {
     Restore(i64),
     Delete(i64),
     DeleteBefore(i64),
-    DeleteAll { watermark: u64 },
-    Policy { policy: Policy, tidy_hours: u32 },
+    DeleteAll {
+        watermark: u64,
+    },
+    Policy {
+        policy: Policy,
+        tidy_hours: u32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -210,8 +218,16 @@ impl Settings {
     }
     pub fn policy(&self) -> Policy {
         Policy {
-            max_items: if self.count_limit { self.max_items } else { usize::MAX >> 1 },
-            retention_days: if self.period_limit { self.retention_days } else { 0 },
+            max_items: if self.count_limit {
+                self.max_items
+            } else {
+                usize::MAX >> 1
+            },
+            retention_days: if self.period_limit {
+                self.retention_days
+            } else {
+                0
+            },
             ..Policy::default()
         }
     }
@@ -418,18 +434,26 @@ impl ClipboardHistory {
         self.needs_refresh = false;
         self.sent_search = self.search.clone();
         let q = self.query(None);
-        self.send(Cmd::List { req: self.req, query: q });
+        self.send(Cmd::List {
+            req: self.req,
+            query: q,
+        });
     }
 
     fn load_more(&mut self) {
         if self.loading || !self.has_more {
             return;
         }
-        let Some(last) = self.items.last() else { return };
+        let Some(last) = self.items.last() else {
+            return;
+        };
         self.req += 1;
         self.loading = true;
         let q = self.query(Some((last.captured_ms, last.id)));
-        self.send(Cmd::List { req: self.req, query: q });
+        self.send(Cmd::List {
+            req: self.req,
+            query: q,
+        });
     }
 
     /// Called every frame: moves worker answers into the UI state.
@@ -438,7 +462,12 @@ impl ClipboardHistory {
         let events: Vec<Event> = l.rx.try_iter().collect();
         for e in events {
             match e {
-                Event::List { req, items, has_more, append } => {
+                Event::List {
+                    req,
+                    items,
+                    has_more,
+                    append,
+                } => {
                     if req != self.req {
                         continue;
                     }
@@ -458,7 +487,8 @@ impl ClipboardHistory {
                 }
                 Event::Thumb { id, size, rgba } => {
                     let img = egui::ColorImage::from_rgba_unmultiplied(size, &rgba);
-                    let tex = ctx.load_texture(format!("clip{id}"), img, egui::TextureOptions::LINEAR);
+                    let tex =
+                        ctx.load_texture(format!("clip{id}"), img, egui::TextureOptions::LINEAR);
                     self.textures.insert(id, tex);
                 }
                 Event::Detail { id, text, table } => {
@@ -469,7 +499,11 @@ impl ClipboardHistory {
                 Event::Full { id, size, rgba } => {
                     if self.detail.as_ref().is_some_and(|d| d.id == id) {
                         let img = egui::ColorImage::from_rgba_unmultiplied(size, &rgba);
-                        let tex = ctx.load_texture(format!("clipfull{id}"), img, egui::TextureOptions::LINEAR);
+                        let tex = ctx.load_texture(
+                            format!("clipfull{id}"),
+                            img,
+                            egui::TextureOptions::LINEAR,
+                        );
                         self.full = Some((id, tex));
                     }
                 }
@@ -487,7 +521,9 @@ impl ClipboardHistory {
                         RestoreOutcome::Cleared => {
                             "복사 실패: 기존 클립보드 내용이 지워졌을 수 있음".to_owned()
                         }
-                        RestoreOutcome::Cancelled => "삭제된 항목이라 복사하지 않았습니다".to_owned(),
+                        RestoreOutcome::Cancelled => {
+                            "삭제된 항목이라 복사하지 않았습니다".to_owned()
+                        }
                     };
                     self.status = Some((msg, ctx.input(|i| i.time)));
                 }
@@ -546,7 +582,13 @@ mod tests {
         for seq in 0..12 {
             push_pending(
                 &shared,
-                Raw { seq, generation: 1, captured_ms: 0, reduced: false, formats: vec![("text", vec![0; 4])] },
+                Raw {
+                    seq,
+                    generation: 1,
+                    captured_ms: 0,
+                    reduced: false,
+                    formats: vec![("text", vec![0; 4])],
+                },
             );
         }
         let q = shared.pending();
@@ -563,7 +605,12 @@ mod live {
     use super::*;
     use std::time::{Duration, Instant};
 
-    fn wait(h: &mut ClipboardHistory, ctx: &egui::Context, what: &str, mut ok: impl FnMut(&ClipboardHistory) -> bool) {
+    fn wait(
+        h: &mut ClipboardHistory,
+        ctx: &egui::Context,
+        what: &str,
+        mut ok: impl FnMut(&ClipboardHistory) -> bool,
+    ) {
         let t = Instant::now();
         while t.elapsed() < Duration::from_secs(5) {
             h.refresh();
@@ -592,7 +639,10 @@ mod live {
         h.refresh();
         std::thread::sleep(Duration::from_millis(200));
         h.poll(&ctx);
-        assert!(h.items.is_empty(), "content present before enabling must not be collected");
+        assert!(
+            h.items.is_empty(),
+            "content present before enabling must not be collected"
+        );
 
         cb.set_text("한글 😀 첫째\n둘째 줄").unwrap();
         wait(&mut h, &ctx, "first capture", |h| h.items.len() == 1);
@@ -609,7 +659,11 @@ mod live {
             std::thread::sleep(Duration::from_millis(50));
             h.poll(&ctx);
         }
-        assert!(h.status.as_ref().unwrap().0.starts_with("복사됨"), "{:?}", h.status);
+        assert!(
+            h.status.as_ref().unwrap().0.starts_with("복사됨"),
+            "{:?}",
+            h.status
+        );
         assert_eq!(cb.get_text().unwrap(), "한글 😀 첫째\n둘째 줄");
         std::thread::sleep(Duration::from_millis(600));
         h.refresh();
@@ -648,7 +702,13 @@ mod live {
         cb.set_text("첫 복사").unwrap();
         wait(&mut h, &ctx, "first", |h| h.items.len() == 1);
         // delete everything the way the page does
-        let watermark = h.live.as_ref().unwrap().shared.seq.load(std::sync::atomic::Ordering::Relaxed);
+        let watermark = h
+            .live
+            .as_ref()
+            .unwrap()
+            .shared
+            .seq
+            .load(std::sync::atomic::Ordering::Relaxed);
         h.send(Cmd::DeleteAll { watermark });
         std::thread::sleep(Duration::from_millis(400));
         h.refresh();
@@ -659,11 +719,20 @@ mod live {
         cb.set_text("삭제 뒤 복사").unwrap();
         wait(&mut h, &ctx, "text after delete", |h| h.items.len() == 1);
         // an Excel-like range (HTML + text)
-        cb.set_html("<table><tr><td>가</td><td>나</td></tr><tr><td>다</td><td>라</td></tr></table>", Some("가\t나\r\n다\t라\r\n")).unwrap();
+        cb.set_html(
+            "<table><tr><td>가</td><td>나</td></tr><tr><td>다</td><td>라</td></tr></table>",
+            Some("가\t나\r\n다\t라\r\n"),
+        )
+        .unwrap();
         wait(&mut h, &ctx, "table after delete", |h| h.items.len() == 2);
         assert_eq!(h.items[0].kind, "table");
         // an image
-        cb.set_image(arboard::ImageData { width: 4, height: 4, bytes: std::borrow::Cow::Owned(vec![200u8; 64]) }).unwrap();
+        cb.set_image(arboard::ImageData {
+            width: 4,
+            height: 4,
+            bytes: std::borrow::Cow::Owned(vec![200u8; 64]),
+        })
+        .unwrap();
         wait(&mut h, &ctx, "image after delete", |h| h.items.len() == 3);
         assert_eq!(h.items[0].kind, "image");
         let _ = std::fs::remove_dir_all(dir);
@@ -688,14 +757,24 @@ mod live {
             if h.items.len() != seen {
                 seen = h.items.len();
                 for m in &h.items {
-                    println!("ITEM {} {} {:?} {} formats={} reduced={}", m.id, m.kind, m.summary, m.bytes, m.formats, m.reduced);
+                    println!(
+                        "ITEM {} {} {:?} {} formats={} reduced={}",
+                        m.id, m.kind, m.summary, m.bytes, m.formats, m.reduced
+                    );
                 }
                 println!("---");
             }
         }
         let c = &h.live.as_ref().unwrap().shared.counters;
         use std::sync::atomic::Ordering::Relaxed;
-        println!("COUNTERS locked={} oversize={} unsupported={} backlog={} store_err={}", c.missed_locked.load(Relaxed), c.oversize.load(Relaxed), c.unsupported.load(Relaxed), c.dropped_backlog.load(Relaxed), c.store_errors.load(Relaxed));
+        println!(
+            "COUNTERS locked={} oversize={} unsupported={} backlog={} store_err={}",
+            c.missed_locked.load(Relaxed),
+            c.oversize.load(Relaxed),
+            c.unsupported.load(Relaxed),
+            c.dropped_backlog.load(Relaxed),
+            c.store_errors.load(Relaxed)
+        );
         println!("NOTICE {:?}", h.notice);
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -713,7 +792,12 @@ mod live {
         let (w, hgt) = (2880usize, 1800usize);
         let bytes: Vec<u8> = (0..w * hgt * 4).map(|i| ((i / 7) % 251) as u8).collect();
         let t = Instant::now();
-        cb.set_image(arboard::ImageData { width: w, height: hgt, bytes: std::borrow::Cow::Owned(bytes) }).unwrap();
+        cb.set_image(arboard::ImageData {
+            width: w,
+            height: hgt,
+            bytes: std::borrow::Cow::Owned(bytes),
+        })
+        .unwrap();
         wait(&mut h, &ctx, "big image", |h| !h.items.is_empty());
         println!("BIG IMAGE stored in {:?}: {:?}", t.elapsed(), h.items[0]);
         let _ = std::fs::remove_dir_all(dir);
@@ -733,7 +817,10 @@ mod live {
             t += 0.05;
             h.poll(&ctx);
             let input = egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900., 700.))),
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900., 700.),
+                )),
                 time: Some(t),
                 ..Default::default()
             };
@@ -742,26 +829,41 @@ mod live {
             });
             std::thread::sleep(Duration::from_millis(30));
         };
-        let wait_len = |h: &mut ClipboardHistory, frame: &mut dyn FnMut(&mut ClipboardHistory), n: usize| {
-            let t0 = Instant::now();
-            while h.items.len() != n && t0.elapsed() < Duration::from_secs(5) {
-                frame(h);
-            }
-            assert_eq!(h.items.len(), n, "list length");
-        };
-        for _ in 0..10 { frame(&mut h); }
+        let wait_len =
+            |h: &mut ClipboardHistory, frame: &mut dyn FnMut(&mut ClipboardHistory), n: usize| {
+                let t0 = Instant::now();
+                while h.items.len() != n && t0.elapsed() < Duration::from_secs(5) {
+                    frame(h);
+                }
+                assert_eq!(h.items.len(), n, "list length");
+            };
+        for _ in 0..10 {
+            frame(&mut h);
+        }
         cb.set_text("하나").unwrap();
         wait_len(&mut h, &mut frame, 1);
         cb.set_text("둘").unwrap();
         wait_len(&mut h, &mut frame, 2);
         // the delete-all of the page: confirm, then the click on 삭제
         h.confirm = Some(Confirm::All);
-        h.send(Cmd::DeleteAll { watermark: h.live.as_ref().unwrap().shared.seq.load(std::sync::atomic::Ordering::Relaxed) });
+        h.send(Cmd::DeleteAll {
+            watermark: h
+                .live
+                .as_ref()
+                .unwrap()
+                .shared
+                .seq
+                .load(std::sync::atomic::Ordering::Relaxed),
+        });
         h.confirm = None;
         wait_len(&mut h, &mut frame, 0);
         cb.set_text("셋").unwrap();
         wait_len(&mut h, &mut frame, 1);
-        cb.set_html("<table><tr><td>가</td><td>나</td></tr></table>", Some("가\t나\r\n")).unwrap();
+        cb.set_html(
+            "<table><tr><td>가</td><td>나</td></tr></table>",
+            Some("가\t나\r\n"),
+        )
+        .unwrap();
         wait_len(&mut h, &mut frame, 2);
         let _ = std::fs::remove_dir_all(dir);
     }

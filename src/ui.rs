@@ -1070,14 +1070,18 @@ pub fn banner(ui: &mut Ui, width: f32) -> Response {
     let size = Vec2::new(width, width / banner_ratio());
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
     let key = Id::new("ohmemojang_banner_texture");
-    let texture = ui.ctx().data_mut(|d| d.get_temp::<egui::TextureHandle>(key));
+    let texture = ui
+        .ctx()
+        .data_mut(|d| d.get_temp::<egui::TextureHandle>(key));
     let texture = texture.or_else(|| {
         let img = image::load_from_memory(BANNER_PNG).ok()?.to_rgba8();
         let color = egui::ColorImage::from_rgba_unmultiplied(
             [img.width() as usize, img.height() as usize],
             img.as_raw(),
         );
-        let t = ui.ctx().load_texture("ohmemojang_banner", color, egui::TextureOptions::LINEAR);
+        let t = ui
+            .ctx()
+            .load_texture("ohmemojang_banner", color, egui::TextureOptions::LINEAR);
         ui.ctx().data_mut(|d| d.insert_temp(key, t.clone()));
         Some(t)
     });
@@ -1100,7 +1104,10 @@ mod tests {
     fn the_banner_keeps_the_pictures_proportions_at_any_width() {
         let ctx = egui::Context::default();
         let ratio = banner_ratio();
-        assert!((ratio - 2.0).abs() < 0.01, "the picture is twice as wide as high: {ratio}");
+        assert!(
+            (ratio - 2.0).abs() < 0.01,
+            "the picture is twice as wide as high: {ratio}"
+        );
         for width in [120., 190., 400.] {
             let mut size = Vec2::ZERO;
             let _ = ctx.run(egui::RawInput::default(), |ctx| {

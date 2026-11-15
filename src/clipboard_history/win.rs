@@ -98,7 +98,12 @@ mod imp {
         });
     }
 
-    pub fn spawn(shared: Arc<Shared>, tx_cmd: Sender<Cmd>, tx_ev: Sender<Event>, ctx: egui::Context) {
+    pub fn spawn(
+        shared: Arc<Shared>,
+        tx_cmd: Sender<Cmd>,
+        tx_ev: Sender<Event>,
+        ctx: egui::Context,
+    ) {
         let _ = std::thread::Builder::new()
             .name("clipboard-listener".into())
             // SAFETY: the thread owns everything it creates.
@@ -106,7 +111,11 @@ mod imp {
     }
 
     pub fn post(shared: &Shared, cmd: WinCmd) {
-        shared.win_queue.lock().unwrap_or_else(|e| e.into_inner()).push_back(cmd);
+        shared
+            .win_queue
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push_back(cmd);
         let h = shared.win_hwnd.load(SeqCst);
         if h != 0 {
             // SAFETY: posting to a window handle is harmless if it is gone.
@@ -128,11 +137,21 @@ mod imp {
                 .unwrap_or(0)
                 .to_le_bytes(),
         );
-        h.update(std::collections::hash_map::RandomState::new().build_hasher().finish().to_le_bytes());
+        h.update(
+            std::collections::hash_map::RandomState::new()
+                .build_hasher()
+                .finish()
+                .to_le_bytes(),
+        );
         h.finalize()[..16].to_vec()
     }
 
-    unsafe fn run(shared: Arc<Shared>, tx_cmd: Sender<Cmd>, tx_ev: Sender<Event>, ctx: egui::Context) {
+    unsafe fn run(
+        shared: Arc<Shared>,
+        tx_cmd: Sender<Cmd>,
+        tx_ev: Sender<Event>,
+        ctx: egui::Context,
+    ) {
         let hinst = GetModuleHandleW(null());
         let class = wide("OhMemoJangClipboardHistory");
         let mut wc: WNDCLASSW = std::mem::zeroed();
@@ -141,7 +160,20 @@ mod imp {
         wc.lpszClassName = class.as_ptr();
         RegisterClassW(&wc);
         let make = || {
-            CreateWindowExW(0, class.as_ptr(), class.as_ptr(), 0, 0, 0, 0, 0, HWND_MESSAGE, null_mut(), hinst, null())
+            CreateWindowExW(
+                0,
+                class.as_ptr(),
+                class.as_ptr(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                HWND_MESSAGE,
+                null_mut(),
+                hinst,
+                null(),
+            )
         };
         let listener = make();
         let owner = make();
@@ -159,7 +191,9 @@ mod imp {
             can_include: reg("CanIncludeInClipboardHistory"),
         };
         if AddClipboardFormatListener(listener) == 0 {
-            let _ = tx_ev.send(Event::Notice("클립보드 변경 알림을 등록할 수 없습니다".into()));
+            let _ = tx_ev.send(Event::Notice(
+                "클립보드 변경 알림을 등록할 수 없습니다".into(),
+            ));
         }
         STATE.with(|s| {
             *s.borrow_mut() = Some(State {
@@ -188,7 +222,12 @@ mod imp {
         DestroyWindow(owner);
     }
 
-    unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    unsafe extern "system" fn wndproc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
         match msg {
             WM_CLIPBOARDUPDATE => {
                 with_state(|s| s.on_update());
@@ -291,7 +330,16 @@ mod imp {
                 }
                 Read::Got(formats, reduced) => {
                     let captured_ms = chrono::Utc::now().timestamp_millis();
-                    push_pending(&self.shared, Raw { seq, generation, captured_ms, reduced, formats });
+                    push_pending(
+                        &self.shared,
+                        Raw {
+                            seq,
+                            generation,
+                            captured_ms,
+                            reduced,
+                            formats,
+                        },
+                    );
                     let _ = self.tx_cmd.send(Cmd::CaptureReady);
                 }
             }
@@ -317,7 +365,11 @@ mod imp {
                 let (formats, reduced) = self.read_formats();
                 let after = GetClipboardSequenceNumber();
                 if before == after || before == 0 {
-                    return if formats.is_empty() { Read::Skip } else { Read::Got(formats, reduced) };
+                    return if formats.is_empty() {
+                        Read::Skip
+                    } else {
+                        Read::Got(formats, reduced)
+                    };
                 }
             }
             Read::Unstable
@@ -364,7 +416,12 @@ mod imp {
 
         unsafe fn on_wake(&mut self) {
             loop {
-                let cmd = self.shared.win_queue.lock().unwrap_or_else(|e| e.into_inner()).pop_front();
+                let cmd = self
+                    .shared
+                    .win_queue
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .pop_front();
                 match cmd {
                     None => break,
                     Some(WinCmd::Rebase) => self.ignore_seq = GetClipboardSequenceNumber(),
@@ -384,7 +441,11 @@ mod imp {
         /// first: if that or `OpenClipboard` fails, the current clipboard is
         /// not touched. Multi-format writes are not atomic, so there is no
         /// rollback.
-        unsafe fn restore(&mut self, formats: Vec<(String, Vec<u8>)>, epoch: u64) -> RestoreOutcome {
+        unsafe fn restore(
+            &mut self,
+            formats: Vec<(String, Vec<u8>)>,
+            epoch: u64,
+        ) -> RestoreOutcome {
             let mut jobs: Vec<(u8, &'static str, u32, Vec<u8>)> = vec![];
             for (key, mut data) in formats {
                 let (rank, name, cf) = match key.as_str() {
@@ -447,7 +508,9 @@ mod imp {
             if !opened {
                 free_all(&prepared);
                 free_all(&extras);
-                return RestoreOutcome::NotTouched("다른 프로그램이 클립보드를 사용 중입니다".into());
+                return RestoreOutcome::NotTouched(
+                    "다른 프로그램이 클립보드를 사용 중입니다".into(),
+                );
             }
             // Deleted while waiting: publish nothing.
             if self.shared.epoch.load(Relaxed) != epoch {

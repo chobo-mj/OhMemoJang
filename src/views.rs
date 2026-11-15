@@ -687,7 +687,11 @@ impl App {
     /// schedule sits to the right of the grid behind a draggable divider;
     /// off, it sits below the grid as before.
     pub fn calendar_main(&mut self, ui: &mut egui::Ui, work: bool) {
-        let side = if work { self.prefs.cal_side_work } else { self.prefs.cal_side_page };
+        let side = if work {
+            self.prefs.cal_side_work
+        } else {
+            self.prefs.cal_side_page
+        };
         let toggled = if side {
             self.calendar_side_by_side(ui, work)
         } else {
@@ -701,7 +705,11 @@ impl App {
                 .inner
         };
         if toggled {
-            let flag = if work { &mut self.prefs.cal_side_work } else { &mut self.prefs.cal_side_page };
+            let flag = if work {
+                &mut self.prefs.cal_side_work
+            } else {
+                &mut self.prefs.cal_side_page
+            };
             *flag = !*flag;
         }
     }
@@ -733,9 +741,15 @@ impl App {
         left.set_clip_rect(ui.clip_rect().intersect(left_rect));
         egui::ScrollArea::vertical()
             .id_salt(("main_cal_grid_scroll", work))
-            .show(&mut left, |ui| toggled = self.calendar_grid_with(ui, Some(true)));
+            .show(&mut left, |ui| {
+                toggled = self.calendar_grid_with(ui, Some(true))
+            });
         let drag = ui
-            .interact(handle, ui.id().with(("main_cal_splitter", work)), Sense::drag())
+            .interact(
+                handle,
+                ui.id().with(("main_cal_splitter", work)),
+                Sense::drag(),
+            )
             .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
         if drag.hovered() || drag.dragged() {
             ui.painter().line_segment(
@@ -1748,7 +1762,10 @@ mod schedule_button_tests {
         assert!(a.editor);
         assert_eq!(a.active, i);
         assert!(a.studio.windows.contains_key(&i));
-        assert!(a.desktop.always_sticker, "even while memos open as stickers by default");
+        assert!(
+            a.desktop.always_sticker,
+            "even while memos open as stickers by default"
+        );
         assert_eq!(a.studio.windows[&i].mode, crate::studio::Mode::Editor);
         // Starts blank (no "새 할 일" title or placeholder body text to
         // delete by hand) - the title/body fields' own hint text is enough.
@@ -1767,7 +1784,10 @@ mod calendar_side_tests {
         let mut found = None;
         for i in 0..3 {
             let input = egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200., 800.))),
+                screen_rect: Some(Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200., 800.),
+                )),
                 time: Some(i as f64 * 0.1),
                 ..Default::default()
             };
@@ -1856,7 +1876,12 @@ mod sticker_drop_tests {
         // a title-only sticker simply moved (not onto a date) stays where it was put
         let k = a.new_sticker();
         a.studio.windows.insert(k, Window::new(Mode::Title));
-        let d3 = StickerDrag { note: k, always_restore: false, mode: Mode::Title, ..d2 };
+        let d3 = StickerDrag {
+            note: k,
+            always_restore: false,
+            mode: Mode::Title,
+            ..d2
+        };
         a.drop_sticker(&d3, None);
         assert_eq!(a.studio.windows[&k].place, None);
         // ... and one dropped on a date returns to its place
@@ -1871,7 +1896,10 @@ mod sticker_drop_tests {
         let ctx = egui::Context::default();
         for i in 0..3 {
             let input = egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000., 800.))),
+                screen_rect: Some(Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000., 800.),
+                )),
                 time: Some(i as f64 * 0.1),
                 ..Default::default()
             };
@@ -1879,11 +1907,19 @@ mod sticker_drop_tests {
                 egui::CentralPanel::default().show(ctx, |ui| app.calendar_main(ui, false));
             });
         }
-        let (_, cells) = app.cal_cells.values().next().expect("the grid registered its dates");
+        let (_, cells) = app
+            .cal_cells
+            .values()
+            .next()
+            .expect("the grid registered its dates");
         assert!(cells.len() >= 28);
-        let (rect, date) = cells[10].clone();
+        let (rect, date) = cells[10];
         assert_eq!(app.calendar_date_at(rect.center(), 0.2), Some(date));
-        assert_eq!(app.calendar_date_at(rect.center(), 5.0), None, "a window that stopped drawing is ignored");
+        assert_eq!(
+            app.calendar_date_at(rect.center(), 5.0),
+            None,
+            "a window that stopped drawing is ignored"
+        );
         assert_eq!(app.calendar_date_at(egui::pos2(-50., -50.), 0.2), None);
     }
 }

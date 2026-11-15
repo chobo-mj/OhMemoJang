@@ -153,7 +153,11 @@ fn cell_colors(cell: &Cell, theme_text: Color32) -> (Option<Color32>, Color32) {
         (Some(c), _) => Color32::from_rgb(c[0], c[1], c[2]),
         (None, Some(f)) => {
             let luma = (299 * f.r() as u32 + 587 * f.g() as u32 + 114 * f.b() as u32) / 1000;
-            if luma > 140 { Color32::BLACK } else { Color32::WHITE }
+            if luma > 140 {
+                Color32::BLACK
+            } else {
+                Color32::WHITE
+            }
         }
         (None, None) => theme_text,
     };
@@ -378,13 +382,28 @@ impl Tab {
 /// so Ctrl+Z walks back through what was done, in the order it was done.
 enum UndoKind {
     /// The tab's text and formatting before an edit.
-    Body { tab: usize, text: String, spans: Vec<Span> },
+    Body {
+        tab: usize,
+        text: String,
+        spans: Vec<Span>,
+    },
     /// A table as it was before a cell edit, paste, row/column change, merge ...
     Table { tab: usize, bi: usize, table: Table },
     /// A table was pasted into the text: undo removes it again.
-    TableInserted { tab: usize, id: u32, text: String, spans: Vec<Span> },
+    TableInserted {
+        tab: usize,
+        id: u32,
+        text: String,
+        spans: Vec<Span>,
+    },
     /// A table was deleted: undo puts it back.
-    TableDeleted { tab: usize, bi: usize, table: Table, text: String, spans: Vec<Span> },
+    TableDeleted {
+        tab: usize,
+        bi: usize,
+        table: Table,
+        text: String,
+        spans: Vec<Span>,
+    },
 }
 struct UndoEntry {
     seq: u64,
@@ -411,12 +430,19 @@ impl UndoStack {
             self.entries.remove(0);
         }
         self.next += 1;
-        self.entries.push(UndoEntry { seq: self.next, label, kind, at: now });
+        self.entries.push(UndoEntry {
+            seq: self.next,
+            label,
+            kind,
+            at: now,
+        });
     }
     /// Typing in the same tab within a second of the last change is one step.
     fn push_body(&mut self, tab: usize, text: String, spans: Vec<Span>, now: f64) {
         if let Some(last) = self.entries.last_mut() {
-            if matches!(&last.kind, UndoKind::Body { tab: t, .. } if *t == tab) && now - last.at < 1.0 {
+            if matches!(&last.kind, UndoKind::Body { tab: t, .. } if *t == tab)
+                && now - last.at < 1.0
+            {
                 last.at = now;
                 return;
             }
@@ -574,19 +600,33 @@ impl Document {
                 self.active = tab;
             }
             UndoKind::Table { tab, bi, table } => {
-                if let Some(Block::Table(t)) = self.tabs.get_mut(tab).and_then(|t| t.blocks.get_mut(bi)) {
+                if let Some(Block::Table(t)) =
+                    self.tabs.get_mut(tab).and_then(|t| t.blocks.get_mut(bi))
+                {
                     *t = table;
                 }
                 self.active = tab.min(self.tabs.len() - 1);
             }
-            UndoKind::TableInserted { tab, id, text, spans } => {
+            UndoKind::TableInserted {
+                tab,
+                id,
+                text,
+                spans,
+            } => {
                 let t = self.tabs.get_mut(tab)?;
-                t.blocks.retain(|b| !matches!(b, Block::Table(x) if x.id == id));
+                t.blocks
+                    .retain(|b| !matches!(b, Block::Table(x) if x.id == id));
                 t.body = text;
                 t.spans = spans;
                 self.active = tab;
             }
-            UndoKind::TableDeleted { tab, bi, table, text, spans } => {
+            UndoKind::TableDeleted {
+                tab,
+                bi,
+                table,
+                text,
+                spans,
+            } => {
                 let t = self.tabs.get_mut(tab)?;
                 let at = bi.min(t.blocks.len());
                 t.blocks.insert(at, Block::Table(table));
@@ -943,8 +983,10 @@ fn content_impl(
             // columns and merged cells are exact. One cell is just text.
             // Without markup, tab separated text is split with Excel's
             // quoting (a quoted cell may hold tabs and line breaks).
-            let html_table = clipboard_html_table().filter(|t| t.cells.len() > 1 || t.cells[0].len() > 1);
-            let table = html_table.or_else(|| paste.contains('\t').then(|| Table::from_tsv(&paste)));
+            let html_table =
+                clipboard_html_table().filter(|t| t.cells.len() > 1 || t.cells[0].len() > 1);
+            let table =
+                html_table.or_else(|| paste.contains('\t').then(|| Table::from_tsv(&paste)));
             if let Some(table) = table {
                 // Lands right where the pasted text itself would have, not
                 // appended after everything else, and moves/deletes with the
@@ -1089,7 +1131,6 @@ fn content_impl(
                         if !ui.clip_rect().contains_rect(r) {
                             ui.scroll_to_rect(r.expand2(Vec2::new(0., 8.)), None);
                         }
-
                     }
                 }
             }
@@ -1157,7 +1198,8 @@ fn content_impl(
     }
     if before != doc.tabs[doc.active].body {
         if !table_undo_done {
-            doc.undo.push_body(doc.active, before.clone(), spans_before, now);
+            doc.undo
+                .push_body(doc.active, before.clone(), spans_before, now);
         }
         let tab = &mut doc.tabs[doc.active];
         transform_spans(&before, &tab.body, &mut tab.spans, &doc.format);
@@ -2357,7 +2399,7 @@ fn table_sizes_with(tab: &Tab, zoom: f32, measured: &dyn Fn(u32) -> Option<f32>)
                 key: placeholder(t.id),
                 content: Vec2::new(
                     t.col_widths.iter().sum::<f32>() * zoom + t.col_widths.len() as f32 + 2.,
-                    measured(t.id).unwrap_or_else(|| {
+                    measured(t.id).unwrap_or({
                         (t.row_height * zoom + 1.) * t.cells.len() as f32 + TABLE_TOOLBAR_H
                     }),
                 ),
@@ -2495,13 +2537,27 @@ enum TAct {
 /// text editor is under the toolbar, and a press that only clicks-through
 /// would give it the focus and drop the table's selection.
 fn toolbar_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    ui.add(egui::Button::new(text).small().sense(Sense::click_and_drag()))
+    ui.add(
+        egui::Button::new(text)
+            .small()
+            .sense(Sense::click_and_drag()),
+    )
 }
 /// A small button with four text lines drawn left, centered or right.
 fn align_button(ui: &mut egui::Ui, align: CellAlign, active: bool, tip: &str) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(22., 20.), Sense::click_and_drag());
     let visuals = ui.style().interact_selectable(&resp, active);
-    ui.painter().rect_filled(rect, 4., if active { visuals.bg_fill } else if resp.hovered() { ui.visuals().widgets.hovered.bg_fill } else { Color32::TRANSPARENT });
+    ui.painter().rect_filled(
+        rect,
+        4.,
+        if active {
+            visuals.bg_fill
+        } else if resp.hovered() {
+            ui.visuals().widgets.hovered.bg_fill
+        } else {
+            Color32::TRANSPARENT
+        },
+    );
     let color = ui.visuals().text_color();
     let inner = rect.shrink2(Vec2::new(5., 4.));
     for (i, frac) in [1.0_f32, 0.6, 1.0, 0.6].into_iter().enumerate() {
@@ -2512,7 +2568,10 @@ fn align_button(ui: &mut egui::Ui, align: CellAlign, active: bool, tip: &str) ->
             _ => inner.left(),
         };
         let y = inner.top() + i as f32 * (inner.height() / 3.);
-        ui.painter().line_segment([egui::pos2(x0, y), egui::pos2(x0 + w, y)], Stroke::new(1.2_f32, color));
+        ui.painter().line_segment(
+            [egui::pos2(x0, y), egui::pos2(x0 + w, y)],
+            Stroke::new(1.2_f32, color),
+        );
     }
     #[cfg(test)]
     ALIGN_BUTTONS.with(|b| b.borrow_mut().push(rect));
@@ -2736,8 +2795,7 @@ fn row_geometry(
                 continue;
             }
             let cs = cell.col_span.max(1).min(row.len() - c);
-            let w: f32 =
-                widths[c..c + cs].iter().sum::<f32>() + ROW_SPACING * (cs as f32 - 1.);
+            let w: f32 = widths[c..c + cs].iter().sum::<f32>() + ROW_SPACING * (cs as f32 - 1.);
             let avail = (w - 12.).max(8.);
             // Only a cell that can need a second line is laid out.
             let may_wrap = cell.text.contains('\n')
@@ -2745,7 +2803,14 @@ fn row_geometry(
             if !may_wrap {
                 continue;
             }
-            let mut job = layout(&cell.text, &[], &cell.format, font.clone(), bold_font.clone(), color);
+            let mut job = layout(
+                &cell.text,
+                &[],
+                &cell.format,
+                font.clone(),
+                bold_font.clone(),
+                color,
+            );
             job.wrap.max_width = avail;
             let h = ui.fonts(|f| f.layout_job(job)).size().y + 12.;
             let rs = cell.row_span.max(1).min(nr - r);
@@ -2817,7 +2882,11 @@ fn tbl_commit(t: &mut Table, s: &mut TSel, cx: &mut TableCtx) {
         snap.cells[r][c].text = orig;
         cx.undo.push(
             "셀 편집",
-            UndoKind::Table { tab: cx.tab, bi: cx.bi, table: snap },
+            UndoKind::Table {
+                tab: cx.tab,
+                bi: cx.bi,
+                table: snap,
+            },
             cx.now,
         );
     }
@@ -2968,7 +3037,11 @@ fn table_widget(
                         if before.row_manual != t.row_manual {
                             cx.undo.push(
                                 "행 높이",
-                                UndoKind::Table { tab, bi, table: before },
+                                UndoKind::Table {
+                                    tab,
+                                    bi,
+                                    table: before,
+                                },
                                 cx.now,
                             );
                         }
@@ -2977,11 +3050,22 @@ fn table_widget(
                 if drag.double_clicked() && t.row_manual[r] > 0. {
                     let before = t.clone();
                     t.row_manual[r] = 0.;
-                    cx.undo.push("행 높이", UndoKind::Table { tab, bi, table: before }, cx.now);
+                    cx.undo.push(
+                        "행 높이",
+                        UndoKind::Table {
+                            tab,
+                            bi,
+                            table: before,
+                        },
+                        cx.now,
+                    );
                 }
                 if drag.hovered() || drag.dragged() {
                     ui.painter().line_segment(
-                        [egui::pos2(rect.left(), edge + 0.5), egui::pos2(rect.right(), edge + 0.5)],
+                        [
+                            egui::pos2(rect.left(), edge + 0.5),
+                            egui::pos2(rect.right(), edge + 0.5),
+                        ],
                         Stroke::new(2.0_f32, crate::ui::ACCENT.gamma_multiply(0.7)),
                     );
                 }
@@ -2998,10 +3082,18 @@ fn table_widget(
             // ---- mouse: select, extend, drag a range
             if pressed {
                 if let Some(p) = pos.filter(|p| {
-                    rect.contains(*p) && ui.clip_rect().contains(*p) && ctx.layer_id_at(*p) == Some(layer)
+                    rect.contains(*p)
+                        && ui.clip_rect().contains(*p)
+                        && ctx.layer_id_at(*p) == Some(layer)
                 }) {
                     let editing_box = sel.as_ref().filter(|s| s.editing).map(|s| {
-                        cell_box(origin, &col_x, &widths, &geo, te::span_rect(t, s.head.0, s.head.1))
+                        cell_box(
+                            origin,
+                            &col_x,
+                            &widths,
+                            &geo,
+                            te::span_rect(t, s.head.0, s.head.1),
+                        )
                     });
                     if !editing_box.is_some_and(|b| b.contains(p)) {
                         if let Some(cell) = grid_cell(t, origin, &col_x, &geo, p) {
@@ -3120,8 +3212,12 @@ fn table_widget(
                             egui::Event::Copy => copy = true,
                             egui::Event::Cut => cut = true,
                             egui::Event::Paste(s) => paste = Some(s.clone()),
-                            egui::Event::Text(s) if !s.chars().all(char::is_control) => typed = true,
-                            egui::Event::Ime(egui::ImeEvent::Preedit(s)) if !s.is_empty() => typed = true,
+                            egui::Event::Text(s) if !s.chars().all(char::is_control) => {
+                                typed = true
+                            }
+                            egui::Event::Ime(egui::ImeEvent::Preedit(s)) if !s.is_empty() => {
+                                typed = true
+                            }
                             egui::Event::Ime(egui::ImeEvent::Commit(_)) => typed = true,
                             _ => {}
                         }
@@ -3156,7 +3252,11 @@ fn table_widget(
             let painter = ui.painter().clone();
             let clip = ui.clip_rect();
             // Black cell borders (a light gray on a dark theme).
-            let line = if ui.visuals().dark_mode { Color32::from_gray(200) } else { Color32::BLACK };
+            let line = if ui.visuals().dark_mode {
+                Color32::from_gray(200)
+            } else {
+                Color32::BLACK
+            };
             let stroke = Stroke::new(1.0_f32, line);
             let theme_text = ui.visuals().text_color();
             let editing_cell = sel.as_ref().filter(|s| s.editing).map(|s| s.head);
@@ -3203,12 +3303,32 @@ fn table_widget(
                 let g = s.range(t);
                 let sr = cell_box(origin, &col_x, &widths, &geo, g);
                 if !s.editing {
-                    painter.rect_filled(sr, 0.0, accent.gamma_multiply(if grid_focus { 0.16 } else { 0.08 }));
+                    painter.rect_filled(
+                        sr,
+                        0.0,
+                        accent.gamma_multiply(if grid_focus { 0.16 } else { 0.08 }),
+                    );
                 }
-                painter.rect_stroke(sr, 0.0, Stroke::new(2.0_f32, accent), egui::StrokeKind::Inside);
+                painter.rect_stroke(
+                    sr,
+                    0.0,
+                    Stroke::new(2.0_f32, accent),
+                    egui::StrokeKind::Inside,
+                );
                 if !s.editing && (g.0 != g.2 || g.1 != g.3) {
-                    let hb = cell_box(origin, &col_x, &widths, &geo, te::span_rect(t, s.head.0, s.head.1));
-                    painter.rect_stroke(hb, 0.0, Stroke::new(1.0_f32, accent), egui::StrokeKind::Inside);
+                    let hb = cell_box(
+                        origin,
+                        &col_x,
+                        &widths,
+                        &geo,
+                        te::span_rect(t, s.head.0, s.head.1),
+                    );
+                    painter.rect_stroke(
+                        hb,
+                        0.0,
+                        Stroke::new(1.0_f32, accent),
+                        egui::StrokeKind::Inside,
+                    );
                 }
             }
             // ---- the one cell being edited
@@ -3226,7 +3346,8 @@ fn table_widget(
                     } else if take(Modifiers::NONE, Key::Tab) {
                         tbl_commit(t, s, cx);
                         finished_move = Some(te::next_cell(t, (r, c), false));
-                    } else if take(Modifiers::ALT, Key::Enter) || take(Modifiers::SHIFT, Key::Enter) {
+                    } else if take(Modifiers::ALT, Key::Enter) || take(Modifiers::SHIFT, Key::Enter)
+                    {
                         // A line break inside the cell.
                         let mut st = egui::TextEdit::load_state(&ctx, eid).unwrap_or_default();
                         let (a, b) = st
@@ -3259,14 +3380,20 @@ fn table_widget(
                             x.cells.len() > 1 || x.cells[0].len() > 1 || text.contains('\t')
                         });
                         if let Some(src) = src {
-                            ui.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Paste(_))));
+                            ui.input_mut(|i| {
+                                i.events.retain(|e| !matches!(e, egui::Event::Paste(_)))
+                            });
                             let at = s.head;
                             tbl_cancel(t, s);
                             let snap = t.clone();
                             let area = te::paste_table(t, at.0, at.1, &src);
                             cx.undo.push(
                                 "표에 붙여넣기",
-                                UndoKind::Table { tab, bi, table: snap },
+                                UndoKind::Table {
+                                    tab,
+                                    bi,
+                                    table: snap,
+                                },
                                 cx.now,
                             );
                             s.anchor = (area.0, area.1);
@@ -3291,9 +3418,11 @@ fn table_widget(
                 if s.editing {
                     let (r, c) = s.head;
                     let cr = cell_box(origin, &col_x, &widths, &geo, te::span_rect(t, r, c));
-                    let mut cell_ui = ui.new_child(egui::UiBuilder::new().id_salt(eid).max_rect(cr));
+                    let mut cell_ui =
+                        ui.new_child(egui::UiBuilder::new().id_salt(eid).max_rect(cr));
                     let cf = t.cells[r][c].format.clone();
-                    let (_, col_color) = cell_colors(&t.cells[r][c], cell_ui.visuals().text_color());
+                    let (_, col_color) =
+                        cell_colors(&t.cells[r][c], cell_ui.visuals().text_color());
                     let h_align = t.cells[r][c].align.egui();
                     let (f, bf) = (font.clone(), bold_font.clone());
                     let mut lay = move |ui: &egui::Ui, txt: &str, wrap_w: f32| {
@@ -3364,11 +3493,17 @@ fn table_widget(
                     }
                 }
                 ui.separator();
-                if ui.add_enabled(has && multi, egui::Button::new("선택한 셀 병합")).clicked() {
+                if ui
+                    .add_enabled(has && multi, egui::Button::new("선택한 셀 병합"))
+                    .clicked()
+                {
                     act = Some(TAct::Merge);
                     ui.close_menu();
                 }
-                if ui.add_enabled(has && merged, egui::Button::new("병합 해제")).clicked() {
+                if ui
+                    .add_enabled(has && merged, egui::Button::new("병합 해제"))
+                    .clicked()
+                {
                     act = Some(TAct::Unmerge);
                     ui.close_menu();
                 }
@@ -3400,7 +3535,8 @@ fn table_widget(
             (CellAlign::Center, "가운데 정렬"),
             (CellAlign::Right, "오른쪽 정렬"),
         ] {
-            let on = head_align.is_some_and(|h| h == al || (al == CellAlign::Left && h == CellAlign::Default));
+            let on = head_align
+                .is_some_and(|h| h == al || (al == CellAlign::Left && h == CellAlign::Default));
             if align_button(ui, al, on, tip).clicked() && sel.is_some() {
                 act = Some(TAct::Align(al));
             }
@@ -3439,7 +3575,8 @@ fn table_widget(
                 label = "셀 내용 삭제";
             }
             TAct::Paste => {
-                let text: Option<String> = ui.ctx().data_mut(|d| d.remove_temp(gid.with("paste_text")));
+                let text: Option<String> =
+                    ui.ctx().data_mut(|d| d.remove_temp(gid.with("paste_text")));
                 if let Some(src) = clipboard_table(text.as_deref()) {
                     let one = src.cells.len() == 1 && src.cells[0].len() == 1;
                     let area = te::paste_table(t, r0, c0, &src);
@@ -3551,7 +3688,15 @@ fn table_widget(
             }
         }
         if changed {
-            cx.undo.push(label, UndoKind::Table { tab, bi, table: snap }, cx.now);
+            cx.undo.push(
+                label,
+                UndoKind::Table {
+                    tab,
+                    bi,
+                    table: snap,
+                },
+                cx.now,
+            );
         }
     }
     match &sel {
@@ -3754,7 +3899,10 @@ fn marker(line: &str) -> Option<Marker> {
 /// that is not a list item.
 pub fn list_item_text(line: &str) -> Option<String> {
     marker(line)?;
-    let rest = line.trim_start().split_once(char::is_whitespace).map_or("", |(_, r)| r);
+    let rest = line
+        .trim_start()
+        .split_once(char::is_whitespace)
+        .map_or("", |(_, r)| r);
     Some(rest.trim().to_owned())
 }
 fn continuation(text: &str, cursor: usize) -> String {
@@ -3960,7 +4108,13 @@ fn enter_edit(text: &str, nl: usize) -> Option<(Range<usize>, String, usize)> {
     }
     let c = continuation(text, nl);
     let rest = c.strip_prefix('\n')?;
-    (!rest.is_empty()).then(|| (nl + 1..nl + 1, rest.to_owned(), nl + 1 + rest.chars().count()))
+    (!rest.is_empty()).then(|| {
+        (
+            nl + 1..nl + 1,
+            rest.to_owned(),
+            nl + 1 + rest.chars().count(),
+        )
+    })
 }
 /// A marker typed at the start of a line takes its place in the list: its
 /// indentation is that of the last marker of its kind, else two spaces
@@ -3982,7 +4136,9 @@ fn normalize_outline_line(text: &mut String, cursor: usize) -> Option<usize> {
     };
     let ancestors = &text[..byte_start];
     // the marker's own family, judged in its place in the list
-    let m = contextual_markers(&format!("{ancestors}{token} ")).last()?.clone();
+    let m = contextual_markers(&format!("{ancestors}{token} "))
+        .last()?
+        .clone();
     let prev = contextual_markers(ancestors);
     let indent = prev
         .iter()
@@ -4244,7 +4400,10 @@ mod tests {
         };
         // content: the next marker of the same level
         let t = "  1. 테스트\n";
-        assert_eq!(apply(t, t.chars().count() - 1).unwrap().0, "  1. 테스트\n  2. ");
+        assert_eq!(
+            apply(t, t.chars().count() - 1).unwrap().0,
+            "  1. 테스트\n  2. "
+        );
         let t = "  1. 테스트\n  2. ㅇㅇ\n    a) 내용\n";
         let n = t.chars().count() - 1;
         let (out, caret) = apply(t, n).unwrap();
@@ -4352,12 +4511,22 @@ mod tests {
         let mut d = Document::default();
         d.tabs[0].body = "처음".into();
         d.undo.push_body(0, String::new(), vec![], 0.0);
-        d.tabs[0].blocks.push(Block::Table(Table::from_tsv("가\t나")));
+        d.tabs[0]
+            .blocks
+            .push(Block::Table(Table::from_tsv("가\t나")));
         let snap = Table::from_tsv("가\t나");
         if let Block::Table(t) = &mut d.tabs[0].blocks[0] {
             t.cells[0][0].text = "바뀜".into();
         }
-        d.undo.push("셀 편집", UndoKind::Table { tab: 0, bi: 0, table: snap }, 5.0);
+        d.undo.push(
+            "셀 편집",
+            UndoKind::Table {
+                tab: 0,
+                bi: 0,
+                table: snap,
+            },
+            5.0,
+        );
         d.tabs[0].body = "처음 둘째".into();
         d.undo.push_body(0, "처음".into(), vec![], 9.0);
         assert_eq!(d.undo_steps(), 3);
@@ -4390,7 +4559,12 @@ mod tests {
         };
         d.undo.push(
             "표 붙여넣기",
-            UndoKind::TableInserted { tab: 0, id, text: String::new(), spans: vec![] },
+            UndoKind::TableInserted {
+                tab: 0,
+                id,
+                text: String::new(),
+                spans: vec![],
+            },
             0.0,
         );
         d.undo().unwrap();
@@ -4398,7 +4572,13 @@ mod tests {
         let t = Table::from_tsv("다");
         d.undo.push(
             "표 삭제",
-            UndoKind::TableDeleted { tab: 0, bi: 0, table: t, text: "본문".into(), spans: vec![] },
+            UndoKind::TableDeleted {
+                tab: 0,
+                bi: 0,
+                table: t,
+                text: "본문".into(),
+                spans: vec![],
+            },
             1.0,
         );
         d.undo().unwrap();
@@ -4856,10 +5036,10 @@ mod inline_picture_tests {
     fn plain_text_and_title_inference_skip_picture_placeholders() {
         let mut doc = Document::default();
         doc.tabs[0].insert_picture(0..0, picture(4, 4));
-        let mut body = doc.tabs[0].body.clone() + "제목 줄\n본문";
+        let body = doc.tabs[0].body.clone() + "제목 줄\n본문";
         assert_eq!(doc.plain_text(&body), "제목 줄\n본문");
         let mut title = String::new();
-        crate::desktop::infer_title(&mut title, &mut body);
+        crate::desktop::infer_title(&mut title, &body);
         assert_eq!(title, "제목 줄");
         assert_eq!(body.chars().filter(|c| is_picture(*c)).count(), 1);
         assert!(body.ends_with("본문"));
@@ -4893,7 +5073,10 @@ mod inline_table_tests {
         time: f64,
     ) {
         let input = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(700., 500.))),
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                Vec2::new(700., 500.),
+            )),
             events,
             time: Some(time),
             ..Default::default()
@@ -4905,10 +5088,18 @@ mod inline_table_tests {
         });
     }
     fn table_area(_ctx: &egui::Context) -> egui::Rect {
-        LAST_TABLE_RECT.with(|r| r.get()).expect("the inline table was drawn")
+        LAST_TABLE_RECT
+            .with(|r| r.get())
+            .expect("the inline table was drawn")
     }
     fn key(k: Key, mods: Modifiers) -> egui::Event {
-        egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: mods }
+        egui::Event::Key {
+            key: k,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: mods,
+        }
     }
     fn click(p: egui::Pos2) -> Vec<Vec<egui::Event>> {
         let b = |pressed| egui::Event::PointerButton {
@@ -4917,7 +5108,11 @@ mod inline_table_tests {
             pressed,
             modifiers: Modifiers::NONE,
         };
-        vec![vec![egui::Event::PointerMoved(p)], vec![b(true)], vec![b(false)]]
+        vec![
+            vec![egui::Event::PointerMoved(p)],
+            vec![b(true)],
+            vec![b(false)],
+        ]
     }
     #[test]
     fn table_cells_select_edit_range_delete_and_undo_through_the_ui() {
@@ -4937,9 +5132,8 @@ mod inline_table_tests {
             run(&mut doc, &mut body, vec![]);
         }
         let area = table_area(&ctx);
-        let cell = |r: usize, c: usize| {
-            area.min + Vec2::new(c as f32 * 121. + 60., r as f32 * 33. + 16.)
-        };
+        let cell =
+            |r: usize, c: usize| area.min + Vec2::new(c as f32 * 121. + 60., r as f32 * 33. + 16.);
         // click selects (no edit yet)
         for ev in click(cell(1, 1)) {
             run(&mut doc, &mut body, ev);
@@ -4968,8 +5162,18 @@ mod inline_table_tests {
         assert_eq!(doc.undo_steps(), 0);
         // drag a range, then Delete clears it (one undo step)
         let (a, b) = (cell(0, 0), cell(1, 1));
-        let press = egui::Event::PointerButton { pos: a, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE };
-        let release = egui::Event::PointerButton { pos: b, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE };
+        let press = egui::Event::PointerButton {
+            pos: a,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        };
+        let release = egui::Event::PointerButton {
+            pos: b,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        };
         run(&mut doc, &mut body, vec![egui::Event::PointerMoved(a)]);
         run(&mut doc, &mut body, vec![press]);
         run(&mut doc, &mut body, vec![egui::Event::PointerMoved(b)]);
@@ -4979,10 +5183,16 @@ mod inline_table_tests {
         assert_eq!((s.anchor, s.head), ((0, 0), (1, 1)));
         run(&mut doc, &mut body, vec![key(Key::Delete, Modifiers::NONE)]);
         run(&mut doc, &mut body, vec![]);
-        assert_eq!((text(&doc, 0, 0), text(&doc, 1, 1)), (String::new(), String::new()));
+        assert_eq!(
+            (text(&doc, 0, 0), text(&doc, 1, 1)),
+            (String::new(), String::new())
+        );
         assert_eq!(doc.undo_steps(), 1);
         run(&mut doc, &mut body, vec![key(Key::Z, Modifiers::CTRL)]);
-        assert_eq!((text(&doc, 0, 0), text(&doc, 1, 1)), ("가".to_owned(), "원래".to_owned()));
+        assert_eq!(
+            (text(&doc, 0, 0), text(&doc, 1, 1)),
+            ("가".to_owned(), "원래".to_owned())
+        );
     }
     #[test]
     fn undo_follows_one_order_across_body_typing_and_table_edits() {
@@ -5021,7 +5231,10 @@ mod inline_table_tests {
         // 3. undo: the cell first, then the body text
         run(&mut doc, &mut body, vec![key(Key::Z, Modifiers::CTRL)]);
         assert!(matches!(&doc.tabs[0].blocks[0], Block::Table(t) if t.cells[0][0].text.is_empty()));
-        assert!(doc.tabs[0].body.ends_with("본문"), "the body is still as typed");
+        assert!(
+            doc.tabs[0].body.ends_with("본문"),
+            "the body is still as typed"
+        );
         run(&mut doc, &mut body, vec![key(Key::Z, Modifiers::CTRL)]);
         assert_eq!(doc.tabs[0].body, placeholder_only);
         assert!(doc.status.contains("본문 편집"), "{}", doc.status);
@@ -5066,7 +5279,11 @@ mod inline_table_tests {
             None => arboard::Clipboard::new().unwrap().get().html(),
         };
         match &html {
-            Ok(h) => println!("ARBOARD HTML LEN {} START: {:?}", h.len(), &h[..h.len().min(300)]),
+            Ok(h) => println!(
+                "ARBOARD HTML LEN {} START: {:?}",
+                h.len(),
+                &h[..h.len().min(300)]
+            ),
             Err(e) => println!("ARBOARD HTML ERR {e}"),
         }
         if let Ok(h) = html {
@@ -5088,9 +5305,17 @@ mod inline_table_tests {
                 }
             }
         }
-        let text = arboard::Clipboard::new().unwrap().get_text().unwrap_or_default();
+        let text = arboard::Clipboard::new()
+            .unwrap()
+            .get_text()
+            .unwrap_or_default();
         let grid = crate::table_edit::parse_tsv(&text);
-        println!("TSV GRID {}x{}: {:?}", grid.len(), grid.iter().map(Vec::len).max().unwrap_or(0), grid);
+        println!(
+            "TSV GRID {}x{}: {:?}",
+            grid.len(),
+            grid.iter().map(Vec::len).max().unwrap_or(0),
+            grid
+        );
     }
     /// Real clipboard: paste an Excel range into the memo, then copy the
     /// whole memo table back (leaves the memo's Excel-format data on the clipboard).
@@ -5119,18 +5344,33 @@ mod inline_table_tests {
         };
         println!("MEMO TABLE {}x{}", table.cells.len(), table.cells[0].len());
         assert!(crate::table_edit::is_valid(&table));
-        assert_eq!((table.cells[0][0].row_span, table.cells[0][0].col_span), (3, 1));
-        assert_eq!(table.cells[0][0].text, "병합1\n 줄바꿈 앞에 띄어쓰기 1칸\n  띄어쓰기 2칸");
+        assert_eq!(
+            (table.cells[0][0].row_span, table.cells[0][0].col_span),
+            (3, 1)
+        );
+        assert_eq!(
+            table.cells[0][0].text,
+            "병합1\n 줄바꿈 앞에 띄어쓰기 1칸\n  띄어쓰기 2칸"
+        );
         assert_eq!(table.cells[2][1].col_span, 2);
-        assert_eq!((table.cells[3][2].row_span, table.cells[3][2].col_span), (2, 2));
+        assert_eq!(
+            (table.cells[3][2].row_span, table.cells[3][2].col_span),
+            (2, 2)
+        );
         assert_eq!(table.cells[6][0].col_span, 4);
         // select everything by dragging, then Ctrl+C
         let area = table_area(&ctx);
         let xs = [0., 266., 339., 412.];
         let ws = [265., 72., 72., 72.];
-        let cell = |r: usize, c: usize| area.min + Vec2::new(xs[c] + ws[c] / 2., r as f32 * 33. + 16.);
+        let cell =
+            |r: usize, c: usize| area.min + Vec2::new(xs[c] + ws[c] / 2., r as f32 * 33. + 16.);
         let (a, b) = (cell(0, 0), cell(6, 3));
-        let btn = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        let btn = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
         run(&mut doc, &mut body, vec![egui::Event::PointerMoved(a)]);
         run(&mut doc, &mut body, vec![btn(a, true)]);
         run(&mut doc, &mut body, vec![egui::Event::PointerMoved(b)]);
@@ -5161,11 +5401,21 @@ mod inline_table_tests {
         let ctx = egui::Context::default();
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             for a in [egui::Align::LEFT, egui::Align::Center, egui::Align::RIGHT] {
-                let mut job = layout("가나다\n가", &[], &Format::default(), FontId::proportional(14.), FontId::proportional(14.), Color32::BLACK);
+                let mut job = layout(
+                    "가나다\n가",
+                    &[],
+                    &Format::default(),
+                    FontId::proportional(14.),
+                    FontId::proportional(14.),
+                    Color32::BLACK,
+                );
                 job.wrap.max_width = 200.;
                 job.halign = a;
                 let g = ctx.fonts(|f| f.layout_job(job));
-                println!("ALIGN {:?} rect {:?} row0 {:?} row1 {:?}", a, g.rect, g.rows[0].rect, g.rows[1].rect);
+                println!(
+                    "ALIGN {:?} rect {:?} row0 {:?} row1 {:?}",
+                    a, g.rect, g.rows[0].rect, g.rows[1].rect
+                );
             }
         });
     }
@@ -5188,7 +5438,10 @@ mod inline_table_tests {
         let mut shapes = vec![];
         for i in 0..3 {
             let input = egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(800., 400.))),
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(800., 400.),
+                )),
                 time: Some(i as f64 * 0.1),
                 ..Default::default()
             };
@@ -5236,7 +5489,10 @@ mod inline_table_tests {
         // cells are 200 wide plus 1 of spacing; the anchor of a centered text
         // is half the cell's inner width (188) further, a right one the full width
         assert!((c - l - (201. + 94.)).abs() < 3., "center {c} vs left {l}");
-        assert!((r - c - 201.).abs() < 100. && r > c, "right {r} vs center {c}");
+        assert!(
+            (r - c - 201.).abs() < 100. && r > c,
+            "right {r} vs center {c}"
+        );
         assert!((r - l - (402. + 188.)).abs() < 3., "right {r} vs left {l}");
     }
     #[test]
@@ -5262,7 +5518,11 @@ mod inline_table_tests {
         }
         assert_eq!(doc.tabs[0].body, "  1. ");
         // Hangul with a real IME: composing, committing a syllable at a time
-        run(&mut doc, &mut body, vec![egui::Event::Ime(egui::ImeEvent::Enabled)]);
+        run(
+            &mut doc,
+            &mut body,
+            vec![egui::Event::Ime(egui::ImeEvent::Enabled)],
+        );
         for (p, c) in [("ㅌ", "테"), ("ㅅ", "스")] {
             run(&mut doc, &mut body, vec![pre(p)]);
             run(&mut doc, &mut body, vec![pre(c)]);
@@ -5274,7 +5534,11 @@ mod inline_table_tests {
         // and the Enter key arrives in the same frame
         run(&mut doc, &mut body, vec![pre(""), commit("트"), enter()]);
         run(&mut doc, &mut body, vec![]);
-        assert_eq!(doc.tabs[0].body, "  1. 테스트\n  2. ", "{:?}", doc.tabs[0].body);
+        assert_eq!(
+            doc.tabs[0].body, "  1. 테스트\n  2. ",
+            "{:?}",
+            doc.tabs[0].body
+        );
         run(&mut doc, &mut body, vec![text("ㅇㅇ")]);
         run(&mut doc, &mut body, vec![enter()]);
         assert_eq!(doc.tabs[0].body, "  1. 테스트\n  2. ㅇㅇ\n  3. ");
@@ -5282,17 +5546,32 @@ mod inline_table_tests {
         for e in ["a", ")", " "] {
             run(&mut doc, &mut body, vec![text(e)]);
         }
-        assert_eq!(doc.tabs[0].body, "  1. 테스트\n  2. ㅇㅇ\n    a) ", "{:?}", doc.tabs[0].body);
+        assert_eq!(
+            doc.tabs[0].body, "  1. 테스트\n  2. ㅇㅇ\n    a) ",
+            "{:?}",
+            doc.tabs[0].body
+        );
         // content, then Enter: the same level
         run(&mut doc, &mut body, vec![text("내용")]);
         run(&mut doc, &mut body, vec![enter()]);
-        assert!(doc.tabs[0].body.ends_with("    a) 내용\n    b) "), "{:?}", doc.tabs[0].body);
+        assert!(
+            doc.tabs[0].body.ends_with("    a) 내용\n    b) "),
+            "{:?}",
+            doc.tabs[0].body
+        );
         // Enter on the empty item: the next number of the level above
         run(&mut doc, &mut body, vec![enter()]);
-        assert_eq!(doc.tabs[0].body, "  1. 테스트\n  2. ㅇㅇ\n    a) 내용\n  3. ");
+        assert_eq!(
+            doc.tabs[0].body,
+            "  1. 테스트\n  2. ㅇㅇ\n    a) 내용\n  3. "
+        );
         // the caret is at the end, typing continues there
         run(&mut doc, &mut body, vec![text("끝")]);
-        assert!(doc.tabs[0].body.ends_with("  3. 끝"), "{:?}", doc.tabs[0].body);
+        assert!(
+            doc.tabs[0].body.ends_with("  3. 끝"),
+            "{:?}",
+            doc.tabs[0].body
+        );
     }
     #[test]
     fn a_cancelled_composition_does_not_switch_the_list_helpers_off() {
@@ -5309,7 +5588,11 @@ mod inline_table_tests {
         run(&mut doc, &mut body, vec![]);
         let pre = |s: &str| egui::Event::Ime(egui::ImeEvent::Preedit(s.into()));
         // compose a jamo, then Backspace it away: only an empty preedit arrives
-        run(&mut doc, &mut body, vec![egui::Event::Ime(egui::ImeEvent::Enabled)]);
+        run(
+            &mut doc,
+            &mut body,
+            vec![egui::Event::Ime(egui::ImeEvent::Enabled)],
+        );
         run(&mut doc, &mut body, vec![pre("ㅇ")]);
         run(&mut doc, &mut body, vec![pre("")]);
         for e in ["1", ".", " "] {
@@ -5338,14 +5621,28 @@ mod inline_table_tests {
         run(&mut doc, &mut body, vec![]);
         // an undo step far above: the caret jumps to the first line
         let old = doc.tabs[0].body.replacen("줄 0", "줄 영", 1);
-        doc.undo.push("본문 편집", UndoKind::Body { tab: 0, text: old, spans: vec![] }, 99.0);
+        doc.undo.push(
+            "본문 편집",
+            UndoKind::Body {
+                tab: 0,
+                text: old,
+                spans: vec![],
+            },
+            99.0,
+        );
         run(&mut doc, &mut body, vec![key(Key::Z, Modifiers::CTRL)]);
         for _ in 0..4 {
             run(&mut doc, &mut body, vec![]);
         }
         let (clip, caret) = LAST_CARET.with(|c| c.get()).expect("the caret moved");
-        assert!(caret.top() < 200., "the caret is near the top of the text: {caret:?}");
-        assert!(clip.contains_rect(caret), "the view follows the caret: view {clip:?} caret {caret:?}");
+        assert!(
+            caret.top() < 200.,
+            "the caret is near the top of the text: {caret:?}"
+        );
+        assert!(
+            clip.contains_rect(caret),
+            "the view follows the caret: view {clip:?} caret {caret:?}"
+        );
     }
     #[test]
     fn a_table_scrolled_half_out_of_the_body_is_clipped_to_the_body() {
@@ -5364,7 +5661,10 @@ mod inline_table_tests {
         let mut shapes = vec![];
         for i in 0..6 {
             let input = egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(500., 260.))),
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(500., 260.),
+                )),
                 time: Some(i as f64 * 0.1),
                 ..Default::default()
             };
@@ -5426,10 +5726,15 @@ mod inline_table_tests {
         run(&mut doc, &mut body, vec![]);
         run(&mut doc, &mut body, vec![egui::Event::Text("둘째".into())]);
         run(&mut doc, &mut body, vec![]);
-        assert!(doc.tsel.as_ref().unwrap().editing, "Alt+Enter keeps editing the cell");
+        assert!(
+            doc.tsel.as_ref().unwrap().editing,
+            "Alt+Enter keeps editing the cell"
+        );
         run(&mut doc, &mut body, vec![key(Key::Enter, Modifiers::NONE)]);
         run(&mut doc, &mut body, vec![]);
-        let Block::Table(table) = &doc.tabs[0].blocks[0] else { unreachable!() };
+        let Block::Table(table) = &doc.tabs[0].blocks[0] else {
+            unreachable!()
+        };
         assert_eq!(table.cells[0][0].text, "첫줄\n둘째");
         // Excel gets the line break inside one cell: quoted text, <br> in the cell
         assert!(crate::table_edit::table_tsv(table).starts_with("\"첫줄\n둘째\"\t"));
@@ -5452,8 +5757,16 @@ mod inline_table_tests {
         }
         let area = table_area(&ctx);
         // select the first row (drag across it)
-        let (a, b) = (area.min + Vec2::new(60., 16.), area.min + Vec2::new(300., 16.));
-        let btn = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        let (a, b) = (
+            area.min + Vec2::new(60., 16.),
+            area.min + Vec2::new(300., 16.),
+        );
+        let btn = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
         run(&mut doc, &mut body, vec![egui::Event::PointerMoved(a)]);
         run(&mut doc, &mut body, vec![btn(a, true)]);
         run(&mut doc, &mut body, vec![egui::Event::PointerMoved(b)]);
@@ -5464,15 +5777,27 @@ mod inline_table_tests {
         ALIGN_BUTTONS.with(|b| b.borrow_mut().clear());
         run(&mut doc, &mut body, vec![]);
         let buttons = ALIGN_BUTTONS.with(|b| b.borrow().clone());
-        assert_eq!(buttons.len(), 3, "the toolbar has the three alignment buttons");
+        assert_eq!(
+            buttons.len(),
+            3,
+            "the toolbar has the three alignment buttons"
+        );
         for ev in click(buttons[1].center()) {
             run(&mut doc, &mut body, ev);
         }
-        let Block::Table(table) = &doc.tabs[0].blocks[0] else { unreachable!() };
+        let Block::Table(table) = &doc.tabs[0].blocks[0] else {
+            unreachable!()
+        };
         let first = table.cells[0][0].align;
         assert_eq!(first, CellAlign::Center, "the center button was pressed");
-        assert!(table.cells[0].iter().all(|c| c.align == first), "the whole selected row follows");
-        assert!(table.cells[1].iter().all(|c| c.align == CellAlign::Default), "other rows are not touched");
+        assert!(
+            table.cells[0].iter().all(|c| c.align == first),
+            "the whole selected row follows"
+        );
+        assert!(
+            table.cells[1].iter().all(|c| c.align == CellAlign::Default),
+            "other rows are not touched"
+        );
     }
     #[test]
     fn a_right_click_on_a_picture_opens_its_toolbar_at_the_mouse() {
@@ -5537,20 +5862,33 @@ mod inline_table_tests {
         let first_h = edges[0] - area.min.y;
         let second_h = edges[1] - edges[0] - 1.;
         assert!(first_h > 55., "three lines make the row taller: {first_h}");
-        assert!((second_h - 32.).abs() < 1., "a short row keeps the table's row height: {second_h}");
+        assert!(
+            (second_h - 32.).abs() < 1.,
+            "a short row keeps the table's row height: {second_h}"
+        );
         // drag the first row's bottom edge up: the new height is kept
         let from = egui::pos2(area.min.x + 100., edges[0] + 0.5);
         let to = egui::pos2(from.x, from.y - 30.);
-        let btn = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        let btn = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
         run(&mut doc, &mut body, vec![egui::Event::PointerMoved(from)]);
         run(&mut doc, &mut body, vec![btn(from, true)]);
         run(&mut doc, &mut body, vec![egui::Event::PointerMoved(to)]);
         run(&mut doc, &mut body, vec![]);
         run(&mut doc, &mut body, vec![btn(to, false)]);
         run(&mut doc, &mut body, vec![]);
-        let Block::Table(tb) = &doc.tabs[0].blocks[0] else { unreachable!() };
+        let Block::Table(tb) = &doc.tabs[0].blocks[0] else {
+            unreachable!()
+        };
         let manual = tb.row_manual[0];
-        assert!(manual > 20. && manual < first_h - 20., "the row was set shorter than its content: {manual} (was {first_h})");
+        assert!(
+            manual > 20. && manual < first_h - 20.,
+            "the row was set shorter than its content: {manual} (was {first_h})"
+        );
         assert_eq!(doc.undo_steps(), 1, "the drag is one undo step");
         // more lines in the cell do not change a height the user set
         if let Block::Table(tb) = &mut doc.tabs[0].blocks[0] {
@@ -5558,15 +5896,27 @@ mod inline_table_tests {
         }
         run(&mut doc, &mut body, vec![]);
         let edges2 = ROW_EDGES.with(|e| e.borrow().clone());
-        assert!(((edges2[0] - table_area(&ctx).min.y) - (manual + 0.)).abs() < 1.5, "the dragged height stays");
+        assert!(
+            ((edges2[0] - table_area(&ctx).min.y) - (manual + 0.)).abs() < 1.5,
+            "the dragged height stays"
+        );
         // undo gives the automatic height back
-        run(&mut doc, &mut body, vec![egui::Event::PointerMoved(egui::pos2(area.min.x + 100., area.min.y + 10.))]);
+        run(
+            &mut doc,
+            &mut body,
+            vec![egui::Event::PointerMoved(egui::pos2(
+                area.min.x + 100.,
+                area.min.y + 10.,
+            ))],
+        );
         let steps = doc.undo_steps();
         assert!(steps >= 1);
         let before = doc.undo.entries.len();
         let _ = doc.undo();
         assert_eq!(doc.undo.entries.len(), before - 1);
-        let Block::Table(tb) = &doc.tabs[0].blocks[0] else { unreachable!() };
+        let Block::Table(tb) = &doc.tabs[0].blocks[0] else {
+            unreachable!()
+        };
         assert_eq!(tb.row_manual[0], 0., "back to growing with the content");
     }
     #[test]

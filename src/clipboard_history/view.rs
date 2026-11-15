@@ -58,7 +58,8 @@ impl ClipboardHistory {
             if now - self.search_edited > 0.25 {
                 self.refresh();
             } else {
-                ui.ctx().request_repaint_after(std::time::Duration::from_millis(260));
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(260));
             }
         }
         self.header(ui, now);
@@ -66,7 +67,8 @@ impl ClipboardHistory {
         if let Some((msg, at)) = self.status.clone() {
             if now - at < 6.0 {
                 ui.label(RichText::new(msg).size(12.5).color(ui::ACCENT));
-                ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(500));
             } else {
                 self.status = None;
             }
@@ -114,7 +116,11 @@ impl ClipboardHistory {
         if self.detail.as_ref().is_some_and(|d| d.id == id) {
             return;
         }
-        self.detail = Some(Detail { id, text: None, table: None });
+        self.detail = Some(Detail {
+            id,
+            text: None,
+            table: None,
+        });
         self.full = None;
         self.send(Cmd::Detail(id));
         if self.items.iter().any(|m| m.id == id && m.kind == "image") {
@@ -153,19 +159,41 @@ impl ClipboardHistory {
         } else {
             ui.horizontal(|ui| {
                 let (text, fill, ink) = if s.paused {
-                    ("● 일시 중지", Color32::from_rgb(250, 236, 200), Color32::from_rgb(140, 100, 20))
+                    (
+                        "● 일시 중지",
+                        Color32::from_rgb(250, 236, 200),
+                        Color32::from_rgb(140, 100, 20),
+                    )
                 } else {
-                    ("● 수집 중", Color32::from_rgb(214, 238, 222), Color32::from_rgb(30, 100, 60))
+                    (
+                        "● 수집 중",
+                        Color32::from_rgb(214, 238, 222),
+                        Color32::from_rgb(30, 100, 60),
+                    )
                 };
                 ui::chip(ui, text, fill, ink);
-                if ui.button(if s.paused { "다시 시작" } else { "일시 중지" }).clicked() {
+                if ui
+                    .button(if s.paused {
+                        "다시 시작"
+                    } else {
+                        "일시 중지"
+                    })
+                    .clicked()
+                {
                     self.set_state(true, !s.paused);
                 }
                 if ui.button("수집 끄기").clicked() {
                     self.set_state(false, false);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if crate::icons::toggle_icon(ui, Icon::Settings, "설정·삭제", self.settings_open).clicked() {
+                    if crate::icons::toggle_icon(
+                        ui,
+                        Icon::Settings,
+                        "설정·삭제",
+                        self.settings_open,
+                    )
+                    .clicked()
+                    {
                         self.settings_open = !self.settings_open;
                     }
                     ui::hint(
@@ -231,7 +259,11 @@ impl ClipboardHistory {
                         .selected_text(format!("{}일 보관", s.retention_days))
                         .show_ui(ui, |ui| {
                             for n in Settings::DAY_CHOICES {
-                                ui.selectable_value(&mut s.retention_days, n, format!("{n}일 보관"));
+                                ui.selectable_value(
+                                    &mut s.retention_days,
+                                    n,
+                                    format!("{n}일 보관"),
+                                );
                             }
                         });
                 });
@@ -262,7 +294,9 @@ impl ClipboardHistory {
                 );
                 if ui.button("이 날짜 이전 삭제").clicked() {
                     if let Ok(d) = NaiveDate::parse_from_str(self.date_input.trim(), "%Y-%m-%d") {
-                        let local = d.and_hms_opt(0, 0, 0).and_then(|t| Local.from_local_datetime(&t).earliest());
+                        let local = d
+                            .and_hms_opt(0, 0, 0)
+                            .and_then(|t| Local.from_local_datetime(&t).earliest());
                         if let Some(t) = local {
                             self.confirm = Some(Confirm::Before(
                                 t.timestamp_millis(),
@@ -302,7 +336,9 @@ impl ClipboardHistory {
     }
 
     fn confirm_bar(&mut self, ui: &mut egui::Ui) {
-        let Some(c) = self.confirm.clone() else { return };
+        let Some(c) = self.confirm.clone() else {
+            return;
+        };
         let text = match &c {
             Confirm::All => "저장된 클립보드 기록 전체를 삭제합니다.".to_owned(),
             Confirm::Before(_, label) => format!("{label}을 삭제합니다."),
@@ -317,10 +353,9 @@ impl ClipboardHistory {
             if yes {
                 match c {
                     Confirm::All => {
-                        let watermark = self
-                            .live
-                            .as_ref()
-                            .map_or(0, |l| l.shared.seq.load(std::sync::atomic::Ordering::Relaxed));
+                        let watermark = self.live.as_ref().map_or(0, |l| {
+                            l.shared.seq.load(std::sync::atomic::Ordering::Relaxed)
+                        });
                         self.send(Cmd::DeleteAll { watermark });
                     }
                     Confirm::Before(ms, _) => self.send(Cmd::DeleteBefore(ms)),
@@ -339,7 +374,11 @@ impl ClipboardHistory {
         let meta = self.items.iter().find(|m| m.id == d.id).cloned();
         let mut close = false;
         let big = self.detail_big;
-        let height = if big { ui.available_height() * 0.75 } else { 300.0 };
+        let height = if big {
+            ui.available_height() * 0.75
+        } else {
+            300.0
+        };
         egui::TopBottomPanel::bottom(if big { "clipboard_detail_big" } else { "clipboard_detail" })
             .resizable(true)
             .default_height(height)
@@ -379,7 +418,7 @@ impl ClipboardHistory {
                     } else if let Some((id, tex)) = &self.full {
                         if *id == d.id {
                             let size = tex.size_vec2();
-                            let k = (ui.available_width() / size.x).min(1.0).max(0.05);
+                            let k = (ui.available_width() / size.x).clamp(0.05, 1.0);
                             ui.image((tex.id(), size * k));
                         }
                     } else if let Some(t) = &d.text {
@@ -405,7 +444,11 @@ impl ClipboardHistory {
                 ui::empty_state(
                     ui,
                     Icon::Menu,
-                    if searching { "조건에 맞는 기록이 없습니다" } else { "아직 기록이 없습니다" },
+                    if searching {
+                        "조건에 맞는 기록이 없습니다"
+                    } else {
+                        "아직 기록이 없습니다"
+                    },
                     if self.settings.collecting() || searching {
                         ""
                     } else {
@@ -464,8 +507,18 @@ impl ClipboardHistory {
             }
             for i in range {
                 let m = &self.items[i];
-                row(ui, i, m, self.sel == Some(i), self.textures.get(&m.id), acts);
-                if m.has_thumb && !self.textures.contains_key(&m.id) && !self.thumb_asked.contains(&m.id) {
+                row(
+                    ui,
+                    i,
+                    m,
+                    self.sel == Some(i),
+                    self.textures.get(&m.id),
+                    acts,
+                );
+                if m.has_thumb
+                    && !self.textures.contains_key(&m.id)
+                    && !self.thumb_asked.contains(&m.id)
+                {
                     thumbs.push(m.id);
                 }
             }
@@ -482,12 +535,24 @@ impl ClipboardHistory {
 }
 
 fn tidy_label(hours: u32) -> String {
-    if hours == 0 { "시작할 때만".into() } else { format!("{}일마다", hours / 24) }
+    if hours == 0 {
+        "시작할 때만".into()
+    } else {
+        format!("{}일마다", hours / 24)
+    }
 }
 
-fn row(ui: &mut egui::Ui, i: usize, m: &ItemMeta, selected: bool, tex: Option<&egui::TextureHandle>, acts: &mut Vec<Act>) {
+fn row(
+    ui: &mut egui::Ui,
+    i: usize,
+    m: &ItemMeta,
+    selected: bool,
+    tex: Option<&egui::TextureHandle>,
+    acts: &mut Vec<Act>,
+) {
     let c = ui::t(ui);
-    let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW_H), Sense::click());
+    let (rect, resp) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW_H), Sense::click());
     let painter = ui.painter_at(rect);
     let fill = if selected {
         c.accent_soft
@@ -505,21 +570,41 @@ fn row(ui: &mut egui::Ui, i: usize, m: &ItemMeta, selected: bool, tex: Option<&e
             let s = t.size_vec2();
             let k = (left.width() / s.x).min(left.height() / s.y);
             let r = Rect::from_center_size(left.center(), s * k);
-            painter.image(t.id(), r, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+            painter.image(
+                t.id(),
+                r,
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                Color32::WHITE,
+            );
         }
         _ => {
             painter.rect_filled(left, 6.0, tint.gamma_multiply(0.14));
-            painter.text(left.center(), Align2::CENTER_CENTER, label, FontId::proportional(12.0), tint);
+            painter.text(
+                left.center(),
+                Align2::CENTER_CENTER,
+                label,
+                FontId::proportional(12.0),
+                tint,
+            );
         }
     }
     let text_left = left.right() + 10.0;
     let buttons_w = 92.0;
     let clip = Rect::from_min_max(
         Pos2::new(text_left, rect.top()),
-        Pos2::new((rect.right() - buttons_w).max(text_left + 20.0), rect.bottom()),
+        Pos2::new(
+            (rect.right() - buttons_w).max(text_left + 20.0),
+            rect.bottom(),
+        ),
     );
     let tp = painter.with_clip_rect(clip);
-    tp.text(Pos2::new(text_left, rect.top() + 9.0), Align2::LEFT_TOP, &m.summary, FontId::proportional(14.0), c.ink);
+    tp.text(
+        Pos2::new(text_left, rect.top() + 9.0),
+        Align2::LEFT_TOP,
+        &m.summary,
+        FontId::proportional(14.0),
+        c.ink,
+    );
     let mut sub = local_time(m.captured_ms);
     if !m.meta.is_empty() {
         sub.push_str(&format!(" · {}", m.meta));
@@ -528,12 +613,21 @@ fn row(ui: &mut egui::Ui, i: usize, m: &ItemMeta, selected: bool, tex: Option<&e
     if m.reduced {
         sub.push_str(" · 일부 형식만 저장됨");
     }
-    tp.text(Pos2::new(text_left, rect.top() + 31.0), Align2::LEFT_TOP, sub, FontId::proportional(11.5), c.muted);
+    tp.text(
+        Pos2::new(text_left, rect.top() + 31.0),
+        Align2::LEFT_TOP,
+        sub,
+        FontId::proportional(11.5),
+        c.muted,
+    );
     // right buttons: detail, delete
     let mut hit_button = false;
     for (n, (name, is_delete)) in [("복사", false), ("삭제", true)].into_iter().enumerate() {
         let r = Rect::from_min_size(
-            Pos2::new(rect.right() - buttons_w + n as f32 * 44.0, rect.center().y - 12.0),
+            Pos2::new(
+                rect.right() - buttons_w + n as f32 * 44.0,
+                rect.center().y - 12.0,
+            ),
             Vec2::new(40.0, 24.0),
         );
         let b = ui.interact(r, ui.id().with(("clip_btn", m.id, n)), Sense::click());
@@ -541,9 +635,23 @@ fn row(ui: &mut egui::Ui, i: usize, m: &ItemMeta, selected: bool, tex: Option<&e
             painter.rect_filled(r, 6.0, c.pressed);
             hit_button = true;
         }
-        painter.text(r.center(), Align2::CENTER_CENTER, name, FontId::proportional(12.0), if is_delete { Color32::from_rgb(190, 70, 60) } else { c.muted });
+        painter.text(
+            r.center(),
+            Align2::CENTER_CENTER,
+            name,
+            FontId::proportional(12.0),
+            if is_delete {
+                Color32::from_rgb(190, 70, 60)
+            } else {
+                c.muted
+            },
+        );
         if b.clicked() {
-            acts.push(if is_delete { Act::Delete(m.id) } else { Act::Restore(m.id) });
+            acts.push(if is_delete {
+                Act::Delete(m.id)
+            } else {
+                Act::Restore(m.id)
+            });
         }
     }
     if resp.clicked() && !hit_button {
