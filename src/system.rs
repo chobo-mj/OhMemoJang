@@ -1,6 +1,21 @@
 //! Small Windows integrations: start with Windows and the alert sound.
 
-/// Start (or stop starting) OmniMemoJang when the user signs in to Windows:
+/// The program was called OmniMemoJang before: its data folders move to the
+/// new name once, so nothing saved is lost. Does nothing when the new folder
+/// exists already or there is no old one.
+pub fn migrate_old_data_dirs() {
+    for var in ["APPDATA", "LOCALAPPDATA"] {
+        let Some(base) = std::env::var_os(var).map(std::path::PathBuf::from) else {
+            continue;
+        };
+        let (old, new) = (base.join("OmniMemoJang"), base.join("OhMemoJang"));
+        if old.is_dir() && !new.exists() {
+            let _ = std::fs::rename(&old, &new);
+        }
+    }
+}
+
+/// Start (or stop starting) OhMemoJang when the user signs in to Windows:
 /// the per-user `Run` key, so no administrator rights are needed.
 pub fn set_autostart(on: bool) -> Result<(), String> {
     #[cfg(windows)]
@@ -11,13 +26,16 @@ pub fn set_autostart(on: bool) -> Result<(), String> {
         };
         let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
         let key = wide(r"Software\Microsoft\Windows\CurrentVersion\Run");
-        let name = wide("OmniMemoJang");
+        let name = wide("OhMemoJang");
+        let old_name = wide("OmniMemoJang");
         let mut h: HKEY = std::ptr::null_mut();
         // SAFETY: plain registry calls on a key this function opens and closes.
         unsafe {
             if RegOpenKeyExW(HKEY_CURRENT_USER, key.as_ptr(), 0, KEY_SET_VALUE, &mut h) != 0 {
                 return Err("시작 프로그램 설정을 열지 못했습니다".into());
             }
+            // The entry the program had under its old name must not start it twice.
+            RegDeleteValueW(h, old_name.as_ptr());
             let result = if on {
                 let exe = std::env::current_exe().map_err(|e| e.to_string())?;
                 // Started by Windows: straight to the tray, stickers on the desktop.
@@ -61,5 +79,35 @@ pub fn alert_sound() {
         windows_sys::Win32::System::Diagnostics::Debug::MessageBeep(
             windows_sys::Win32::UI::WindowsAndMessaging::MB_ICONASTERISK,
         );
+    }
+}
+
+/// The mouse pointer on the screen, in physical pixels.
+pub fn cursor_pos() -> Option<(i32, i32)> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::POINT;
+        let mut p = POINT { x: 0, y: 0 };
+        // SAFETY: `p` is a valid out parameter.
+        let ok = unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut p) };
+        (ok != 0).then_some((p.x, p.y))
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+/// Whether the left mouse button is down right now, whatever window has it.
+pub fn left_button_down() -> bool {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
+        // SAFETY: reads the key state only.
+        unsafe { (GetAsyncKeyState(i32::from(VK_LBUTTON)) as u16 & 0x8000) != 0 }
+    }
+    #[cfg(not(windows))]
+    {
+        false
     }
 }

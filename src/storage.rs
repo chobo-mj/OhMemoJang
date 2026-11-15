@@ -2,7 +2,7 @@
 //! the wiki tree, folders, trash and settings.
 //!
 //! Data lives in `data.db` (SQLite) in the data folder (by default
-//! `%APPDATA%\OmniMemoJang\data`): one row per memo plus one row for the
+//! `%APPDATA%\OhMemoJang\data`): one row per memo plus one row for the
 //! rest (projects, wiki tree, settings, open memo windows). Pictures are PNG
 //! files named by their content (`images\<hash>.png`), written once and never
 //! deleted; a saved picture is read back only while it is on screen, and lists
@@ -148,6 +148,10 @@ pub enum BlockRec {
         col_widths: Vec<f32>,
         row_height: f32,
         positioned: bool,
+        /// Rows the user dragged to a height (0: grows with its content).
+        /// Added later: older saves have none.
+        #[serde(default)]
+        row_manual: Vec<f32>,
     },
     Picture {
         id: u32,
@@ -168,6 +172,13 @@ pub struct CellRec {
     pub col_span: usize,
     pub row_span: usize,
     pub covered: bool,
+    /// Added later: saves made before have none of these.
+    #[serde(default)]
+    pub fill: Option<[u8; 3]>,
+    #[serde(default)]
+    pub text_color: Option<[u8; 3]>,
+    #[serde(default)]
+    pub align: u8,
 }
 
 #[derive(Serialize, Deserialize, Default, Clone, PartialEq)]
@@ -388,11 +399,11 @@ pub fn data_dir(custom: &str) -> PathBuf {
         return PathBuf::from(custom.trim());
     }
     std::env::var_os("APPDATA")
-        .map(|d| PathBuf::from(d).join("OmniMemoJang").join("data"))
+        .map(|d| PathBuf::from(d).join("OhMemoJang").join("data"))
         .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share/omnimemojang"))
+            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share/ohmemojang"))
         })
-        .unwrap_or_else(|| PathBuf::from("omnimemojang-data"))
+        .unwrap_or_else(|| PathBuf::from("ohmemojang-data"))
 }
 
 /// On the very first run, lets the user choose where memos and schedules
@@ -402,7 +413,7 @@ pub fn data_dir(custom: &str) -> PathBuf {
 /// folder is actually chosen.
 fn prompt_first_run_data_dir(data_path: &mut String) {
     rfd::MessageDialog::new()
-        .set_title("OmniMemoJang")
+        .set_title("OhMemoJang")
         .set_description(
             "메모와 일정을 저장할 폴더를 선택해주세요.\n\
              선택하지 않고 넘어가면 기본 위치(앱 데이터 폴더)에 저장됩니다.\n\
@@ -568,6 +579,9 @@ fn tab_rec(t: &Tab) -> TabRec {
                                     col_span: c.col_span,
                                     row_span: c.row_span,
                                     covered: c.covered,
+                                    fill: c.fill,
+                                    text_color: c.text_color,
+                                    align: c.align.to_u8(),
                                 })
                                 .collect()
                         })
@@ -575,6 +589,7 @@ fn tab_rec(t: &Tab) -> TabRec {
                     col_widths: t.col_widths.clone(),
                     row_height: t.row_height,
                     positioned: t.positioned,
+                    row_manual: t.row_manual.clone(),
                 },
                 Block::Picture(p) => BlockRec::Picture {
                     id: p.id,
@@ -623,15 +638,14 @@ fn tab_from(r: &TabRec) -> Tab {
                                 .map(|(text, f)| Cell {
                                     text: text.clone(),
                                     format: bits_format(*f),
-                                    col_span: 1,
-                                    row_span: 1,
-                                    covered: false,
+                                    ..Cell::plain()
                                 })
                                 .collect()
                         })
                         .collect(),
                     col_widths: vec![*width; cells.first().map_or(1, Vec::len)],
                     row_height: *row_height,
+                    row_manual: vec![0.; cells.len()],
                     positioned: false,
                 }),
                 BlockRec::TableV2 {
@@ -640,6 +654,7 @@ fn tab_from(r: &TabRec) -> Tab {
                     col_widths,
                     row_height,
                     positioned,
+                    row_manual,
                 } => Block::Table(Table {
                     id: *id,
                     cells: cells
@@ -652,12 +667,20 @@ fn tab_from(r: &TabRec) -> Tab {
                                     col_span: c.col_span,
                                     row_span: c.row_span,
                                     covered: c.covered,
+                                    fill: c.fill,
+                                    text_color: c.text_color,
+                                    align: crate::composer::CellAlign::from_u8(c.align),
                                 })
                                 .collect()
                         })
                         .collect(),
                     col_widths: col_widths.clone(),
                     row_height: *row_height,
+                    row_manual: {
+                        let mut m = row_manual.clone();
+                        m.resize(cells.len(), 0.);
+                        m
+                    },
                     positioned: *positioned,
                 }),
                 BlockRec::Picture {
@@ -1427,7 +1450,7 @@ mod tests {
     #[test]
     fn memos_wiki_settings_and_pictures_survive_saving() {
         let dir = std::env::temp_dir().join(format!(
-            "omnimemojang-store-{}-{}",
+            "ohmemojang-store-{}-{}",
             std::process::id(),
             line!()
         ));
@@ -1538,7 +1561,7 @@ mod tests {
     }
 
     fn temp(tag: u32) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("omnimemojang-{}-{tag}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("ohmemojang-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }
@@ -1624,5 +1647,20 @@ mod tests {
         assert!(read(&dir).unwrap().unwrap() == newer);
         assert!(dir.join("data.unreadable.json").exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod cell_look_tests {
+    use super::*;
+
+    #[test]
+    fn cell_look_is_saved_and_old_saves_without_it_still_load() {
+        let old = r#"{"text":"가","format":[false,false,false,false],"col_span":1,"row_span":1,"covered":false}"#;
+        let rec: CellRec = serde_json::from_str(old).unwrap();
+        assert_eq!((rec.fill, rec.text_color, rec.align), (None, None, 0));
+        let new = CellRec { fill: Some([1, 2, 3]), text_color: Some([4, 5, 6]), align: 2, ..rec };
+        let back: CellRec = serde_json::from_str(&serde_json::to_string(&new).unwrap()).unwrap();
+        assert!(back == new);
     }
 }

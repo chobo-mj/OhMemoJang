@@ -73,7 +73,7 @@ impl App {
             .unwrap_or(Rect::from_min_size(Pos2::ZERO, Vec2::new(1280., 800.)));
         let at = area.right_bottom() - size - Vec2::splat(16.);
         let builder = egui::ViewportBuilder::default()
-            .with_title("OmniMemoJang · 알람")
+            .with_title("OhMemoJang · 알람")
             .with_position(at)
             .with_inner_size(size)
             .with_decorations(false)

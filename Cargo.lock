@@ -2892,7 +2892,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "omnimemojang"
+name = "ohmemojang"
 version = "0.4.0"
 dependencies = [
  "arboard",

@@ -125,31 +125,20 @@ pub fn infer_title(title: &mut String, body: &mut String) {
     if !title.trim().is_empty() {
         return;
     }
-    // The first line with real text becomes the title. Inline pictures on
-    // that line stay in the body; a picture-only line never becomes a title.
-    if let Some((offset, line, text)) = body
-        .split_inclusive('\n')
-        .scan(0usize, |pos, line| {
-            let old = *pos;
-            *pos += line.len();
-            Some((old, line))
-        })
-        .map(|(offset, line)| (offset, line, crate::composer::strip_pictures(line)))
-        .find(|(_, _, text)| !text.trim().is_empty() && !text.trim_start().starts_with('#'))
-    {
-        *title = text.trim().into();
-        let pictures: String = line
-            .chars()
-            .filter(|c| crate::composer::is_picture(*c))
-            .collect();
-        let keep = if pictures.is_empty() {
-            String::new()
-        } else if line.ends_with('\n') {
-            format!("{pictures}\n")
-        } else {
-            pictures
-        };
-        body.replace_range(offset..offset + line.len(), &keep);
+    // The first line with real text gives the title; the body is left as it
+    // is, the line stays where it was written. A picture-only line never
+    // becomes a title. A list item ("1. 내용", "- 내용") gives its text
+    // without the number or bullet; a marker with nothing after it is skipped.
+    let found = body.lines().find_map(|line| {
+        let text = crate::composer::strip_pictures(line);
+        match crate::composer::list_item_text(&text) {
+            Some(rest) => (!rest.is_empty()).then_some(rest),
+            None => (!text.trim().is_empty() && !text.trim_start().starts_with('#'))
+                .then(|| text.trim().to_owned()),
+        }
+    });
+    if let Some(t) = found {
+        *title = t;
     }
 }
 impl App {
@@ -336,7 +325,7 @@ impl App {
     /// current data.
     pub fn restore_from_backup(&mut self, dir: &std::path::Path) {
         let Some(file) = rfd::FileDialog::new()
-            .add_filter("OmniMemoJang 데이터", &["db", "json"])
+            .add_filter("OhMemoJang 데이터", &["db", "json"])
             .set_directory(dir.join("backups"))
             .pick_file()
         else {
@@ -1240,7 +1229,7 @@ impl App {
                 );
             }
             _ => {
-                crate::ui::banner(ui, Vec2::new(260., 64.));
+                crate::ui::banner(ui, 260.);
                 hint(
                     ui,
                     format!(
@@ -1342,9 +1331,32 @@ mod tests {
         let mut body = "#프로젝트 \n\n첫 제목\n본문입니다".to_owned();
         infer_title(&mut title, &mut body);
         assert_eq!(title, "첫 제목");
-        assert_eq!(body, "#프로젝트 \n\n본문입니다");
+        assert_eq!(body, "#프로젝트 \n\n첫 제목\n본문입니다", "the line stays in the body");
         infer_title(&mut title, &mut body);
         assert_eq!(title, "첫 제목");
+    }
+    #[test]
+    fn a_first_line_list_item_gives_the_title_without_its_marker_and_stays_in_the_body() {
+        let mut title = String::new();
+        let mut body = "1. 첫 항목\n2. 둘째".to_owned();
+        infer_title(&mut title, &mut body);
+        assert_eq!(title, "첫 항목");
+        assert_eq!(body, "1. 첫 항목\n2. 둘째");
+        // a title that is there is left alone, even when the body changes
+        body = "  1. 바뀜\n".into();
+        infer_title(&mut title, &mut body);
+        assert_eq!(title, "첫 항목");
+        // marker-only lines are skipped; bullets and indentation do not matter
+        let mut title = String::new();
+        let mut body = "  1. \n    - 글머리 항목\n".to_owned();
+        infer_title(&mut title, &mut body);
+        assert_eq!(title, "글머리 항목");
+        assert_eq!(body, "  1. \n    - 글머리 항목\n");
+        // an ordinary first line is copied up too and stays in the body
+        let mut title = String::new();
+        let mut body = "그냥 제목\n1. 항목".to_owned();
+        infer_title(&mut title, &mut body);
+        assert_eq!((title.as_str(), body.as_str()), ("그냥 제목", "그냥 제목\n1. 항목"));
     }
     #[test]
     fn trash_restore_keeps_original_identity_and_body() {

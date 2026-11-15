@@ -137,7 +137,7 @@ impl App {
             });
             if copy == 1 {
                 let result = arboard::Clipboard::new().and_then(|mut clipboard| {
-                    clipboard.set_html(table_html(table), Some(table.tsv()))
+                    clipboard.set_html(table_html(table), Some(crate::table_edit::table_tsv(table)))
                 });
                 self.toast = result
                     .map(|_| "표를 HTML / 탭 구분 텍스트로 복사했습니다".into())
@@ -405,43 +405,7 @@ fn empty_with_example(
     show
 }
 fn table_html(table: &Table) -> String {
-    format!(
-        "<table>{}</table>",
-        table
-            .cells
-            .iter()
-            .map(|row| format!(
-                "<tr>{}</tr>",
-                row.iter()
-                    .filter(|c| !c.covered)
-                    .map(|c| {
-                        let colspan = if c.col_span > 1 {
-                            format!(" colspan=\"{}\"", c.col_span)
-                        } else {
-                            String::new()
-                        };
-                        let rowspan = if c.row_span > 1 {
-                            format!(" rowspan=\"{}\"", c.row_span)
-                        } else {
-                            String::new()
-                        };
-                        format!(
-                            "<td{colspan}{rowspan}>{}</td>",
-                            html_escape(&c.text).replace('\n', "<br>")
-                        )
-                    })
-                    .collect::<String>()
-            ))
-            .collect::<String>()
-    )
-}
-
-fn html_escape(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
+    crate::table_edit::table_html(table)
 }
 
 fn copy_rgba(width: usize, height: usize, pixels: Vec<u8>) -> Result<(), String> {
@@ -707,7 +671,7 @@ mod tests {
     #[test]
     fn batch_image_export_never_overwrites_an_existing_file() {
         let folder = std::env::temp_dir().join(format!(
-            "omnimemojang-gallery-{}-{}",
+            "ohmemojang-gallery-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

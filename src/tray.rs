@@ -39,7 +39,7 @@ impl Tray {
                 .ok()
                 .and_then(|icon| {
                     tray_icon::TrayIconBuilder::new()
-                        .with_tooltip("OmniMemoJang")
+                        .with_tooltip("OhMemoJang")
                         .with_icon(icon)
                         .with_menu(Box::new(menu))
                         .with_menu_on_left_click(false)
@@ -112,8 +112,8 @@ pub fn single_instance() -> bool {
         };
         let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
         let (mutex, event) = (
-            wide("Local\\OmniMemoJang.Running"),
-            wide("Local\\OmniMemoJang.Show"),
+            wide("Local\\OhMemoJang.Running"),
+            wide("Local\\OhMemoJang.Show"),
         );
         // SAFETY: plain Win32 calls with valid, nul-terminated names. The
         // handles live as long as the process.

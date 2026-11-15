@@ -1,6 +1,6 @@
-# OmniMemoJang 코드 아키텍처
+# OhMemoJang 코드 아키텍처
 
-OmniMemoJang(이전 이름 MEMONOKING)은 Windows용 개인 메모·일정 작업 공간이다. 이 문서는 지금 코드가 어떻게 짜여 있는지와, 최종판을 완성하려면 무엇을 더 붙여야 하는지를 정리한다. 기능 요구사항은 [SPEC.md](SPEC.md)에 있다.
+OhMemoJang(이전 이름 MEMONOKING)은 Windows용 개인 메모·일정 작업 공간이다. 이 문서는 지금 코드가 어떻게 짜여 있는지와, 최종판을 완성하려면 무엇을 더 붙여야 하는지를 정리한다. 기능 요구사항은 [SPEC.md](SPEC.md)에 있다.
 
 ## 1. 기술 스택
 
@@ -15,7 +15,7 @@ OmniMemoJang(이전 이름 MEMONOKING)은 Windows용 개인 메모·일정 작�
 | Windows | tray-icon, windows-sys | 트레이 아이콘, 단일 실행, 자동 실행, 창 스타일 |
 | 기타 | global-hotkey, arboard, rfd, image, fontdue, scraper | 전역 단축키, 클립보드, 파일 대화상자, 이미지, 표 이미지화, 링크 미리보기 |
 
-빌드는 `cargo build --release`이며 결과물은 `omnimemojang.exe` 하나다. 배포 구성은 `packaging/OmniMemoJang.iss`(Inno Setup)와 `.github/workflows/release.yml`이다.
+빌드는 `cargo build --release`이며 결과물은 `ohmemojang.exe` 하나다. 배포 구성은 `packaging/OhMemoJang.iss`(Inno Setup)와 `.github/workflows/release.yml`이다.
 
 ## 2. 창 구조
 
@@ -128,7 +128,7 @@ App
 **트레이와 단일 실행 (`tray.rs`)**
 
 - 메인 창 X는 종료가 아니라 트레이로 내린다(`main_open = false`). 트레이 아이콘 클릭·‘열기’로 다시 띄우고, ‘종료’로만 끝난다. 트레이 아이콘을 만들 수 없으면 예전처럼 X가 종료한다.
-- 자동 실행 값은 `"…\OmniMemoJang.exe" --tray`이다. `--tray`로 시작하면 메인 창 없이 트레이와 스티커만 뜬다. 켜 둔 자동 실행은 시작할 때 다시 써서 0.3에서 올라온 값도 바뀐다.
+- 자동 실행 값은 `"…\OhMemoJang.exe" --tray`이다. `--tray`로 시작하면 메인 창 없이 트레이와 스티커만 뜬다. 켜 둔 자동 실행은 시작할 때 다시 써서 0.3에서 올라온 값도 바뀐다.
 - 이름 있는 뮤텍스로 한 번만 실행한다. 두 번째 실행은 이름 있는 이벤트로 첫 실행에 메인 창을 띄우라고 알리고 끝난다(같은 DB를 두 프로세스가 쓰지 않도록).
 
 **긴 목록 (`lists.rs`)**
@@ -145,7 +145,7 @@ App
 **알람 (`alarm.rs`)과 시스템 연동 (`system.rs`)**
 
 - 1초마다 알람 시각이 지난 메모를 모아 소리(`MessageBeep`)와 오른쪽 아래 알림 창으로 알린다. 확인하면 메모의 알람이 지워지므로 다음 실행 때 다시 뜨지 않는다.
-- 자동 실행은 `HKCU\…\Run`의 `OmniMemoJang` 값으로 켜고 끈다(관리자 권한 불필요).
+- 자동 실행은 `HKCU\…\Run`의 `OhMemoJang` 값으로 켜고 끈다(관리자 권한 불필요).
 
 **남은 부분**
 

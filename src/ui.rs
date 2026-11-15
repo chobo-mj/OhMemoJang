@@ -663,7 +663,7 @@ pub fn weekday(d: chrono::NaiveDate) -> &'static str {
 }
 
 pub fn main_viewport() -> ViewportId {
-    ViewportId::from_hash_of("omnimemojang_main")
+    ViewportId::from_hash_of("ohmemojang_main")
 }
 
 fn raise_key(vid: ViewportId) -> Id {
@@ -1053,114 +1053,64 @@ fn pick_cell(ui: &mut Ui, selected: bool, text: String) -> Response {
     r.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// The OmniMemoJang banner: a calm slate gradient card with a typographic
-/// wordmark, drawn with shapes so it stays sharp at every scale.
-pub fn banner(ui: &mut Ui, size: Vec2) -> Response {
+/// The OhMemoJang banner picture (`assets/banner.png`).
+const BANNER_PNG: &[u8] = include_bytes!("../assets/banner.png");
+/// Width / height of the banner picture, kept whatever the width it is drawn at.
+pub fn banner_ratio() -> f32 {
+    banner_size().map_or(2., |[w, h]| w as f32 / h as f32)
+}
+fn banner_size() -> Option<[usize; 2]> {
+    use image::ImageDecoder;
+    let d = image::codecs::png::PngDecoder::new(std::io::Cursor::new(BANNER_PNG)).ok()?;
+    let (w, h) = d.dimensions();
+    Some([w as usize, h as usize])
+}
+/// The banner, `width` wide and as high as the picture's proportions make it.
+pub fn banner(ui: &mut Ui, width: f32) -> Response {
+    let size = Vec2::new(width, width / banner_ratio());
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
-    let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
-    // Left-to-right gradient in calm slate blues.
-    let left = Color32::from_rgb(58, 72, 92);
-    let right = Color32::from_rgb(102, 122, 146);
-    let mut mesh = egui::Mesh::default();
-    mesh.colored_vertex(rect.left_top(), left);
-    mesh.colored_vertex(rect.right_top(), right);
-    mesh.colored_vertex(rect.right_bottom(), right);
-    mesh.colored_vertex(rect.left_bottom(), left);
-    mesh.add_triangle(0, 1, 2);
-    mesh.add_triangle(0, 2, 3);
-    let radius = 12.;
-    // Round the corners by painting the panel color outside them.
-    painter.add(egui::Shape::mesh(mesh));
-    let bg = ui.visuals().panel_fill;
-    for (corner, center) in [
-        (rect.left_top(), rect.left_top() + Vec2::splat(radius)),
-        (
-            rect.right_top(),
-            rect.right_top() + Vec2::new(-radius, radius),
-        ),
-        (
-            rect.right_bottom(),
-            rect.right_bottom() - Vec2::splat(radius),
-        ),
-        (
-            rect.left_bottom(),
-            rect.left_bottom() + Vec2::new(radius, -radius),
-        ),
-    ] {
-        let mut points = vec![corner];
-        for k in 0..=8 {
-            let start = (corner - center).angle() - std::f32::consts::FRAC_PI_4;
-            let a = start + std::f32::consts::FRAC_PI_2 * k as f32 / 8.;
-            points.push(center + Vec2::angled(a) * radius);
-        }
-        painter.add(egui::Shape::convex_polygon(points, bg, Stroke::NONE));
+    let key = Id::new("ohmemojang_banner_texture");
+    let texture = ui.ctx().data_mut(|d| d.get_temp::<egui::TextureHandle>(key));
+    let texture = texture.or_else(|| {
+        let img = image::load_from_memory(BANNER_PNG).ok()?.to_rgba8();
+        let color = egui::ColorImage::from_rgba_unmultiplied(
+            [img.width() as usize, img.height() as usize],
+            img.as_raw(),
+        );
+        let t = ui.ctx().load_texture("ohmemojang_banner", color, egui::TextureOptions::LINEAR);
+        ui.ctx().data_mut(|d| d.insert_temp(key, t.clone()));
+        Some(t)
+    });
+    if let Some(t) = texture {
+        ui.painter().image(
+            t.id(),
+            rect,
+            egui::Rect::from_min_max(Pos2::ZERO, Pos2::new(1., 1.)),
+            Color32::WHITE,
+        );
     }
-    // Decorative rings in the corner: the "O" of Omni.
-    // Kept in the corner, clear of the wordmark.
-    let ring = rect.right_top() + Vec2::new(2., -4.);
-    painter.circle_stroke(
-        ring,
-        size.y * 0.42,
-        Stroke::new(5.0_f32, Color32::from_white_alpha(26)),
-    );
-    painter.circle_stroke(
-        ring,
-        size.y * 0.2,
-        Stroke::new(3.0_f32, Color32::from_white_alpha(32)),
-    );
-    let bold = egui::FontFamily::Name("맑은 고딕 Bold".into());
-    let family = if ui.fonts(|f| f.families().contains(&bold)) {
-        bold
-    } else {
-        egui::FontFamily::Proportional
-    };
-    let wordmark = |big: f32| {
-        let mut job = egui::text::LayoutJob::default();
-        for (text, color) in [
-            ("Omni", Color32::WHITE),
-            ("Memo", Color32::from_rgb(214, 226, 238)),
-            ("Jang", Color32::from_rgb(232, 212, 172)),
-        ] {
-            job.append(
-                text,
-                0.,
-                egui::TextFormat {
-                    font_id: FontId::new(big, family.clone()),
-                    color,
-                    extra_letter_spacing: -0.3,
-                    ..Default::default()
-                },
-            );
-        }
-        ui.fonts(|f| f.layout_job(job))
-    };
-    // As large as the banner allows: the wordmark fills its width.
-    let room = size.x - 14. - size.y * 0.45;
-    let probe = wordmark(20.);
-    let big = (20. * room / probe.size().x).clamp(11., size.y * 0.36);
-    let word = wordmark(big);
-    let x = rect.left() + 14.;
-    let top = rect.top() + (size.y - word.size().y - 13.) / 2.;
-    // A soft shadow under the wordmark.
-    painter.galley_with_override_text_color(
-        egui::pos2(x + 1., top + 1.5),
-        word.clone(),
-        Color32::from_black_alpha(40),
-    );
-    painter.galley(egui::pos2(x, top), word.clone(), Color32::WHITE);
-    painter.text(
-        egui::pos2(x + 1., top + word.size().y + 1.),
-        egui::Align2::LEFT_TOP,
-        "모든 메모와 일정을 한곳에",
-        FontId::proportional(10.),
-        Color32::from_white_alpha(215),
-    );
     response
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_banner_keeps_the_pictures_proportions_at_any_width() {
+        let ctx = egui::Context::default();
+        let ratio = banner_ratio();
+        assert!((ratio - 2.0).abs() < 0.01, "the picture is twice as wide as high: {ratio}");
+        for width in [120., 190., 400.] {
+            let mut size = Vec2::ZERO;
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    size = banner(ui, width).rect.size();
+                });
+            });
+            assert!((size.x / size.y - ratio).abs() < 0.01, "{size:?}");
+        }
+    }
 
     #[test]
     fn clamp_popup_pos_keeps_an_anchor_inside_the_screen() {

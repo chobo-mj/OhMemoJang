@@ -36,7 +36,6 @@ impl App {
             if ui::pill(ui, self.extra.show_done, "완료 메모 보기").clicked() {
                 self.extra.show_done = !self.extra.show_done;
             }
-            self.column_picker(ui);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui::primary(ui, "+ 새 일정").clicked() {
                     self.add_note(Some(match self.page {
@@ -461,6 +460,12 @@ impl App {
     }
     /// The month/week grid with its navigation header and memo bands.
     pub fn calendar_grid(&mut self, ui: &mut egui::Ui) {
+        self.calendar_grid_with(ui, None);
+    }
+    /// `side` is `Some(on)` where the header should carry the side-by-side
+    /// toggle (the main window's calendar); returns true when it was clicked.
+    pub fn calendar_grid_with(&mut self, ui: &mut egui::Ui, side: Option<bool>) -> bool {
+        let mut toggled = false;
         let today = Local::now().date_naive();
         let (tone, sun, sat, today_mark) = self.calendar_tone(ui);
         ui.horizontal(|ui| {
@@ -498,6 +503,23 @@ impl App {
                 self.day = today;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if let Some(on) = side {
+                    // Top right: schedule and calendar side by side.
+                    if icons::toggle_icon(
+                        ui,
+                        icons::Icon::SplitView,
+                        if on {
+                            "일정·캘린더 세로 보기로 전환"
+                        } else {
+                            "일정·캘린더 가로 보기 · 선택한 날짜의 일정을 캘린더 오른쪽에"
+                        },
+                        on,
+                    )
+                    .clicked()
+                    {
+                        toggled = true;
+                    }
+                }
                 ui::segmented(
                     ui,
                     &mut self.desktop.calendar_basis,
@@ -658,6 +680,85 @@ impl App {
             }
         }
         self.calendar_bands(ui, all, first, rows, col, height);
+        toggled
+    }
+    /// The main window's calendar. `work` is 내 작업실's panel, else the
+    /// 캘린더 page. With the side-by-side toggle on, the selected day's
+    /// schedule sits to the right of the grid behind a draggable divider;
+    /// off, it sits below the grid as before.
+    pub fn calendar_main(&mut self, ui: &mut egui::Ui, work: bool) {
+        let side = if work { self.prefs.cal_side_work } else { self.prefs.cal_side_page };
+        let toggled = if side {
+            self.calendar_side_by_side(ui, work)
+        } else {
+            egui::ScrollArea::vertical()
+                .id_salt(("calendar_scroll", work))
+                .show(ui, |ui| {
+                    let t = self.calendar_grid_with(ui, Some(false));
+                    self.calendar_day_detail(ui);
+                    t
+                })
+                .inner
+        };
+        if toggled {
+            let flag = if work { &mut self.prefs.cal_side_work } else { &mut self.prefs.cal_side_page };
+            *flag = !*flag;
+        }
+    }
+    /// Grid on the left, the day's schedule on the right, a splitter between.
+    fn calendar_side_by_side(&mut self, ui: &mut egui::Ui, work: bool) -> bool {
+        let rect = ui.available_rect_before_wrap();
+        let (height, total) = (rect.height(), rect.width());
+        let handle_w = 12.;
+        let min_right = 220.0_f32.min((total - handle_w) * 0.5);
+        let max_right = (total - handle_w - 320.).max(min_right);
+        let right_w = (total * self.cal_side_frac).clamp(min_right, max_right);
+        let left_w = (total - handle_w - right_w).max(240.);
+        let left_rect = Rect::from_min_size(rect.min, Vec2::new(left_w, height));
+        let handle = Rect::from_min_max(
+            egui::pos2(left_rect.right(), rect.top()),
+            egui::pos2(left_rect.right() + handle_w, rect.bottom()),
+        );
+        let right_rect = Rect::from_min_size(
+            egui::pos2(handle.right(), rect.top()),
+            Vec2::new((total - left_w - handle_w).max(40.), height),
+        );
+        let mut toggled = false;
+        let mut left = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt(("main_cal_grid_pane", work))
+                .max_rect(left_rect)
+                .layout(egui::Layout::top_down(egui::Align::LEFT)),
+        );
+        left.set_clip_rect(ui.clip_rect().intersect(left_rect));
+        egui::ScrollArea::vertical()
+            .id_salt(("main_cal_grid_scroll", work))
+            .show(&mut left, |ui| toggled = self.calendar_grid_with(ui, Some(true)));
+        let drag = ui
+            .interact(handle, ui.id().with(("main_cal_splitter", work)), Sense::drag())
+            .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+        if drag.hovered() || drag.dragged() {
+            ui.painter().line_segment(
+                [handle.center_top(), handle.center_bottom()],
+                egui::Stroke::new(2.0_f32, ui::ACCENT.gamma_multiply(0.6)),
+            );
+        }
+        if drag.dragged() {
+            let new_right = (right_w - drag.drag_delta().x).clamp(min_right, max_right);
+            self.cal_side_frac = (new_right / total).clamp(0.15, 0.75);
+        }
+        let mut right = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt(("main_cal_detail_pane", work))
+                .max_rect(right_rect)
+                .layout(egui::Layout::top_down(egui::Align::LEFT)),
+        );
+        right.set_clip_rect(ui.clip_rect().intersect(right_rect));
+        egui::ScrollArea::vertical()
+            .id_salt(("main_cal_detail_scroll", work))
+            .show(&mut right, |ui| self.calendar_day_detail(ui));
+        ui.allocate_rect(rect, Sense::hover());
+        toggled
     }
     /// The selected day's title bar and its list of memos.
     pub fn calendar_day_detail(&mut self, ui: &mut egui::Ui) {
@@ -716,6 +817,34 @@ impl App {
         height: f32,
     ) {
         let (tone, ..) = self.calendar_tone(ui);
+        // Remember where each date is on the screen: a sticker carried here
+        // and let go takes the date under the pointer.
+        {
+            let ctx = ui.ctx();
+            let origin = ctx
+                .input(|i| i.viewport().inner_rect)
+                .map(|r| r.min.to_vec2())
+                .unwrap_or_default();
+            let clip = ui.clip_rect();
+            let mut cells = Vec::with_capacity(rows * 7);
+            for row in 0..rows {
+                for c in 0..7 {
+                    let r = Rect::from_min_size(
+                        all.min + Vec2::new(c as f32 * col, row as f32 * height),
+                        Vec2::new(col, height),
+                    )
+                    .intersect(clip);
+                    if r.is_positive() {
+                        cells.push((
+                            r.translate(origin),
+                            first + Duration::days((row * 7 + c) as i64),
+                        ));
+                    }
+                }
+            }
+            let now = ctx.input(|i| i.time);
+            self.cal_cells.insert(ctx.viewport_id(), (now, cells));
+        }
         let month = self.month.month();
         let whole_weeks = self.prefs.cal_weeks > 0;
         let hide_done = self.prefs.cal_hide_done;
@@ -1581,12 +1710,10 @@ mod column_picker_tests {
             .any(|shape| matches!(&shape.shape, egui::Shape::Text(t) if t.galley.job.text == text))
     }
     #[test]
-    fn filters_offers_the_same_column_picker_as_catalog_controls() {
-        // #54 added "열 표시" (column show/hide) to catalog.rs's own
-        // catalog_controls(), but the 할일/일정 list screens reach the same
-        // adjustable-column table through views::filters(), which didn't
-        // call it — the button was simply missing there. Guard that
-        // filters() renders it too.
+    fn filters_has_no_column_dropdown_the_header_menu_replaces_it() {
+        // The 열 표시 dropdown was removed from the 내 작업실 / 오늘 / 다음
+        // list screens: the columns are chosen from the table header's
+        // right-click menu instead (catalog.rs).
         let mut a = App::sample(Local::now().date_naive());
         let ctx = egui::Context::default();
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(900., 300.));
@@ -1601,7 +1728,8 @@ mod column_picker_tests {
                 });
             },
         );
-        assert!(has_text(&output, "열 표시"));
+        assert!(!has_text(&output, "열 표시"));
+        assert!(has_text(&output, "+ 새 일정"));
     }
 }
 #[cfg(test)]
@@ -1620,9 +1748,142 @@ mod schedule_button_tests {
         assert!(a.editor);
         assert_eq!(a.active, i);
         assert!(a.studio.windows.contains_key(&i));
+        assert!(a.desktop.always_sticker, "even while memos open as stickers by default");
+        assert_eq!(a.studio.windows[&i].mode, crate::studio::Mode::Editor);
         // Starts blank (no "새 할 일" title or placeholder body text to
         // delete by hand) - the title/body fields' own hint text is enough.
         assert_eq!(a.data.notes[i].title, "");
         assert_eq!(a.data.notes[i].body, "");
+    }
+}
+
+#[cfg(test)]
+mod calendar_side_tests {
+    use super::*;
+
+    /// y of the "+ 이 날짜에 스티커" button in one frame of `calendar_main`.
+    fn detail_y(app: &mut App, work: bool) -> Option<f32> {
+        let ctx = egui::Context::default();
+        let mut found = None;
+        for i in 0..3 {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200., 800.))),
+                time: Some(i as f64 * 0.1),
+                ..Default::default()
+            };
+            let out = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.calendar_main(ui, work));
+            });
+            found = None;
+            for cs in &out.shapes {
+                let mut stack = vec![&cs.shape];
+                while let Some(sh) = stack.pop() {
+                    match sh {
+                        egui::Shape::Vec(v) => stack.extend(v.iter()),
+                        egui::Shape::Text(t) if t.galley.job.text.contains("이 날짜에 스티커") => {
+                            found = Some(t.pos.y)
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn the_work_calendar_starts_side_by_side_and_the_page_calendar_below() {
+        let today = Local::now().date_naive();
+        let mut app = App::sample(today);
+        assert!(app.prefs.cal_side_work && !app.prefs.cal_side_page);
+        let side = detail_y(&mut app, true).expect("the day's schedule is shown");
+        let below = detail_y(&mut app, false).expect("the day's schedule is shown");
+        assert!(side < 120., "beside the grid, at the top: {side}");
+        assert!(below > 250., "below the grid: {below}");
+        // the toggle flips each page's own setting
+        app.prefs.cal_side_work = false;
+        assert!(detail_y(&mut app, true).unwrap() > 250.);
+        app.prefs.cal_side_page = true;
+        assert!(detail_y(&mut app, false).unwrap() < 120.);
+    }
+
+    #[test]
+    fn the_side_by_side_settings_are_saved_with_the_other_settings() {
+        let mut p = crate::prefs::Prefs::default();
+        assert!(p.cal_side_work && !p.cal_side_page);
+        p.cal_side_work = false;
+        p.cal_side_page = true;
+        let back = crate::prefs::Prefs::from_text(&p.to_text());
+        assert!(!back.cal_side_work && back.cal_side_page);
+        // a settings file from before has neither key: the defaults apply
+        let old = crate::prefs::Prefs::from_text("start_page=0\n");
+        assert!(old.cal_side_work && !old.cal_side_page);
+    }
+}
+
+#[cfg(test)]
+mod sticker_drop_tests {
+    use super::*;
+    use crate::studio::{Mode, StickerDrag, Window};
+
+    #[test]
+    fn a_sticker_let_go_over_a_date_takes_it_and_returns_to_its_place() {
+        let today = Local::now().date_naive();
+        let mut a = App::sample(today);
+        let i = a.new_sticker();
+        a.studio.windows.get_mut(&i).unwrap().mode = Mode::Title; // carried as the title-only sticker
+        let date = today + Duration::days(3);
+        let d = StickerDrag {
+            note: i,
+            origin: egui::pos2(140., 220.),
+            mode: Mode::Sticker,
+            always_restore: true,
+            started: 0.,
+            saw_down: true,
+        };
+        a.drop_sticker(&d, Some(date));
+        assert_eq!(a.data.notes[i].date, Some(date));
+        let w = &a.studio.windows[&i];
+        assert_eq!(w.mode, Mode::Sticker);
+        assert_eq!(w.place, Some(egui::pos2(140., 220.)));
+        // pulled out by the calendar icon and let go elsewhere: back as it was, no date
+        let j = a.new_sticker();
+        a.studio.windows.get_mut(&j).unwrap().mode = Mode::Title;
+        let d2 = StickerDrag { note: j, ..d };
+        a.drop_sticker(&d2, None);
+        assert_eq!(a.data.notes[j].date, None);
+        assert_eq!(a.studio.windows[&j].mode, Mode::Sticker);
+        // a title-only sticker simply moved (not onto a date) stays where it was put
+        let k = a.new_sticker();
+        a.studio.windows.insert(k, Window::new(Mode::Title));
+        let d3 = StickerDrag { note: k, always_restore: false, mode: Mode::Title, ..d2 };
+        a.drop_sticker(&d3, None);
+        assert_eq!(a.studio.windows[&k].place, None);
+        // ... and one dropped on a date returns to its place
+        a.drop_sticker(&d3, Some(date));
+        assert_eq!(a.studio.windows[&k].place, Some(egui::pos2(140., 220.)));
+    }
+
+    #[test]
+    fn the_calendar_grid_tells_which_date_is_under_a_screen_point() {
+        let today = Local::now().date_naive();
+        let mut app = App::sample(today);
+        let ctx = egui::Context::default();
+        for i in 0..3 {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000., 800.))),
+                time: Some(i as f64 * 0.1),
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.calendar_main(ui, false));
+            });
+        }
+        let (_, cells) = app.cal_cells.values().next().expect("the grid registered its dates");
+        assert!(cells.len() >= 28);
+        let (rect, date) = cells[10].clone();
+        assert_eq!(app.calendar_date_at(rect.center(), 0.2), Some(date));
+        assert_eq!(app.calendar_date_at(rect.center(), 5.0), None, "a window that stopped drawing is ignored");
+        assert_eq!(app.calendar_date_at(egui::pos2(-50., -50.), 0.2), None);
     }
 }

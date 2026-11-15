@@ -28,7 +28,7 @@ pub struct Window {
     center: bool,
     help: bool,
     native: crate::native_window::State,
-    place: Option<Pos2>,
+    pub(crate) place: Option<Pos2>,
     swatch_drag: Option<(Vec2, Pos2, Vec2)>,
     menu: Option<Menu>,
     /// Where the window was last seen on screen, for reopening it there.
@@ -55,7 +55,7 @@ pub struct Arrange {
     pub area: Rect,
 }
 impl Window {
-    fn new(mode: Mode) -> Self {
+    pub(crate) fn new(mode: Mode) -> Self {
         Self {
             mode,
             sticker_preferred: mode == Mode::Sticker,
@@ -181,10 +181,24 @@ impl Window {
         }
     }
 }
+/// A sticker being carried over a calendar: dropped on a date it takes that
+/// date, then it goes back where it was.
+pub struct StickerDrag {
+    pub note: usize,
+    /// Where the window was (outer position, points) and what it showed.
+    pub origin: Pos2,
+    pub mode: Mode,
+    /// Return the window to `origin`/`mode` wherever it is let go (a sticker
+    /// pulled out by its calendar icon only borrowed the title-only look).
+    pub always_restore: bool,
+    pub started: f64,
+    pub saw_down: bool,
+}
 #[derive(Default)]
 pub struct Studio {
     pub windows: BTreeMap<usize, Window>,
     pub help: bool,
+    pub drag: Option<StickerDrag>,
 }
 impl Studio {
     pub fn open(&mut self, i: usize, occurrence: Option<NaiveDate>) {
@@ -992,6 +1006,71 @@ pub fn viewport(i: usize) -> egui::ViewportId {
     egui::ViewportId::from_hash_of(("memo", i))
 }
 impl App {
+    pub fn begin_sticker_drag(&mut self, ctx: &egui::Context, note: usize, mode: Mode, restore: bool) {
+        let origin = ctx
+            .input(|v| v.viewport().outer_rect.map(|r| r.min))
+            .unwrap_or(Pos2::ZERO);
+        self.studio.drag = Some(StickerDrag {
+            note,
+            origin,
+            mode,
+            always_restore: restore,
+            started: ctx.input(|v| v.time),
+            saw_down: false,
+        });
+    }
+    /// Watches a sticker being carried: when the button is let go over a date
+    /// of a calendar window, the memo gets that date and the sticker goes
+    /// back to its place and size.
+    pub fn finish_sticker_drag(&mut self, ctx: &egui::Context) {
+        let Some(mut d) = self.studio.drag.take() else {
+            return;
+        };
+        let now = ctx.input(|v| v.time);
+        if crate::system::left_button_down() {
+            d.saw_down = true;
+            self.studio.drag = Some(d);
+            ctx.request_repaint_after(std::time::Duration::from_millis(30));
+            return;
+        }
+        if !d.saw_down && now - d.started < 0.4 {
+            // the press has not shown up in the key state yet
+            self.studio.drag = Some(d);
+            ctx.request_repaint_after(std::time::Duration::from_millis(30));
+            return;
+        }
+        let ppp = ctx.pixels_per_point().max(0.5);
+        let at = crate::system::cursor_pos().map(|(x, y)| Pos2::new(x as f32 / ppp, y as f32 / ppp));
+        let date = at.and_then(|p| self.calendar_date_at(p, now));
+        self.drop_sticker(&d, date);
+    }
+    /// The sticker was let go: over a calendar date it takes the date, and
+    /// it goes back to its place when it was dropped on a date or was only
+    /// borrowing the title-only look.
+    pub fn drop_sticker(&mut self, d: &StickerDrag, date: Option<NaiveDate>) {
+        if let Some(date) = date {
+            if d.note < self.data.notes.len() {
+                let n = &mut self.data.notes[d.note];
+                n.move_start(date);
+                self.day = date;
+                self.toast = format!("{} → {}", n.title, date);
+            }
+        }
+        if date.is_some() || d.always_restore {
+            if let Some(w) = self.studio.windows.get_mut(&d.note) {
+                w.mode = d.mode;
+                w.place = Some(d.origin);
+            }
+        }
+    }
+    /// The calendar date shown under a screen point (points), if a calendar
+    /// drew its grid there lately.
+    pub fn calendar_date_at(&self, p: Pos2, now: f64) -> Option<NaiveDate> {
+        self.cal_cells
+            .values()
+            .filter(|(t, _)| now - t < 1.0)
+            .find_map(|(_, cells)| cells.iter().find(|(r, _)| r.contains(p)).map(|(_, d)| *d))
+    }
     pub fn new_sticker(&mut self) -> usize {
         let i = self.data.notes.len();
         let mut n = Note::new("", None, i);
@@ -1172,6 +1251,12 @@ impl App {
                 // The color box is resized by its own handle: Windows enforces a
                 // minimum tracking width on natively resizable windows, which
                 // stopped boxes from shrinking below a wide rectangle.
+                // While a sticker is being worked in (focused or under the
+                // pointer) its resize band is wider, so a press near its edge
+                // is the sticker's, not whatever lies behind it.
+                let working = ctx.input(|v| {
+                    v.viewport().focused.unwrap_or(false) || v.pointer.hover_pos().is_some()
+                });
                 w.native.input(
                     ctx,
                     mode == Mode::Title,
@@ -1179,6 +1264,7 @@ impl App {
                     !locked && !maximized && mode != Mode::Swatch,
                     min,
                     max,
+                    if working { 11. } else { 7. },
                 );
                 let base = self.data.notes[i].color;
                 let opacity = self.data.notes[i].document.opacity.clamp(0.2, 1.);
@@ -1237,6 +1323,10 @@ impl App {
                                 if r.clicked() {
                                     w.sticker();
                                 } else if r.drag_started() || r.drag_stopped() {
+                                    if r.drag_started() {
+                                        // Carried over a calendar date, it files the memo there.
+                                        self.begin_sticker_drag(ctx, i, Mode::Title, false);
+                                    }
                                     w.native.start_drag(ctx);
                                 }
                                 if r.secondary_clicked() {
@@ -1420,13 +1510,18 @@ impl App {
                                 ui,
                                 &mut self.data.notes[i].document,
                                 ("memo_document", i),
-                                if engaged { 62. } else { 0. },
+                                if engaged { CORNER_ICONS_W + CORNER_ICONS_GAP } else { 0. },
                                 mode == Mode::Editor,
                             );
                             if engaged {
+                                // On the tab row, kept clear of the corner where
+                                // the window is resized.
                                 let arrows = Rect::from_min_size(
-                                    Pos2::new(rect.right() - 60., rect.bottom() - 28.),
-                                    Vec2::new(60., 28.),
+                                    Pos2::new(
+                                        rect.right() - CORNER_ICONS_W - CORNER_ICONS_GAP,
+                                        rect.bottom() - 28.,
+                                    ),
+                                    Vec2::new(CORNER_ICONS_W, 28.),
                                 );
                                 ui.allocate_new_ui(egui::UiBuilder::new().max_rect(arrows), |ui| {
                                     ui.horizontal(|ui| {
@@ -1635,7 +1730,7 @@ impl App {
             } else if engaged {
                 8.
             } else {
-                3.
+                4.
             };
             let gap = (ui.available_width() - controls * 32.).max(0.);
             let response = ui.add_sized(
@@ -1697,8 +1792,22 @@ impl App {
                     Some(d) => format!("일정 · {} · {}", d.format("%m.%d"), n.repeat.describe(d)),
                     None => "일정 설정".into(),
                 };
-                if icon_button(ui, Icon::Calendar, &tip).clicked() {
+                let r = crate::icons::icon_button_drag(ui, Icon::Calendar, &tip)
+                    .on_hover_text("클릭: 일정 설정 · 끌어서 캘린더의 날짜에 놓으면 그 날짜의 일정이 됩니다");
+                if r.clicked() {
                     self.open_schedule(i);
+                } else if r.drag_started() && mode == Mode::Sticker {
+                    // Shown as the title-only sticker while it is carried; it
+                    // comes back as the sticker, where it was.
+                    self.begin_sticker_drag(ctx, i, Mode::Sticker, true);
+                    w.mode = Mode::Title;
+                    // Fold it right now, before the drag begins, not on the next frame.
+                    w.native.cancel();
+                    ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(Vec2::new(160., 40.)));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::MaxInnerSize(Vec2::new(1600., 40.)));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(w.size()));
+                    w.applied = Some((Mode::Title, false));
+                    w.native.start_drag(ctx);
                 }
                 if mode == Mode::Sticker
                     && icon_button(ui, Icon::Edit, "메모 편집 창 열기").clicked()
@@ -1748,12 +1857,19 @@ impl App {
                 w.native.cancel();
                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
             }
-            if engaged && icon_button(ui, Icon::Close, "창 닫기 · 메모는 유지").clicked() {
+            // Pin, done, fold and close stay on the idle sticker too.
+            if (engaged || mode == Mode::Sticker)
+                && icon_button(ui, Icon::Close, "창 닫기 · 메모는 유지").clicked()
+            {
                 w.open = false;
             }
         });
     }
 }
+/// The project / linked-memo buttons on a sticker's tab row, and the space
+/// between them and the window's right edge (the resize grip).
+const CORNER_ICONS_W: f32 = 60.;
+const CORNER_ICONS_GAP: f32 = 22.;
 fn paper_style(ui: &mut egui::Ui, paper: Color32) {
     let v = ui.visuals_mut();
     v.dark_mode = false;

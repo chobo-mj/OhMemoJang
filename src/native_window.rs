@@ -121,6 +121,8 @@ impl State {
             None
         }
     }
+    /// `band` is how far inside the window's edge a press starts a resize.
+    #[allow(clippy::too_many_arguments)]
     pub fn input(
         &mut self,
         ctx: &egui::Context,
@@ -129,6 +131,7 @@ impl State {
         enabled: bool,
         min: Vec2,
         max: Vec2,
+        band: f32,
     ) {
         self.move_input(ctx);
         if !enabled || ctx.input(|i| i.viewport().focused == Some(false)) {
@@ -158,7 +161,7 @@ impl State {
                     pressed: true,
                     modifiers,
                 } => {
-                    if let Some(direction) = direction(pos, inner.size(), horizontal) {
+                    if let Some(direction) = direction_in(pos, inner.size(), horizontal, band) {
                         if self.command_time != Some(now) {
                             self.command_time = Some(now);
                             self.attempt = Some(Attempt {
@@ -264,7 +267,7 @@ impl State {
             ctx.request_repaint_after(std::time::Duration::from_millis(35));
         }
         if let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) {
-            if let Some(dir) = direction(pos, inner.size(), horizontal) {
+            if let Some(dir) = direction_in(pos, inner.size(), horizontal, band) {
                 ctx.set_cursor_icon(match dir {
                     egui::ResizeDirection::East | egui::ResizeDirection::West => {
                         egui::CursorIcon::ResizeHorizontal
@@ -495,10 +498,20 @@ pub fn fit_position(position: Pos2, size: Vec2, area: Rect) -> Pos2 {
 }
 
 pub fn direction(pos: Pos2, size: Vec2, horizontal: bool) -> Option<egui::ResizeDirection> {
-    let left = pos.x <= 7.;
-    let right = pos.x >= size.x - 7.;
-    let top = pos.y <= 7.;
-    let bottom = pos.y >= size.y - 7.;
+    direction_in(pos, size, horizontal, 7.)
+}
+/// The resize direction for a press at `pos` (inside the window) when the
+/// edge band is `band` points wide.
+pub fn direction_in(
+    pos: Pos2,
+    size: Vec2,
+    horizontal: bool,
+    band: f32,
+) -> Option<egui::ResizeDirection> {
+    let left = pos.x <= band;
+    let right = pos.x >= size.x - band;
+    let top = pos.y <= band;
+    let bottom = pos.y >= size.y - band;
     if horizontal {
         return if left {
             Some(egui::ResizeDirection::West)

@@ -1,6 +1,6 @@
 //! Settings kept between runs: the start screen, hidden menus and the
 //! calendar options. Stored as `key=value` lines in the user's settings
-//! folder (`%APPDATA%\OmniMemoJang\settings.txt` on Windows).
+//! folder (`%APPDATA%\OhMemoJang\settings.txt` on Windows).
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
@@ -24,6 +24,10 @@ pub struct Prefs {
     pub first_run_done: bool,
     /// The "still running in the tray" notice was shown once.
     pub tray_hint_done: bool,
+    /// The main window's calendar shows the selected day's schedule beside the
+    /// grid (side by side): in 내 작업실 (on by default) and in the 캘린더 page.
+    pub cal_side_work: bool,
+    pub cal_side_page: bool,
 }
 
 impl Default for Prefs {
@@ -39,6 +43,8 @@ impl Default for Prefs {
             data_path: String::new(),
             first_run_done: false,
             tray_hint_done: false,
+            cal_side_work: true,
+            cal_side_page: false,
         }
     }
 }
@@ -47,7 +53,7 @@ impl Prefs {
     pub fn to_text(&self) -> String {
         let hidden: Vec<String> = self.hidden_pages.iter().map(|p| p.to_string()).collect();
         format!(
-            "start_page={}\nhidden_pages={}\ncal_theme={}\ncal_font={}\ncal_hide_done={}\ncal_strike={}\ncal_weeks={}\ndata_path={}\nfirst_run_done={}\ntray_hint_done={}\n",
+            "start_page={}\nhidden_pages={}\ncal_theme={}\ncal_font={}\ncal_hide_done={}\ncal_strike={}\ncal_weeks={}\ndata_path={}\nfirst_run_done={}\ntray_hint_done={}\ncal_side_work={}\ncal_side_page={}\n",
             self.start_page,
             hidden.join(","),
             self.cal_theme,
@@ -58,6 +64,8 @@ impl Prefs {
             self.data_path.replace('\n', " "),
             self.first_run_done,
             self.tray_hint_done,
+            self.cal_side_work,
+            self.cal_side_page,
         )
     }
     /// Unknown keys and bad values fall back to the defaults.
@@ -85,6 +93,8 @@ impl Prefs {
                 "data_path" => p.data_path = value.to_owned(),
                 "first_run_done" => p.first_run_done = value == "true",
                 "tray_hint_done" => p.tray_hint_done = value == "true",
+                "cal_side_work" => p.cal_side_work = value == "true",
+                "cal_side_page" => p.cal_side_page = value == "true",
                 _ => {}
             }
         }
@@ -92,9 +102,9 @@ impl Prefs {
     }
     fn path() -> Option<PathBuf> {
         let base = std::env::var_os("APPDATA")
-            .map(|d| PathBuf::from(d).join("OmniMemoJang"))
+            .map(|d| PathBuf::from(d).join("OhMemoJang"))
             .or_else(|| {
-                std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config/omnimemojang"))
+                std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config/ohmemojang"))
             })?;
         Some(base.join("settings.txt"))
     }
@@ -130,6 +140,8 @@ mod tests {
             data_path: "D:\\메모".into(),
             first_run_done: true,
             tray_hint_done: true,
+            cal_side_work: false,
+            cal_side_page: true,
         };
         assert_eq!(Prefs::from_text(&p.to_text()), p);
         let q = Prefs::from_text("start_page=x\nhidden_pages=0,3\ncal_font=99\nnoise");

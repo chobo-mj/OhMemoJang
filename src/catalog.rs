@@ -436,14 +436,18 @@ impl App {
     pub(crate) fn column_picker(&mut self, ui: &mut egui::Ui) {
         egui::ComboBox::from_id_salt("catalog_column_picker")
             .selected_text("열 표시")
-            .show_ui(ui, |ui| {
-                for (slot, &(_, label)) in ADJUSTABLE_COLUMNS.iter().enumerate() {
-                    let mut visible = !self.catalog.column_hidden[slot];
-                    if ui.checkbox(&mut visible, label).changed() {
-                        self.catalog.column_hidden[slot] = !visible;
-                    }
-                }
-            });
+            .show_ui(ui, |ui| self.column_choices(ui));
+    }
+    /// The checkboxes that show or hide the adjustable columns: the dropdown's
+    /// content, and the menu of a right click on the table header.
+    pub(crate) fn column_choices(&mut self, ui: &mut egui::Ui) {
+        crate::ui::caption(ui, "표시할 열");
+        for (slot, &(_, label)) in ADJUSTABLE_COLUMNS.iter().enumerate() {
+            let mut visible = !self.catalog.column_hidden[slot];
+            if ui.checkbox(&mut visible, label).changed() {
+                self.catalog.column_hidden[slot] = !visible;
+            }
+        }
     }
 
     fn catalog_find_bar(&mut self, ui: &mut egui::Ui, ids: &[usize]) {
@@ -715,6 +719,10 @@ impl App {
                     [rect.left_bottom(), rect.right_bottom()],
                     Stroke::new(1_f32, ui::t(ui).line),
                 );
+                // Right-click a column title: choose the columns to show. Made
+                // before the titles and resize handles, which stay on top of it.
+                ui.interact(rect, ui.id().with(("header_menu", trash)), Sense::click())
+                    .context_menu(|ui| self.column_choices(ui));
                 let cells = table_cells(rect, &self.catalog);
                 for (col, title) in [
                     if trash { "복원" } else { "표시" },

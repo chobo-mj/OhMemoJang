@@ -56,7 +56,14 @@ pub enum Icon {
 
 /// An icon-only control with a consistent hit area, keyboard focus and a spoken label.
 pub fn icon_button(ui: &mut Ui, icon: Icon, tooltip: &str) -> Response {
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(28.0), Sense::click());
+    icon_button_sense(ui, icon, tooltip, Sense::click())
+}
+/// Like `icon_button`, and it can also be dragged.
+pub fn icon_button_drag(ui: &mut Ui, icon: Icon, tooltip: &str) -> Response {
+    icon_button_sense(ui, icon, tooltip, Sense::click_and_drag())
+}
+fn icon_button_sense(ui: &mut Ui, icon: Icon, tooltip: &str, sense: Sense) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(28.0), sense);
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, ui.is_enabled(), tooltip));
     if response.hovered() || response.has_focus() {
         let fill = if ui.visuals().dark_mode {

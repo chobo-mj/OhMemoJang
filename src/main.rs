@@ -2,7 +2,9 @@
 mod alarm;
 mod app_icon;
 mod calendar_dock;
+mod clipboard_html;
 mod catalog;
+mod clipboard_history;
 mod composer;
 mod content_collections;
 mod desktop;
@@ -21,6 +23,7 @@ mod schedule;
 mod storage;
 mod studio;
 mod system;
+mod table_edit;
 mod tray;
 mod ui;
 mod views;
@@ -53,6 +56,7 @@ struct App {
     catalog: catalog::Catalog,
     studio: studio::Studio,
     extra: extras::Extra,
+    clipboard: clipboard_history::ClipboardHistory,
     sources: Vec<dragging::Source>,
     targets: Vec<dragging::Target>,
     drag: Option<dragging::Drag>,
@@ -65,6 +69,11 @@ struct App {
     search: String,
     editor: bool,
     sticky: bool,
+    /// Share of the main calendar's width taken by the schedule beside the grid.
+    cal_side_frac: f32,
+    /// Where each calendar window drew its dates last (screen points), by
+    /// window and when: a sticker let go over one files its memo there.
+    cal_cells: std::collections::HashMap<egui::ViewportId, (f64, Vec<(egui::Rect, NaiveDate)>)>,
     cal: calendar_dock::Dock,
     /// Settings kept between runs, and the text last written to disk.
     prefs: prefs::Prefs,
@@ -163,6 +172,7 @@ impl App {
         cc.egui_ctx.set_fonts(fonts);
         storage::watch_input(&cc.egui_ctx);
         let mut a = Self::sample(Local::now().date_naive());
+        a.clipboard = clipboard_history::ClipboardHistory::start(&cc.egui_ctx);
         a.prefs = prefs::Prefs::load();
         a.cal.theme = a.prefs.cal_theme;
         a.load_or_start();
@@ -179,6 +189,7 @@ impl App {
             desktop: desktop::Desktop::default(),
             catalog: catalog::Catalog::default(),
             extra: extras::Extra::default(),
+            clipboard: Default::default(),
             studio: studio::Studio::default(),
             sources: vec![],
             targets: vec![],
@@ -192,6 +203,8 @@ impl App {
             search: String::new(),
             editor: false,
             sticky: false,
+            cal_side_frac: 0.38,
+            cal_cells: Default::default(),
             cal: calendar_dock::Dock::default(),
             prefs: prefs::Prefs::default(),
             prefs_saved: String::new(),
@@ -363,6 +376,11 @@ impl App {
         n.body.clear();
         self.data.notes.push(n);
         self.open_note(i);
+        // "+ 새 일정": the memo editing window (date and time fields outside
+        // the text), not the sticker, whatever the sticker preference is.
+        if let Some(w) = self.studio.windows.get_mut(&i) {
+            w.edit();
+        }
     }
     fn done(&mut self, i: usize, value: bool) {
         self.done_at(i, None, value);
@@ -386,6 +404,11 @@ impl eframe::App for App {
     }
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         self.theme(ctx);
+        self.finish_sticker_drag(ctx);
+        self.clipboard.poll(ctx);
+        if self.page != 7 {
+            self.clipboard.idle();
+        }
         // The tick polls global shortcuts, the tray and alarms. It slows
         // down after ten seconds without input; any input repaints at once.
         let now = ctx.input(|i| i.time);
@@ -500,7 +523,7 @@ impl App {
             egui::vec2(1280., 800.),
         ));
         let builder = egui::ViewportBuilder::default()
-            .with_title("OmniMemoJang")
+            .with_title("OhMemoJang")
             .with_position(area.right_bottom() - size - egui::Vec2::splat(16.))
             .with_inner_size(size)
             .with_decorations(false)
@@ -523,7 +546,7 @@ impl App {
                     )
                     .show(ctx, |ui| {
                         ui.label(
-                            egui::RichText::new("OmniMemoJang은 트레이에서 계속 실행됩니다")
+                            egui::RichText::new("OhMemoJang은 트레이에서 계속 실행됩니다")
                                 .strong()
                                 .size(14.),
                         );
@@ -546,7 +569,7 @@ impl App {
             return;
         }
         let builder = egui::ViewportBuilder::default()
-            .with_title("OmniMemoJang")
+            .with_title("OhMemoJang")
             .with_inner_size([1440., 900.])
             .with_min_inner_size([980., 640.])
             .with_maximized(true)
@@ -614,8 +637,10 @@ impl App {
                 .show(ctx, |ui| self.sidebar_ui(ui));
         }
         if self.split && self.page == 0 {
-            egui::SidePanel::right("split")
-                .default_width(560.)
+            // Side by side needs room for two panes; each layout keeps its own width.
+            let side = self.prefs.cal_side_work;
+            egui::SidePanel::right(if side { "split_side" } else { "split" })
+                .default_width(if side { 820. } else { 560. })
                 .min_width(380.)
                 .max_width(ctx.screen_rect().width() * 0.62)
                 .resizable(true)
@@ -626,11 +651,7 @@ impl App {
                     top: 18,
                     bottom: 8,
                 }))
-                .show(ctx, |ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt("split_calendar")
-                        .show(ui, |ui| self.calendar(ui));
-                });
+                .show(ctx, |ui| self.calendar_main(ui, true));
         }
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(tone.bg).inner_margin(egui::Margin {
@@ -648,6 +669,10 @@ impl App {
                     } else {
                         self.agenda(ui, 0);
                     }
+                } else if self.page == 5 {
+                    self.calendar_main(ui, false);
+                } else if self.page == 7 {
+                    self.clipboard.ui(ui);
                 } else if matches!(self.page, 2 | 3) {
                     self.agenda_preview(ui);
                 } else {
@@ -658,7 +683,6 @@ impl App {
                             match self.page {
                                 1 => self.wiki(ui),
                                 0 | 2 | 3 => self.agenda(ui, self.page),
-                                5 => self.calendar(ui),
                                 6 => self.utilities(ui),
                                 _ => self.collections(ui),
                             }
@@ -675,7 +699,7 @@ impl App {
                 .iter()
                 .find(|(p, _, _)| *p == self.page)
                 .map(|(_, name, _)| *name)
-                .unwrap_or("OmniMemoJang")
+                .unwrap_or("OhMemoJang")
         };
         ui.horizontal(|ui| {
             ui.set_min_height(34.);
@@ -726,7 +750,7 @@ impl App {
     }
     fn sidebar_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui::banner(ui, Vec2::new(ui.available_width() - 32., 58.));
+            ui::banner(ui, ui.available_width() - 32.);
             if icons::icon_button(ui, icons::Icon::Sidebar, "사이드바 접기").clicked() {
                 self.sidebar = false;
             }
@@ -893,7 +917,7 @@ impl App {
             false,
             &mut open,
             |ui| {
-                ui.label(RichText::new("OmniMemoJang 사용법").size(16.).strong());
+                ui.label(RichText::new("OhMemoJang 사용법").size(16.).strong());
                 ui.add_space(8.);
                 for line in [
                     "메모 제목을 누르면 편집창이 열립니다.",
@@ -957,7 +981,7 @@ impl App {
     }
 }
 /// Navigation pages: (page index, label, icon) in display order.
-pub const PAGES: [(usize, &str, icons::Icon); 7] = [
+pub const PAGES: [(usize, &str, icons::Icon); 8] = [
     (0, "내 작업실", icons::Icon::Home),
     (2, "오늘의 할일", icons::Icon::Today),
     (3, "다음에 할일", icons::Icon::Upcoming),
@@ -965,6 +989,7 @@ pub const PAGES: [(usize, &str, icons::Icon); 7] = [
     (4, "전체메모", icons::Icon::Notes),
     (1, "나만의 위키", icons::Icon::Book),
     (6, "편의기능", icons::Icon::Grid),
+    (7, "클립보드 히스토리", icons::Icon::Menu),
 ];
 fn shorten(s: &str, n: usize) -> String {
     let s = s.replace('\n', " ");
@@ -982,15 +1007,16 @@ fn main() -> eframe::Result {
     if !tray::single_instance() {
         return Ok(());
     }
+    system::migrate_old_data_dirs();
     // The root window is an invisible, never-minimized host. Every visible
     // window (main, calendar, stickers, dialogs) is an independent child, so
     // minimizing the main window leaves stickers alive on the desktop and the
     // shared GL configuration supports real per-window transparency.
     eframe::run_native(
-        "OmniMemoJang",
+        "OhMemoJang",
         eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
-                .with_title("OmniMemoJang")
+                .with_title("OhMemoJang")
                 .with_inner_size([1., 1.])
                 .with_position([0., 0.])
                 .with_decorations(false)
