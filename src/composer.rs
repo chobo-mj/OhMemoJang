@@ -65,7 +65,7 @@ pub struct Format {
     pub underline: bool,
     pub strike: bool,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Span {
     pub range: Range<usize>,
     pub format: Format,
@@ -378,9 +378,33 @@ impl Tab {
         }
     }
 }
+// One retained body layout per editor. Compare compact source inputs before
+// constructing or hashing the per-character LayoutJob.
+#[derive(Clone, PartialEq)]
+struct BodyLayoutKey {
+    text: String,
+    spans: Vec<Span>,
+    font: FontId,
+    bold_font: FontId,
+    color: Color32,
+    pictures: Vec<PictureSize>,
+    tables: Vec<TableSize>,
+    spacer: Option<egui::FontFamily>,
+    width: f32,
+    pixels_per_point: f32,
+}
+#[derive(Clone)]
+struct BodyLayoutCache {
+    key: BodyLayoutKey,
+    galley: std::sync::Arc<egui::Galley>,
+}
 /// One reversible step. Body text and every table share one ordered list,
 /// so Ctrl+Z walks back through what was done, in the order it was done.
 enum UndoKind {
+    Snapshot {
+        tab: usize,
+        value: Tab,
+    },
     /// The tab's text and formatting before an edit.
     Body {
         tab: usize,
@@ -388,7 +412,11 @@ enum UndoKind {
         spans: Vec<Span>,
     },
     /// A table as it was before a cell edit, paste, row/column change, merge ...
-    Table { tab: usize, bi: usize, table: Table },
+    Table {
+        tab: usize,
+        bi: usize,
+        table: Table,
+    },
     /// A table was pasted into the text: undo removes it again.
     TableInserted {
         tab: usize,
@@ -416,6 +444,7 @@ struct UndoEntry {
 #[derive(Default)]
 pub struct UndoStack {
     entries: Vec<UndoEntry>,
+    redo: Vec<UndoEntry>,
     next: u64,
 }
 impl Clone for UndoStack {
@@ -426,6 +455,7 @@ impl Clone for UndoStack {
 impl UndoStack {
     const MAX: usize = 200;
     fn push(&mut self, label: &'static str, kind: UndoKind, now: f64) {
+        self.redo.clear();
         if self.entries.len() >= Self::MAX {
             self.entries.remove(0);
         }
@@ -439,12 +469,14 @@ impl UndoStack {
     }
     /// Typing in the same tab within a second of the last change is one step.
     fn push_body(&mut self, tab: usize, text: String, spans: Vec<Span>, now: f64) {
-        if let Some(last) = self.entries.last_mut() {
-            if matches!(&last.kind, UndoKind::Body { tab: t, .. } if *t == tab)
-                && now - last.at < 1.0
-            {
-                last.at = now;
-                return;
+        if self.redo.is_empty() {
+            if let Some(last) = self.entries.last_mut() {
+                if matches!(&last.kind, UndoKind::Body { tab: t, .. } if *t == tab)
+                    && now - last.at < 1.0
+                {
+                    last.at = now;
+                    return;
+                }
             }
         }
         self.push("본문 편집", UndoKind::Body { tab, text, spans }, now);
@@ -575,8 +607,43 @@ impl Document {
     /// Undoes the latest step of the body or of any table. Returns the text
     /// for the status line, `None` when there is nothing to undo.
     pub fn undo(&mut self) -> Option<String> {
-        let e = self.undo.entries.pop()?;
-        let label = format!("실행 취소 #{} · {}", e.seq, e.label);
+        self.apply_history(false)
+    }
+    pub fn redo(&mut self) -> Option<String> {
+        self.apply_history(true)
+    }
+    fn apply_history(&mut self, redo: bool) -> Option<String> {
+        let e = if redo {
+            self.undo.redo.pop()?
+        } else {
+            self.undo.entries.pop()?
+        };
+        let tab = match &e.kind {
+            UndoKind::Snapshot { tab, .. }
+            | UndoKind::Body { tab, .. }
+            | UndoKind::Table { tab, .. }
+            | UndoKind::TableInserted { tab, .. }
+            | UndoKind::TableDeleted { tab, .. } => *tab,
+        };
+        let inverse = UndoEntry {
+            seq: e.seq,
+            label: e.label,
+            at: f64::NEG_INFINITY,
+            kind: UndoKind::Snapshot {
+                tab,
+                value: self.tabs.get(tab)?.clone(),
+            },
+        };
+        let label = format!(
+            "{} #{} · {}",
+            if redo {
+                "다시 실행"
+            } else {
+                "실행 취소"
+            },
+            e.seq,
+            e.label
+        );
         // A table step keeps the table selected (so the next Ctrl+Z still
         // reaches the history); any other step hands focus to the body.
         if matches!(e.kind, UndoKind::Table { .. }) {
@@ -591,6 +658,11 @@ impl Document {
             self.undo_focus = true;
         }
         match e.kind {
+            UndoKind::Snapshot { tab, value } => {
+                self.undo_cursor = Some(change_end(&self.tabs[tab].body, &value.body));
+                self.tabs[tab] = value;
+                self.active = tab;
+            }
             UndoKind::Body { tab, text, spans } => {
                 let t = self.tabs.get_mut(tab)?;
                 self.undo_cursor = Some(change_end(&t.body, &text));
@@ -634,6 +706,11 @@ impl Document {
                 t.spans = spans;
                 self.active = tab;
             }
+        }
+        if redo {
+            self.undo.entries.push(inverse);
+        } else {
+            self.undo.redo.push(inverse);
         }
         Some(label)
     }
@@ -832,14 +909,34 @@ fn content_impl(
     if requested.is_some() || requested_tab.is_some() {
         doc.active = requested_tab.filter(|&i| i < doc.tabs.len()).unwrap_or(0);
     }
+    let queued = ui.data_mut(|d| d.remove_temp::<Vec<egui::Event>>(id.with("edit_menu_events")));
+    if let Some(events) = queued {
+        ui.memory_mut(|m| m.request_focus(id.with(("text", doc.active))));
+        ui.input_mut(|i| i.events.extend(events));
+    }
     // Ctrl+Z: one ordered history for the body text and every table (redo is
     // not offered). A cell being typed in reverts its own edit first.
     let probe = id.with(("text", doc.active));
+    if ui.input_mut(|i| i.consume_key(Modifiers::CTRL, Key::Num0)) {
+        doc.zoom = 1.;
+    }
     let cell_editing = doc.tsel.as_ref().is_some_and(|s| s.editing);
     let table_focus = doc
         .tsel
         .as_ref()
         .is_some_and(|s| ui.memory(|m| m.has_focus(id.with(("table_grid", s.tab, s.bi)))));
+    if !doc.ime
+        && !cell_editing
+        && (table_focus || ui.memory(|m| m.has_focus(probe)))
+        && ui.input_mut(|i| {
+            i.consume_key(Modifiers::CTRL | Modifiers::SHIFT, Key::Z)
+                || i.consume_key(Modifiers::CTRL, Key::Y)
+        })
+    {
+        doc.status = doc
+            .redo()
+            .unwrap_or_else(|| "다시 실행할 내용이 없습니다".into());
+    }
     if !doc.ime
         && !cell_editing
         && (table_focus || ui.memory(|m| m.has_focus(probe)))
@@ -1077,7 +1174,25 @@ fn content_impl(
         })
         .max(1.)
         / 100.;
+    let cache_id = id.with("body_layout_cache");
+    let mut cached = ui.data(|d| d.get_temp::<std::sync::Arc<BodyLayoutCache>>(cache_id));
     let mut layouter = |ui: &egui::Ui, text: &str, width: f32| {
+        if let Some(cache) = &cached {
+            let k = &cache.key;
+            if k.text == text
+                && k.spans == spans
+                && k.font == font
+                && k.bold_font == bold_font
+                && k.color == color
+                && k.pictures == pictures
+                && k.tables == tables
+                && k.spacer == spacer
+                && k.width == width
+                && k.pixels_per_point == ui.ctx().pixels_per_point()
+            {
+                return cache.galley.clone();
+            }
+        }
         let mut job = layout(text, &spans, &base, font.clone(), bold_font.clone(), color);
         inline_pictures(&mut job, &pictures, width, space_ratio);
         inline_tables(&mut job, &tables, width, space_ratio);
@@ -1085,7 +1200,25 @@ fn content_impl(
             set_spacer_family(&mut job, family);
         }
         job.wrap.max_width = width;
-        ui.fonts(|f| f.layout_job(job))
+        let galley = ui.fonts(|f| f.layout_job(job));
+        let cache = std::sync::Arc::new(BodyLayoutCache {
+            key: BodyLayoutKey {
+                text: text.to_owned(),
+                spans: spans.clone(),
+                font: font.clone(),
+                bold_font: bold_font.clone(),
+                color,
+                pictures: pictures.clone(),
+                tables: tables.clone(),
+                spacer: spacer.clone(),
+                width,
+                pixels_per_point: ui.ctx().pixels_per_point(),
+            },
+            galley: galley.clone(),
+        });
+        ui.data_mut(|d| d.insert_temp(cache_id, cache.clone()));
+        cached = Some(cache);
+        galley
     };
     let bottom = ui.ctx().screen_rect().bottom().min(ui.clip_rect().bottom());
     let body_height = ui
@@ -1251,6 +1384,27 @@ fn content_impl(
     }
     let response = output.response;
     response.context_menu(|ui| {
+        for (label, event) in [("잘라내기", egui::Event::Cut), ("복사", egui::Event::Copy)] {
+            if ui
+                .add_enabled(!doc.selection.is_empty(), egui::Button::new(label))
+                .clicked()
+            {
+                ui.data_mut(|d| d.insert_temp(id.with("edit_menu_events"), vec![event]));
+                ui.ctx().request_repaint();
+                ui.close_menu();
+            }
+        }
+        if ui.button("붙여넣기").clicked() {
+            match arboard::Clipboard::new().and_then(|mut c| c.get_text()) {
+                Ok(text) => ui.data_mut(|d| {
+                    d.insert_temp(id.with("edit_menu_events"), vec![egui::Event::Paste(text)])
+                }),
+                Err(e) => doc.status = format!("클립보드 읽기 실패: {e}"),
+            }
+            ui.ctx().request_repaint();
+            ui.close_menu();
+        }
+        ui.separator();
         if ui.button("원본 배율 100%").clicked() {
             doc.zoom = 1.;
             ui.close_menu();
@@ -2223,7 +2377,7 @@ fn chord_down() -> bool {
     false
 }
 /// Inline size inputs for each picture of a tab, keyed by placeholder.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 struct PictureSize {
     key: char,
     width: f32,
@@ -2586,7 +2740,7 @@ fn paint_pictures(
 /// but close enough that reserving this much room in the text rarely
 /// leaves a visible gap or overlap.
 const TABLE_TOOLBAR_H: f32 = 30.;
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 struct TableSize {
     key: char,
     /// The table's full, unclamped size: its grid (every column width
@@ -3285,6 +3439,42 @@ fn table_widget(
                     );
                 }
             }
+            for c in 0..nc {
+                let edge = origin.x + col_x[c] + widths[c];
+                let handle = Rect::from_min_max(
+                    egui::pos2(edge - 3., rect.top()),
+                    egui::pos2(edge + 3., rect.bottom()),
+                );
+                if !ui.clip_rect().intersects(handle) {
+                    continue;
+                }
+                let drag = ui
+                    .interact(handle, gid.with(("col_edge", c)), Sense::click_and_drag())
+                    .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+                let key = gid.with(("col_drag_start", c));
+                if drag.drag_started() {
+                    ctx.data_mut(|d| d.insert_temp(key, t.clone()));
+                }
+                if drag.dragged() {
+                    t.col_widths[c] =
+                        (t.col_widths[c] + drag.drag_delta().x / zoom).clamp(24., 2000.);
+                }
+                if drag.drag_stopped() {
+                    if let Some(before) = ctx.data(|d| d.get_temp::<Table>(key)) {
+                        if before.col_widths != t.col_widths {
+                            cx.undo.push(
+                                "열 너비",
+                                UndoKind::Table {
+                                    tab,
+                                    bi,
+                                    table: before,
+                                },
+                                cx.now,
+                            );
+                        }
+                    }
+                }
+            }
             let _ = row_drag;
             let (pressed, down, pos, mods) = ui.input(|i| {
                 (
@@ -3385,6 +3575,10 @@ fn table_widget(
             if keys_on {
                 let take = |m: Modifiers, k: Key| ui.input_mut(|i| i.consume_key(m, k));
                 let s = sel.as_mut().expect("checked above");
+                if take(Modifiers::CTRL, Key::A) {
+                    s.anchor = (0, 0);
+                    s.head = (nr - 1, nc - 1);
+                }
                 for (key, dir) in [
                     (Key::ArrowUp, 0u8),
                     (Key::ArrowDown, 1),
@@ -3553,7 +3747,7 @@ fn table_widget(
                 let eid = edit_id(r, c);
                 if !cx.ime {
                     let take = |m: Modifiers, k: Key| ui.input_mut(|i| i.consume_key(m, k));
-                    if take(Modifiers::NONE, Key::Escape) || take(Modifiers::CTRL, Key::Z) {
+                    if take(Modifiers::NONE, Key::Escape) {
                         tbl_cancel(t, s);
                     } else if take(Modifiers::SHIFT, Key::Tab) {
                         tbl_commit(t, s, cx);
@@ -3756,9 +3950,13 @@ fn table_widget(
                 act = Some(TAct::Align(al));
             }
         }
-        if toolbar_button(ui, "표 삭제").clicked() {
-            act = Some(TAct::Remove);
-        }
+        ui.menu_button("표 삭제", |ui| {
+            ui.label("이 표를 삭제할까요?");
+            if ui.button("삭제").clicked() {
+                act = Some(TAct::Remove);
+                ui.close_menu();
+            }
+        });
     });
     let mut remove = false;
     if let Some(a) = act {
@@ -3879,13 +4077,15 @@ fn table_widget(
                 label = "병합 해제";
             }
             TAct::EqualCols => {
-                t.col_widths.iter_mut().for_each(|w| *w = 120.);
+                let average = t.col_widths.iter().sum::<f32>() / nc as f32;
+                t.col_widths.fill(average);
                 changed = true;
                 label = "열 너비";
             }
             TAct::EqualRows => {
-                t.row_height = 32.;
-                t.row_manual.iter_mut().for_each(|m| *m = 0.);
+                let average = geo.h.iter().sum::<f32>() / (nr as f32 * zoom);
+                t.row_height = average;
+                t.row_manual.fill(average);
                 changed = true;
                 label = "행 높이";
             }
@@ -4721,6 +4921,21 @@ mod tests {
         assert!(te::delete_rows(&mut t, 2, 2));
         assert_eq!(t.tsv(), "가\t나\n다\t라");
     }
+    #[test]
+    fn redo_restores_body_and_new_typing_discards_redo() {
+        let mut d = Document::default();
+        d.undo.push_body(0, String::new(), vec![], 0.);
+        d.tabs[0].body = "한글 입력".into();
+        d.undo().unwrap();
+        assert_eq!(d.tabs[0].body, "");
+        d.redo().unwrap();
+        assert_eq!(d.tabs[0].body, "한글 입력");
+        d.undo().unwrap();
+        d.undo.push_body(0, String::new(), vec![], 0.5);
+        d.tabs[0].body = "다른 입력".into();
+        assert!(d.redo().is_none());
+    }
+
     #[test]
     fn undo_walks_back_through_body_and_table_steps_in_order() {
         let mut d = Document::default();

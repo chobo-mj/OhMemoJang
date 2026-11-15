@@ -1661,7 +1661,9 @@ impl App {
         self.sticky = self.studio.windows.values().any(|w| w.open);
     }
     fn memo_shortcuts(&mut self, ctx: &egui::Context, i: usize, w: &mut Window) {
-        if ctx.input_mut(|v| v.consume_key(egui::Modifiers::CTRL, egui::Key::T)) {
+        if ctx.input_mut(|v| {
+            v.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::T)
+        }) {
             self.data.notes[i].topmost = !self.data.notes[i].topmost;
         }
         if ctx.input_mut(|v| {
@@ -1921,7 +1923,7 @@ fn pin_button(ui: &mut egui::Ui, value: &mut bool) {
     response.widget_info(|| {
         egui::WidgetInfo::selected(egui::WidgetType::Button, true, *value, "항상 위에")
     });
-    if response.on_hover_text("항상 위에 · Ctrl+T").clicked() {
+    if response.on_hover_text("항상 위에 · Ctrl+Shift+T").clicked() {
         *value = !*value;
     }
 }
@@ -2185,6 +2187,29 @@ mod occurrence_window_tests {
 #[cfg(test)]
 mod arrangement_tests {
     use super::*;
+    #[test]
+    fn daily_auto_open_keeps_undated_stickers_open() {
+        let today = daily_day(daily_now());
+        let mut app = App::sample(today);
+        app.data.notes[0].date = None;
+        app.open_sticker(0, None);
+        app.desktop.daily_today = true;
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.daily_today(ctx);
+            app.apply_arrangement(ctx);
+        });
+        assert!(app.studio.windows[&0].open);
+        assert_eq!(app.data.notes[0].date, None);
+        app.desktop.daily_shown = Some(today - chrono::Duration::days(1));
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.daily_today(ctx);
+            app.apply_arrangement(ctx);
+        });
+        assert!(app.studio.windows[&0].open);
+        assert_eq!(app.data.notes[0].date, None);
+    }
+
     #[test]
     fn daily_memos_roll_over_at_five_and_pick_open_past_and_today() {
         let at = |d: u32, h: u32, m: u32| {

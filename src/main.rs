@@ -614,7 +614,9 @@ impl App {
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::P)) {
             self.desktop.project_popup = true;
         }
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::T)) {
+        if ctx.input_mut(|i| {
+            i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::T)
+        }) {
             let i = self.catalog.selected.unwrap_or(self.active);
             self.data.notes[i].topmost = !self.data.notes[i].topmost;
         }
