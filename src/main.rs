@@ -169,6 +169,8 @@ impl App {
                 }
             }
         }
+        // After the fallbacks above: this family must hold nothing else.
+        composer::add_spacer_font(&mut fonts);
         cc.egui_ctx.set_fonts(fonts);
         storage::watch_input(&cc.egui_ctx);
         let mut a = Self::sample(Local::now().date_naive());

@@ -1066,14 +1066,24 @@ fn content_impl(
             ui.data(|d| d.get_temp::<f32>(key_id.with(("table_h", tab_i, tid))))
         })
     };
+    // The invisible space that reserves a picture's or a table's place is
+    // set in the glyph-less spacer font when the app registered it (see
+    // `spacer_font`); its width is then the font size itself.
+    let spacer = spacer_family(ui);
     let space_ratio = ui
-        .fonts(|f| f.glyph_width(&FontId::new(100., font.family.clone()), '\u{3000}'))
+        .fonts(|f| {
+            let family = spacer.clone().unwrap_or_else(|| font.family.clone());
+            f.glyph_width(&FontId::new(100., family), '\u{3000}')
+        })
         .max(1.)
         / 100.;
     let mut layouter = |ui: &egui::Ui, text: &str, width: f32| {
         let mut job = layout(text, &spans, &base, font.clone(), bold_font.clone(), color);
         inline_pictures(&mut job, &pictures, width, space_ratio);
         inline_tables(&mut job, &tables, width, space_ratio);
+        if let Some(family) = &spacer {
+            set_spacer_family(&mut job, family);
+        }
         job.wrap.max_width = width;
         ui.fonts(|f| f.layout_job(job))
     };
@@ -2188,6 +2198,118 @@ fn inline_pictures(job: &mut LayoutJob, pictures: &[PictureSize], wrap: f32, rat
                 }
             })
             .collect();
+    }
+}
+/// Name of the font family that holds only `spacer_font`.
+pub const SPACER_FONT: &str = "ohmemojang-spacer";
+/// A font with one glyph: U+3000, one em wide and without an outline.
+///
+/// A picture or a table reserves its place in the text as an invisible
+/// U+3000 whose font size makes it as wide as the block. In a normal font
+/// that size (hundreds of pixels, a new one for every width while a window
+/// is resized) makes egui rasterize its replacement glyph ('◻' or '?') at
+/// that size into the font atlas: the atlas grows to tens of megapixels and
+/// is uploaded again as a whole, which is the stutter when a memo with a
+/// table is maximized. This font has neither character and no outlines, so
+/// nothing is rasterized whatever the size.
+pub fn spacer_font() -> Vec<u8> {
+    fn be16(v: &mut Vec<u8>, x: u16) {
+        v.extend_from_slice(&x.to_be_bytes());
+    }
+    fn be32(v: &mut Vec<u8>, x: u32) {
+        v.extend_from_slice(&x.to_be_bytes());
+    }
+    let mut cmap = vec![];
+    for x in [0, 1, 3, 1] {
+        be16(&mut cmap, x); // version, one subtable: Windows, Unicode BMP
+    }
+    be32(&mut cmap, 12);
+    // Format 4, two segments: U+3000 -> glyph 1, and the closing U+FFFF.
+    for x in [4, 32, 0, 4, 4, 1, 0] {
+        be16(&mut cmap, x);
+    }
+    let delta = 1u16.wrapping_sub(0x3000);
+    for x in [0x3000, 0xFFFF, 0, 0x3000, 0xFFFF, delta, 1, 0, 0] {
+        be16(&mut cmap, x);
+    }
+    let mut head = vec![];
+    for x in [0x0001_0000, 0x0001_0000, 0, 0x5F0F_3CF5] {
+        be32(&mut head, x);
+    }
+    for x in [0, 1000] {
+        be16(&mut head, x); // flags, units per em
+    }
+    head.extend_from_slice(&[0; 16]); // created, modified
+    for x in [0, 0, 1000, 1000, 0, 8, 2, 0, 0] {
+        be16(&mut head, x); // bounds, style, smallest size, direction, loca and glyph formats
+    }
+    let mut hhea = vec![];
+    be32(&mut hhea, 0x0001_0000);
+    let descent = (-200i16) as u16;
+    for x in [800, descent, 0, 1000, 0, 0, 1000, 1, 0, 0, 0, 0, 0, 0, 0, 2] {
+        be16(&mut hhea, x);
+    }
+    let mut hmtx = vec![];
+    for x in [0, 0, 1000, 0] {
+        be16(&mut hmtx, x); // (advance, left bearing) of .notdef and of U+3000
+    }
+    let mut maxp = vec![];
+    be32(&mut maxp, 0x0000_5000);
+    be16(&mut maxp, 2);
+    let tables: [(&[u8; 4], Vec<u8>); 5] = [
+        (b"cmap", cmap),
+        (b"head", head),
+        (b"hhea", hhea),
+        (b"hmtx", hmtx),
+        (b"maxp", maxp),
+    ];
+    let mut out = vec![];
+    be32(&mut out, 0x0001_0000);
+    for x in [5, 64, 2, 16] {
+        be16(&mut out, x); // table count and its binary-search fields
+    }
+    let mut offset = 12 + 16 * tables.len();
+    for (tag, data) in &tables {
+        out.extend_from_slice(*tag);
+        be32(&mut out, 0); // checksum (not verified by the reader)
+        be32(&mut out, offset as u32);
+        be32(&mut out, data.len() as u32);
+        offset += data.len().next_multiple_of(4);
+    }
+    for (_, data) in &tables {
+        out.extend_from_slice(data);
+        out.resize(out.len().next_multiple_of(4), 0);
+    }
+    out
+}
+/// Registers the spacer font as its own family (nothing falls back into it
+/// and it falls back to nothing).
+pub fn add_spacer_font(fonts: &mut egui::FontDefinitions) {
+    fonts.font_data.insert(
+        SPACER_FONT.into(),
+        egui::FontData::from_owned(spacer_font()).into(),
+    );
+    fonts.families.insert(
+        FontFamily::Name(SPACER_FONT.into()),
+        vec![SPACER_FONT.into()],
+    );
+}
+fn spacer_family(ui: &egui::Ui) -> Option<FontFamily> {
+    let family = FontFamily::Name(SPACER_FONT.into());
+    ui.fonts(|f| f.families().contains(&family))
+        .then_some(family)
+}
+/// Moves the invisible spaces `inline_pictures` and `inline_tables` made
+/// into the spacer font. They are told from a U+3000 the user typed by
+/// their style: transparent, with a row height of their own.
+fn set_spacer_family(job: &mut LayoutJob, family: &FontFamily) {
+    for section in &mut job.sections {
+        if section.format.color == Color32::TRANSPARENT
+            && section.format.line_height.is_some()
+            && job.text[section.byte_range.clone()].starts_with('\u{3000}')
+        {
+            section.format.font_id.family = family.clone();
+        }
     }
 }
 /// Where the picture whose placeholder is character `idx` is drawn: on the
@@ -5960,5 +6082,142 @@ mod inline_table_tests {
         let clamped = sizes[0].at(100.);
         assert_eq!(clamped.x, 96.);
         assert_eq!(clamped.y, 3. * 33. + TABLE_TOOLBAR_H);
+    }
+}
+#[cfg(test)]
+mod spacer_tests {
+    use super::*;
+    fn context(spacer: bool) -> egui::Context {
+        let ctx = egui::Context::default();
+        let mut fonts = egui::FontDefinitions::default();
+        if let Ok(bytes) = std::fs::read("C:/Windows/Fonts/malgun.ttf") {
+            fonts
+                .font_data
+                .insert("korean".into(), egui::FontData::from_owned(bytes).into());
+            fonts
+                .families
+                .get_mut(&FontFamily::Proportional)
+                .unwrap()
+                .insert(0, "korean".into());
+        }
+        if spacer {
+            add_spacer_font(&mut fonts);
+        }
+        ctx.set_fonts(fonts);
+        ctx
+    }
+    fn memo() -> (Document, String) {
+        let mut doc = Document::default();
+        let mut table = Table::new(30, 14);
+        for r in 0..30 {
+            for c in 0..14 {
+                table.cells[r][c].text = format!("셀 {r}-{c} 한글");
+            }
+        }
+        doc.tabs[0].body = "앞 글\n\n뒤 글".into();
+        doc.tabs[0].insert_table(4..4, table);
+        let body = doc.tabs[0].body.clone();
+        (doc, body)
+    }
+    /// One frame at a window size: (time in ms, where the table was drawn).
+    fn frame(
+        ctx: &egui::Context,
+        doc: &mut Document,
+        body: &mut String,
+        size: Vec2,
+        i: usize,
+    ) -> (f64, egui::Rect) {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+            time: Some(i as f64 * 0.016),
+            max_texture_side: Some(16384),
+            ..Default::default()
+        };
+        let t = std::time::Instant::now();
+        let _ = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                show(ui, body, doc, "spacer_test");
+            });
+        });
+        let ms = t.elapsed().as_secs_f64() * 1000.;
+        (ms, LAST_TABLE_RECT.with(|r| r.get()).expect("table drawn"))
+    }
+    #[test]
+    fn the_spacer_font_has_one_em_wide_glyph_and_nothing_to_draw() {
+        let ctx = context(true);
+        let _ = ctx.run(Default::default(), |ctx| {
+            let family = FontFamily::Name(SPACER_FONT.into());
+            for size in [10., 100., 1500.] {
+                let w = ctx.fonts(|f| f.glyph_width(&FontId::new(size, family.clone()), '\u{3000}'));
+                assert!((w - size).abs() < 0.01, "{size}: {w}");
+            }
+        });
+    }
+    /// Tables sit exactly where they did with the old (text font) spacer,
+    /// narrow, maximized and at widths in between.
+    #[test]
+    fn a_table_is_laid_out_the_same_with_the_spacer_font() {
+        let (old, new) = (context(false), context(true));
+        let (mut doc_a, mut body_a) = memo();
+        let (mut doc_b, mut body_b) = memo();
+        let mut i = 0;
+        for size in [
+            Vec2::new(420., 360.),
+            Vec2::new(1920., 1040.),
+            Vec2::new(733., 500.),
+            Vec2::new(1111., 640.),
+        ] {
+            let (mut a, mut b) = (egui::Rect::NOTHING, egui::Rect::NOTHING);
+            for _ in 0..3 {
+                a = frame(&old, &mut doc_a, &mut body_a, size, i).1;
+                b = frame(&new, &mut doc_b, &mut body_b, size, i).1;
+                i += 1;
+            }
+            for (x, y) in [
+                (a.left(), b.left()),
+                (a.top(), b.top()),
+                (a.right(), b.right()),
+                (a.bottom(), b.bottom()),
+            ] {
+                assert!((x - y).abs() <= 1., "{size:?}: {a:?} vs {b:?}");
+            }
+        }
+        assert_eq!(body_a, body_b);
+    }
+    /// Maximizing or resizing a memo with a table must not put a
+    /// table-sized glyph into the font atlas.
+    #[test]
+    fn resizing_a_memo_with_a_table_does_not_grow_the_font_atlas() {
+        let ctx = context(true);
+        let (mut doc, mut body) = memo();
+        for i in 0..3 {
+            frame(&ctx, &mut doc, &mut body, Vec2::new(420., 360.), i);
+        }
+        // Every glyph the memo uses is in the atlas now.
+        frame(&ctx, &mut doc, &mut body, Vec2::new(1920., 1040.), 3);
+        let before = ctx.fonts(|f| f.font_image_size());
+        for i in 4..40 {
+            frame(&ctx, &mut doc, &mut body, Vec2::new(500. + i as f32 * 30., 700.), i);
+        }
+        frame(&ctx, &mut doc, &mut body, Vec2::new(1920., 1040.), 40);
+        assert_eq!(ctx.fonts(|f| f.font_image_size()), before);
+        assert!(before[1] <= 512, "atlas {before:?}");
+    }
+    /// `cargo test --release maximize_frame_time -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn maximize_frame_time() {
+        for spacer in [false, true] {
+            let ctx = context(spacer);
+            let (mut doc, mut body) = memo();
+            for i in 0..4 {
+                frame(&ctx, &mut doc, &mut body, Vec2::new(420., 360.), i);
+            }
+            let (ms, _) = frame(&ctx, &mut doc, &mut body, Vec2::new(1920., 1040.), 4);
+            println!(
+                "spacer font {spacer}: maximize frame {ms:.2} ms, atlas {:?}",
+                ctx.fonts(|f| f.font_image_size())
+            );
+        }
     }
 }
