@@ -1258,6 +1258,7 @@ fn content_impl(
         .min((bottom - ui.cursor().top()).max(1.))
         .max(1.);
     let rows = (body_height / (doc.font_size * doc.zoom * 1.4)).clamp(1., 18.) as usize;
+    let previous_selection = doc.selection.clone();
     let mut output = egui::ScrollArea::vertical()
         .id_salt(id.with(("text_scroll", doc.active)))
         .max_height(body_height)
@@ -1316,6 +1317,21 @@ fn content_impl(
             output
         })
         .inner;
+    // TextEdit moves its caret on a secondary press. Keep the selected text
+    // available to the context menu's Cut and Copy commands.
+    if !previous_selection.is_empty()
+        && ui.input(|i| {
+            i.pointer.secondary_pressed()
+                && i.pointer
+                    .interact_pos()
+                    .is_some_and(|p| output.response.rect.contains(p))
+        })
+    {
+        output.state.cursor.set_char_range(Some(CCursorRange::two(
+            CCursor::new(previous_selection.start),
+            CCursor::new(previous_selection.end),
+        )));
+    }
     if let Some(cursor) = pending_cursor {
         output
             .state
