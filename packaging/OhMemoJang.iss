@@ -1,10 +1,10 @@
-; Per-user, offline Windows x64 UI preview installer.
+; Per-user, offline Windows x64 installer.
 ; Input is a strictly staged directory, never the source tree or user data.
 #ifndef AppVersion
-  #define AppVersion "0.3.0"
+  #define AppVersion "0.5.0"
 #endif
 #ifndef ReleaseLabel
-  #define ReleaseLabel "0.3.0-ui-preview.1"
+  #define ReleaseLabel "0.5.0"
 #endif
 #ifndef StageDir
   #define StageDir "..\dist\portable\OhMemoJang"
@@ -15,7 +15,7 @@
 
 [Setup]
 AppId={{36497726-D8EF-4514-9BF2-51367779F831}
-AppName=OhMemoJang UI Preview
+AppName=OhMemoJang
 AppVersion={#AppVersion}
 AppVerName=OhMemoJang {#ReleaseLabel}
 AppPublisher=OhMemoJang
@@ -32,7 +32,7 @@ Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayIcon={app}\OhMemoJang.exe
-UninstallDisplayName=OhMemoJang UI Preview
+UninstallDisplayName=OhMemoJang
 VersionInfoVersion={#AppVersion}
 InfoBeforeFile={#StageDir}\README.txt
 CloseApplications=force

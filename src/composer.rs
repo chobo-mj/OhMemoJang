@@ -5588,6 +5588,20 @@ mod inline_table_tests {
             });
         });
     }
+    #[test]
+    fn body_selection_survives_menu_copy_event() {
+        let ctx = egui::Context::default();
+        let mut doc = Document::default();
+        let mut body = "클립보드 ABC".to_owned();
+        doc.requested_selection = Some(0..body.chars().count());
+        ui_frame(&ctx, &mut doc, &mut body, vec![], 0.);
+        ui_frame(&ctx, &mut doc, &mut body, vec![], 0.2);
+        assert_eq!(doc.selection, 0..body.chars().count());
+        ui_frame(&ctx, &mut doc, &mut body, vec![egui::Event::Copy], 0.4);
+        assert_eq!(doc.selection, 0..body.chars().count());
+        assert_eq!(body, "클립보드 ABC");
+    }
+
     fn table_area(_ctx: &egui::Context) -> egui::Rect {
         LAST_TABLE_RECT
             .with(|r| r.get())
