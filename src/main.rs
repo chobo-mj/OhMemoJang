@@ -405,6 +405,28 @@ impl eframe::App for App {
         self.autosave(0., true);
     }
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        for action in self.tray.poll() {
+            match action {
+                tray::Action::Open => {
+                    self.main_open = true;
+                    ctx.send_viewport_cmd_to(
+                        main_viewport(),
+                        egui::ViewportCommand::Minimized(false),
+                    );
+                    ctx.send_viewport_cmd_to(main_viewport(), egui::ViewportCommand::Focus);
+                }
+                tray::Action::NewSticker => {
+                    self.new_sticker();
+                }
+                tray::Action::Quit => {
+                    // `ViewportCommand::Close` only takes effect on the root
+                    // viewport in response to a real OS close request, so it
+                    // cannot end the program by itself here: exit directly.
+                    self.autosave(0., true);
+                    std::process::exit(0);
+                }
+            }
+        }
         self.theme(ctx);
         self.finish_sticker_drag(ctx);
         self.clipboard.poll(ctx);
@@ -441,28 +463,6 @@ impl eframe::App for App {
                         egui::ViewportId::from_hash_of("calendar"),
                         egui::ViewportCommand::Focus,
                     );
-                }
-            }
-        }
-        for action in self.tray.poll() {
-            match action {
-                tray::Action::Open => {
-                    self.main_open = true;
-                    ctx.send_viewport_cmd_to(
-                        main_viewport(),
-                        egui::ViewportCommand::Minimized(false),
-                    );
-                    ctx.send_viewport_cmd_to(main_viewport(), egui::ViewportCommand::Focus);
-                }
-                tray::Action::NewSticker => {
-                    self.new_sticker();
-                }
-                tray::Action::Quit => {
-                    // `ViewportCommand::Close` only takes effect on the root
-                    // viewport in response to a real OS close request, so it
-                    // cannot end the program by itself here: exit directly.
-                    self.autosave(0., true);
-                    std::process::exit(0);
                 }
             }
         }

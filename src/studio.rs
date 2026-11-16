@@ -1692,7 +1692,9 @@ impl App {
             self.main_open = true;
             ctx.send_viewport_cmd_to(main_viewport(), egui::ViewportCommand::Focus);
         }
-        if ctx.input_mut(|v| v.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        // Leave Escape available for egui menu buttons, which close their own
+        // menu state after this header handles the sticker shortcuts.
+        if ctx.input(|v| v.key_pressed(egui::Key::Escape) && v.modifiers.is_none()) {
             if ctx.memory(|m| m.any_popup_open()) {
                 ctx.memory_mut(|m| m.close_popup());
                 return;

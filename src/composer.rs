@@ -401,10 +401,6 @@ struct BodyLayoutCache {
 /// One reversible step. Body text and every table share one ordered list,
 /// so Ctrl+Z walks back through what was done, in the order it was done.
 enum UndoKind {
-    Snapshot {
-        tab: usize,
-        value: Tab,
-    },
     /// The tab's text and formatting before an edit.
     Body {
         tab: usize,
@@ -412,11 +408,7 @@ enum UndoKind {
         spans: Vec<Span>,
     },
     /// A table as it was before a cell edit, paste, row/column change, merge ...
-    Table {
-        tab: usize,
-        bi: usize,
-        table: Table,
-    },
+    Table { tab: usize, bi: usize, table: Table },
     /// A table was pasted into the text: undo removes it again.
     TableInserted {
         tab: usize,
@@ -440,7 +432,7 @@ struct UndoEntry {
     /// When it was last extended (egui time): typing runs are one step.
     at: f64,
 }
-/// Undo only (there is no redo). A copy of a document starts with no history.
+/// Ordered undo/redo history. A copy of a document starts with no history.
 #[derive(Default)]
 pub struct UndoStack {
     entries: Vec<UndoEntry>,
@@ -619,20 +611,56 @@ impl Document {
             self.undo.entries.pop()?
         };
         let tab = match &e.kind {
-            UndoKind::Snapshot { tab, .. }
-            | UndoKind::Body { tab, .. }
+            UndoKind::Body { tab, .. }
             | UndoKind::Table { tab, .. }
             | UndoKind::TableInserted { tab, .. }
             | UndoKind::TableDeleted { tab, .. } => *tab,
+        };
+        let current = self.tabs.get(tab)?;
+        let inverse_kind = match &e.kind {
+            UndoKind::Body { .. } => UndoKind::Body {
+                tab,
+                text: current.body.clone(),
+                spans: current.spans.clone(),
+            },
+            UndoKind::Table { bi, .. } => {
+                let Block::Table(table) = current.blocks.get(*bi)? else {
+                    return None;
+                };
+                UndoKind::Table {
+                    tab,
+                    bi: *bi,
+                    table: table.clone(),
+                }
+            }
+            UndoKind::TableInserted { id, .. } => {
+                let bi = current
+                    .blocks
+                    .iter()
+                    .position(|b| matches!(b, Block::Table(t) if t.id == *id))?;
+                let Block::Table(table) = &current.blocks[bi] else {
+                    return None;
+                };
+                UndoKind::TableDeleted {
+                    tab,
+                    bi,
+                    table: table.clone(),
+                    text: current.body.clone(),
+                    spans: current.spans.clone(),
+                }
+            }
+            UndoKind::TableDeleted { table, .. } => UndoKind::TableInserted {
+                tab,
+                id: table.id,
+                text: current.body.clone(),
+                spans: current.spans.clone(),
+            },
         };
         let inverse = UndoEntry {
             seq: e.seq,
             label: e.label,
             at: f64::NEG_INFINITY,
-            kind: UndoKind::Snapshot {
-                tab,
-                value: self.tabs.get(tab)?.clone(),
-            },
+            kind: inverse_kind,
         };
         let label = format!(
             "{} #{} · {}",
@@ -658,11 +686,6 @@ impl Document {
             self.undo_focus = true;
         }
         match e.kind {
-            UndoKind::Snapshot { tab, value } => {
-                self.undo_cursor = Some(change_end(&self.tabs[tab].body, &value.body));
-                self.tabs[tab] = value;
-                self.active = tab;
-            }
             UndoKind::Body { tab, text, spans } => {
                 let t = self.tabs.get_mut(tab)?;
                 self.undo_cursor = Some(change_end(&t.body, &text));
@@ -914,8 +937,8 @@ fn content_impl(
         ui.memory_mut(|m| m.request_focus(id.with(("text", doc.active))));
         ui.input_mut(|i| i.events.extend(events));
     }
-    // Ctrl+Z: one ordered history for the body text and every table (redo is
-    // not offered). A cell being typed in reverts its own edit first.
+    // Body text and tables share undo/redo history. Active cell text editors
+    // handle their own typing history until the edit is committed.
     let probe = id.with(("text", doc.active));
     if ui.input_mut(|i| i.consume_key(Modifiers::CTRL, Key::Num0)) {
         doc.zoom = 1.;
@@ -999,6 +1022,15 @@ fn content_impl(
         }
     }
     let mut pending_cursor = doc.undo_cursor.take();
+    let menu_picture = ui.data_mut(|d| {
+        let picture = d.get_temp::<Picture>(id.with("menu_picture"));
+        d.remove::<Picture>(id.with("menu_picture"));
+        picture
+    });
+    if let Some(picture) = menu_picture {
+        pending_cursor = Some(doc.tabs[doc.active].insert_picture(doc.selection.clone(), picture));
+        ui.memory_mut(|m| m.request_focus(text_id));
+    }
     if let Some(r) = requested {
         let len = doc.tabs[doc.active].body.chars().count();
         let r = r.start.min(len)..r.end.min(len);
@@ -1399,7 +1431,10 @@ fn content_impl(
                 Ok(text) => ui.data_mut(|d| {
                     d.insert_temp(id.with("edit_menu_events"), vec![egui::Event::Paste(text)])
                 }),
-                Err(e) => doc.status = format!("클립보드 읽기 실패: {e}"),
+                Err(_) => match picture_from_clipboard(doc.image_scale, doc.image_fit) {
+                    Ok(picture) => ui.data_mut(|d| d.insert_temp(id.with("menu_picture"), picture)),
+                    Err(e) => doc.status = format!("클립보드 읽기 실패: {e}"),
+                },
             }
             ui.ctx().request_repaint();
             ui.close_menu();
@@ -3374,49 +3409,53 @@ fn table_widget(
             let layer = ui.layer_id();
             // Row borders: drag to set a row's height (kept as set, whatever the
             // content), double-click to let it follow its content again.
-            let mut row_drag = false;
+            let mut edge_pressed = false;
             #[cfg(test)]
             ROW_EDGES.with(|e| {
                 *e.borrow_mut() = (0..nr).map(|r| origin.y + geo.y[r] + geo.h[r]).collect()
             });
+            let row_key = gid.with("row_resize");
+            type RowResize = (usize, f32, f32, std::sync::Arc<Table>);
+            let pointer = ui.input(|i| i.pointer.clone());
             for r in 0..nr {
                 let edge = origin.y + geo.y[r] + geo.h[r];
                 let handle = Rect::from_min_max(
                     egui::pos2(rect.left(), edge - 2.5),
                     egui::pos2(rect.right(), edge + 3.5),
-                );
-                if !ui.clip_rect().intersects(handle) {
-                    continue;
-                }
-                let drag = ui
-                    .interact(handle, gid.with(("row_edge", r)), Sense::click_and_drag())
+                )
+                .intersect(ui.clip_rect());
+                let hit_pos = if pointer.primary_pressed() {
+                    pointer.press_origin()
+                } else {
+                    pointer.interact_pos()
+                };
+                let over = hit_pos
+                    .is_some_and(|p| handle.contains(p) && ctx.layer_id_at(p) == Some(layer));
+                let response = ui
+                    .interact(handle, gid.with(("row_edge", r)), Sense::click())
                     .on_hover_cursor(egui::CursorIcon::ResizeVertical)
                     .on_hover_text("드래그해서 행 높이 조절 · 더블클릭으로 내용에 맞춤");
-                let key = gid.with(("row_drag_start", r));
-                if drag.drag_started() {
-                    ctx.data_mut(|d| d.insert_temp(key, t.clone()));
-                }
-                if drag.dragged() {
-                    row_drag = true;
-                    let now = geo.h[r] + drag.drag_delta().y;
-                    t.row_manual[r] = (now / zoom).clamp(14., 800.);
-                }
-                if drag.drag_stopped() {
-                    if let Some(before) = ctx.data(|d| d.get_temp::<Table>(key)) {
-                        if before.row_manual != t.row_manual {
-                            cx.undo.push(
-                                "행 높이",
-                                UndoKind::Table {
-                                    tab,
-                                    bi,
-                                    table: before,
-                                },
-                                cx.now,
-                            );
-                        }
+                if over && pointer.primary_pressed() {
+                    edge_pressed = true;
+                    if let Some(s) = sel.as_mut() {
+                        tbl_commit(t, s, cx);
                     }
+                    ctx.data_mut(|d| {
+                        d.insert_temp(
+                            row_key,
+                            (
+                                r,
+                                pointer.press_origin().unwrap().y,
+                                geo.h[r] / zoom,
+                                std::sync::Arc::new(t.clone()),
+                            ),
+                        )
+                    });
+                    sel = Some(TSel::at(tab, bi, (r, 0)));
+                    ctx.memory_mut(|m| m.request_focus(gid));
                 }
-                if drag.double_clicked() && t.row_manual[r] > 0. {
+                if response.double_clicked() && t.row_manual[r] > 0. {
+                    ctx.data_mut(|d| d.remove::<RowResize>(row_key));
                     let before = t.clone();
                     t.row_manual[r] = 0.;
                     cx.undo.push(
@@ -3429,53 +3468,85 @@ fn table_widget(
                         cx.now,
                     );
                 }
-                if drag.hovered() || drag.dragged() {
-                    ui.painter().line_segment(
-                        [
-                            egui::pos2(rect.left(), edge + 0.5),
-                            egui::pos2(rect.right(), edge + 0.5),
-                        ],
-                        Stroke::new(2.0_f32, crate::ui::ACCENT.gamma_multiply(0.7)),
-                    );
+            }
+            if let Some((r, start, height, before)) = ctx.data(|d| d.get_temp::<RowResize>(row_key))
+            {
+                if let Some(pos) = pointer.interact_pos() {
+                    if pos.y != start {
+                        t.row_manual[r] = (height + (pos.y - start) / zoom).clamp(14., 800.);
+                    }
+                }
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+                if !pointer.primary_down() {
+                    ctx.data_mut(|d| d.remove::<RowResize>(row_key));
+                    if before.row_manual != t.row_manual {
+                        cx.undo.push(
+                            "행 높이",
+                            UndoKind::Table {
+                                tab,
+                                bi,
+                                table: (*before).clone(),
+                            },
+                            cx.now,
+                        );
+                    }
                 }
             }
+            let resize_key = gid.with("column_resize");
+            type ColumnResize = (usize, f32, std::sync::Arc<Table>);
+            let pointer = ui.input(|i| i.pointer.clone());
             for c in 0..nc {
                 let edge = origin.x + col_x[c] + widths[c];
                 let handle = Rect::from_min_max(
                     egui::pos2(edge - 3., rect.top()),
                     egui::pos2(edge + 3., rect.bottom()),
-                );
-                if !ui.clip_rect().intersects(handle) {
-                    continue;
+                )
+                .intersect(ui.clip_rect());
+                let hit_pos = if pointer.primary_pressed() {
+                    pointer.press_origin()
+                } else {
+                    pointer.interact_pos()
+                };
+                let over = hit_pos
+                    .is_some_and(|p| handle.contains(p) && ctx.layer_id_at(p) == Some(layer));
+                if over {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
                 }
-                let drag = ui
-                    .interact(handle, gid.with(("col_edge", c)), Sense::click_and_drag())
-                    .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
-                let key = gid.with(("col_drag_start", c));
-                if drag.drag_started() {
-                    ctx.data_mut(|d| d.insert_temp(key, t.clone()));
+                if over && pointer.primary_pressed() {
+                    edge_pressed = true;
+                    if let Some(s) = sel.as_mut() {
+                        tbl_commit(t, s, cx);
+                    }
+                    let start = pointer.press_origin().unwrap().x;
+                    ctx.data_mut(|d| {
+                        d.insert_temp(resize_key, (c, start, std::sync::Arc::new(t.clone())))
+                    });
+                    sel = Some(TSel::at(tab, bi, (0, c)));
+                    ctx.memory_mut(|m| m.request_focus(gid));
+                    break;
                 }
-                if drag.dragged() {
+            }
+            if let Some((c, start, before)) = ctx.data(|d| d.get_temp::<ColumnResize>(resize_key)) {
+                if let Some(pos) = pointer.interact_pos() {
                     t.col_widths[c] =
-                        (t.col_widths[c] + drag.drag_delta().x / zoom).clamp(24., 2000.);
+                        (before.col_widths[c] + (pos.x - start) / zoom).clamp(24., 2000.);
                 }
-                if drag.drag_stopped() {
-                    if let Some(before) = ctx.data(|d| d.get_temp::<Table>(key)) {
-                        if before.col_widths != t.col_widths {
-                            cx.undo.push(
-                                "열 너비",
-                                UndoKind::Table {
-                                    tab,
-                                    bi,
-                                    table: before,
-                                },
-                                cx.now,
-                            );
-                        }
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                if !pointer.primary_down() {
+                    ctx.data_mut(|d| d.remove::<ColumnResize>(resize_key));
+                    if before.col_widths != t.col_widths {
+                        cx.undo.push(
+                            "열 너비",
+                            UndoKind::Table {
+                                tab,
+                                bi,
+                                table: (*before).clone(),
+                            },
+                            cx.now,
+                        );
                     }
                 }
             }
-            let _ = row_drag;
             let (pressed, down, pos, mods) = ui.input(|i| {
                 (
                     i.pointer.primary_pressed(),
@@ -3485,7 +3556,7 @@ fn table_widget(
                 )
             });
             // ---- mouse: select, extend, drag a range
-            if pressed {
+            if pressed && !edge_pressed {
                 if let Some(p) = pos.filter(|p| {
                     rect.contains(*p)
                         && ui.clip_rect().contains(*p)
@@ -6270,6 +6341,46 @@ mod inline_table_tests {
             "the toolbar is at the mouse: toolbar {tool:?}, mouse {at:?}"
         );
     }
+    #[test]
+    fn column_drag_resizes_and_round_trips_history() {
+        let ctx = egui::Context::default();
+        let mut doc = Document::default();
+        doc.tabs[0].insert_table(0..0, Table::new(2, 2));
+        let mut body = doc.tabs[0].body.clone();
+        let mut time = 0.;
+        let mut run = |doc: &mut Document, body: &mut String, events| {
+            time += 0.2;
+            ui_frame(&ctx, doc, body, events, time);
+        };
+        for _ in 0..4 {
+            run(&mut doc, &mut body, vec![]);
+        }
+        let area = table_area(&ctx);
+        let from = area.min + egui::vec2(120., 15.);
+        let to = from + egui::vec2(45., 0.);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            pressed,
+            button: egui::PointerButton::Primary,
+            modifiers: Modifiers::NONE,
+        };
+        run(&mut doc, &mut body, vec![egui::Event::PointerMoved(from)]);
+        run(&mut doc, &mut body, vec![button(from, true)]);
+        run(&mut doc, &mut body, vec![egui::Event::PointerMoved(to)]);
+        run(&mut doc, &mut body, vec![]);
+        run(&mut doc, &mut body, vec![button(to, false)]);
+        let width = |doc: &Document| match &doc.tabs[0].blocks[0] {
+            Block::Table(t) => t.col_widths[0],
+            _ => unreachable!(),
+        };
+        assert!((width(&doc) - 165.).abs() < 1., "width {}", width(&doc));
+        assert_eq!(doc.undo_steps(), 1);
+        doc.undo().unwrap();
+        assert_eq!(width(&doc), 120.);
+        doc.redo().unwrap();
+        assert!((width(&doc) - 165.).abs() < 1.);
+    }
+
     #[test]
     fn a_row_grows_with_line_breaks_and_keeps_the_height_the_user_drags_it_to() {
         let ctx = egui::Context::default();

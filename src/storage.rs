@@ -1027,12 +1027,12 @@ impl App {
         }
         let meta = self.meta(&dir);
         // Only memos handed out for changing since the last save are looked
-        // at (all of them on exit, after a failed write or a new folder), and
+        // at (all of them after a failed write or a new folder), and
         // only a fingerprint of each memo is kept, not a second copy.
         let count = self.data.notes.len();
         let touched = self.data.notes.take_touched();
         let look: Vec<usize> = match touched {
-            Some(t) if !force && !std::mem::take(&mut self.saving.full) => t,
+            Some(t) if !std::mem::take(&mut self.saving.full) => t,
             _ => {
                 self.saving.full = false;
                 (0..count).collect()
@@ -1564,6 +1564,23 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ohmemojang-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
+    }
+
+    #[test]
+    fn forced_save_keeps_last_edit_without_input_or_timer() {
+        let dir = temp(line!());
+        let day = NaiveDate::from_ymd_opt(2026, 11, 16).unwrap();
+        let mut app = App::sample(day);
+        app.prefs.data_path = dir.display().to_string();
+        app.autosave(0., true);
+        app.data.notes[0].title = "종료 직전 수정".into();
+        INPUT.store(false, Ordering::Relaxed);
+        app.autosave(0., true);
+        assert_eq!(
+            read(&dir).unwrap().unwrap().notes[0].title,
+            "종료 직전 수정"
+        );
+        assert!(app.saving.error.is_empty());
     }
 
     #[test]
