@@ -527,7 +527,7 @@ impl App {
                 ui.add_space(4.);
                 ui::hint(
                     ui,
-                    "탭 안의 폴더와 메모 분류는 그대로 남지만, 탭 자체는 목록에서 사라집니다.",
+                    "탭 안의 메모는 모두 휴지통으로 이동합니다. 휴지통에서 ‘탭이름/’ 으로 복구할 수 있습니다.",
                 );
                 (confirmed, cancel) = ui::dialog_buttons(ui, "삭제", "취소");
             },
@@ -539,7 +539,7 @@ impl App {
         }
     }
     fn confirm_wiki_tab_delete(&mut self, t: usize) {
-        self.extra.deleted_wiki_tabs.insert(t);
+        self.trash_wiki_tab(t);
         if self.extra.wiki_tab == t {
             self.extra.wiki_tab =
                 next_wiki_tab(self.extra.wiki_tabs.len(), &self.extra.deleted_wiki_tabs);

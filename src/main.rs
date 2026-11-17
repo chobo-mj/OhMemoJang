@@ -26,6 +26,7 @@ mod storage;
 mod studio;
 mod system;
 mod table_edit;
+mod trash_groups;
 mod tray;
 mod ui;
 mod views;
@@ -134,6 +135,8 @@ struct App {
     shortcuts: [String; 3],
     hotkey_status: String,
 }
+/// Side of an icon button in the icon-only sidebar.
+const COMPACT_ICON: f32 = 38.;
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let mut fonts = egui::FontDefinitions::default();
@@ -886,8 +889,9 @@ impl App {
                 tex
             });
         ui.vertical_centered(|ui| {
-            ui.image((texture.id(), Vec2::splat(36.)));
+            ui.image((texture.id(), Vec2::splat(COMPACT_ICON + 8.)));
             ui.add_space(12.);
+            ui.spacing_mut().interact_size = Vec2::splat(COMPACT_ICON);
             let search = ui.menu_button("   ", |ui| {
                 let r = ui::search_field(ui, &mut self.search, "compact_search", "검색", 220.);
                 if r.changed() {
@@ -897,42 +901,97 @@ impl App {
             });
             icons::paint_icon(
                 ui.painter(),
-                search.response.rect.shrink(5.),
+                search.response.rect.shrink(COMPACT_ICON * 0.2),
                 icons::Icon::Search,
                 ui::t(ui).ink,
             );
             search.response.on_hover_text("검색");
-            if icons::icon_button(ui, icons::Icon::PlusCircle, "빠른 메모").clicked() {
+            if icons::icon_button_sized(ui, icons::Icon::PlusCircle, "빠른 메모", COMPACT_ICON)
+                .clicked()
+            {
                 self.new_sticker();
             }
             for (page, name, icon) in PAGES {
                 if !self.prefs.hidden_pages.contains(&page)
-                    && icons::toggle_icon(ui, icon, name, self.page == page).clicked()
+                    && icons::toggle_icon_sized(ui, icon, name, self.page == page, COMPACT_ICON)
+                        .clicked()
                 {
                     self.page = page;
                 }
             }
-            ui.add_space(12.);
-            if icons::toggle_icon(ui, icons::Icon::Settings, "설정", self.settings).clicked() {
+            ui.add_space(6.);
+            self.compact_projects(ui);
+            ui.add_space(6.);
+            if icons::toggle_icon_sized(
+                ui,
+                icons::Icon::Settings,
+                "설정",
+                self.settings,
+                COMPACT_ICON,
+            )
+            .clicked()
+            {
                 self.settings = !self.settings;
             }
         });
+    }
+    /// The narrow sidebar has no room for the project list: a ▶ button opens
+    /// a popup to choose the project instead.
+    fn compact_projects(&mut self, ui: &mut egui::Ui) {
+        let active = self.project_filter.is_some();
+        let button = ui.menu_button("   ", |ui| {
+            ui.set_min_width(180.);
+            let mut any = false;
+            for (i, p) in self.data.projects.iter().enumerate() {
+                if self.extra.hidden_projects.contains(&i)
+                    || self.extra.deleted_projects.contains(&i)
+                {
+                    continue;
+                }
+                any = true;
+                let selected = self.project_filter == Some(i);
+                if studio::project_button(ui, p, selected).clicked() {
+                    self.project_filter = if selected { None } else { Some(i) };
+                    if !matches!(self.page, 0 | 2 | 3) {
+                        self.page = 0;
+                    }
+                    ui.close_menu();
+                }
+            }
+            if !any {
+                ui::hint(ui, "본문 첫 줄에 #이름 을 입력하면 생성됩니다");
+            }
+            ui.separator();
+            if ui.button("프로젝트 관리").clicked() {
+                self.extra.project_manager = true;
+                ui.close_menu();
+            }
+        });
+        let rect = button.response.rect.shrink(COMPACT_ICON * 0.28);
+        let ink = if active {
+            ui::t(ui).ink
+        } else {
+            ui::t(ui).muted
+        };
+        let (a, b, c) = (
+            rect.left_top(),
+            rect.left_bottom(),
+            egui::pos2(rect.right(), rect.center().y),
+        );
+        ui.painter().add(egui::Shape::convex_polygon(
+            vec![a, b, c],
+            ink,
+            egui::Stroke::NONE,
+        ));
+        button.response.on_hover_text("프로젝트");
     }
     fn sidebar_ui(&mut self, ui: &mut egui::Ui) {
         if ui.available_width() < 160. {
             self.compact_sidebar(ui);
             return;
         }
-        ui.horizontal(|ui| {
-            ui::banner(
-                ui,
-                (ui.available_width() - 28. - ui.spacing().item_spacing.x).max(16.),
-            );
-            if icons::icon_button(ui, icons::Icon::Sidebar, "사이드바 접기").clicked() {
-                self.sidebar = false;
-            }
-        });
-        ui.add_space(12.);
+        ui::banner(ui, ui.available_width().max(16.));
+        ui.add_space(10.);
         ui.horizontal(|ui| {
             let width = ui.available_width() - 28. - ui.spacing().item_spacing.x;
             let r = ui::search_field(ui, &mut self.search, "global_search", "검색", width);
@@ -954,12 +1013,20 @@ impl App {
             }
         });
         ui.add_space(8.);
-        if studio::nav_button(ui, "빠른 메모", false, icons::Icon::PlusCircle, None, true)
-            .on_hover_text("새 스티커 메모")
-            .clicked()
-        {
-            self.new_sticker();
-        }
+        ui.horizontal(|ui| {
+            let width = (ui.available_width() - 28. - ui.spacing().item_spacing.x).max(16.);
+            let quick = ui
+                .allocate_ui(Vec2::new(width, 30.), |ui| {
+                    studio::nav_button(ui, "빠른 메모", false, icons::Icon::PlusCircle, None, true)
+                })
+                .inner;
+            if quick.on_hover_text("새 스티커 메모").clicked() {
+                self.new_sticker();
+            }
+            if icons::icon_button(ui, icons::Icon::Sidebar, "사이드바 접기").clicked() {
+                self.sidebar = false;
+            }
+        });
         ui.add_space(6.);
         let today = Local::now().date_naive();
         let mut cache = std::mem::take(&mut self.lists);

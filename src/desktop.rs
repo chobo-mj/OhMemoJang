@@ -438,6 +438,7 @@ impl App {
         if !self.data.notes[i].purged {
             self.data.notes[i].deleted = false;
             self.desktop.deleted_at.remove(&i);
+            self.revive_containers(i);
         }
     }
     pub fn request_purge(&mut self, i: usize) {

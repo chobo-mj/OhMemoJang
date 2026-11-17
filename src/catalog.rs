@@ -1,4 +1,5 @@
 //! Folder organization, detailed note lists and the in-memory recycle bin.
+use crate::trash_groups::Group;
 use crate::*;
 use egui::{Sense, Stroke};
 use std::collections::HashMap;
@@ -60,6 +61,8 @@ pub struct Catalog {
     find_focus: bool,
     replace_message: String,
     purge_tab: Option<(usize, usize)>,
+    /// Groups of the recycle bin that are opened.
+    trash_open: std::collections::HashSet<Group>,
     drag_sources: Vec<(egui::Rect, FolderDrag)>,
     drag_targets: Vec<(egui::Rect, Option<usize>)>,
     dragging: Option<(FolderDrag, egui::Pos2)>,
@@ -121,6 +124,10 @@ const BODY_MIN_WIDTH: f32 = 60.;
 enum TableRow {
     Note(usize, Option<NaiveDate>),
     Tab(usize, usize),
+    /// A deleted wiki tab or folder with its memos, in the recycle bin.
+    Group(Group),
+    /// A memo listed below its group.
+    Child(usize, Group),
 }
 
 enum TableCommand {
@@ -133,6 +140,8 @@ enum TableCommand {
     Purge(usize),
     RestoreTab(usize, usize),
     PurgeTab(usize, usize),
+    RestoreGroup(Group),
+    ToggleGroup(Group),
 }
 
 fn column_shown(cat: &Catalog, column: usize) -> bool {
@@ -287,7 +296,7 @@ impl Catalog {
         }
     }
 
-    fn remove_folder(&mut self, f: usize) {
+    pub fn remove_folder(&mut self, f: usize) {
         let parent = self.folders[f].parent;
         self.folders[f].deleted = true;
         for folder in &mut self.folders {
@@ -889,15 +898,23 @@ impl App {
                             previous = day;
                         }
                     }
-                    let key = match row {
-                        TableRow::Note(i, d) => {
-                            (0, i, d.map(|d| d.num_days_from_ce()).unwrap_or(0))
-                        }
-                        TableRow::Tab(i, t) => (1, i, t as i32),
+                    let (key, note) = match row {
+                        TableRow::Note(i, d) => (
+                            (0, i, d.map(|d| d.num_days_from_ce()).unwrap_or(0)),
+                            Some(i),
+                        ),
+                        TableRow::Tab(i, t) => ((1, i, t as i32), Some(i)),
+                        TableRow::Group(Group::Wiki(t)) => ((2, t, 0), None),
+                        TableRow::Group(Group::Folder(f)) => ((3, f, 0), None),
+                        TableRow::Child(i, _) => ((4, i, 0), Some(i)),
                     };
-                    let selected = self.catalog.selected == Some(key.1);
+                    let selected = note.is_some() && self.catalog.selected == note;
                     crate::lists::lazy_row(ui, key, 36., selected, |ui| {
-                        self.catalog_table_row(ui, row, at, open_editor, trash, &mut pending)
+                        if let TableRow::Group(g) = row {
+                            self.catalog_group_row(ui, g, &mut pending);
+                        } else {
+                            self.catalog_table_row(ui, row, at, open_editor, trash, &mut pending)
+                        }
                     });
                 }
             });
@@ -919,6 +936,12 @@ impl App {
                     self.catalog_restore_tab(i, t);
                 }
                 TableCommand::PurgeTab(i, t) => self.catalog.purge_tab = Some((i, t)),
+                TableCommand::RestoreGroup(g) => self.restore_group(g),
+                TableCommand::ToggleGroup(g) => {
+                    if !self.catalog.trash_open.remove(&g) {
+                        self.catalog.trash_open.insert(g);
+                    }
+                }
             }
         }
     }
@@ -935,6 +958,8 @@ impl App {
         let (i, day, tab) = match row {
             TableRow::Note(i, d) => (i, d, None),
             TableRow::Tab(i, t) => (i, self.data.notes[i].date, Some(t)),
+            TableRow::Child(i, _) => (i, self.data.notes[i].date, None),
+            TableRow::Group(_) => return,
         };
         let n = &self.data.notes[i];
         let title = if let Some(t) = tab {
@@ -942,9 +967,14 @@ impl App {
                 return;
             };
             format!("{} - {}", n.title, t.title)
+        } else if let TableRow::Child(_, g) = row {
+            format!("      {}", self.group_member_title(g, i))
+        } else if trash {
+            self.bin_prefix(i).unwrap_or_else(|| n.title.clone())
         } else {
             n.title.clone()
         };
+        let n = &self.data.notes[i];
         let body = if n.locked {
             "잠긴 메모".into()
         } else if let Some(t) = tab {
@@ -1054,6 +1084,18 @@ impl App {
                     self.catalog_note_response(&mut c, &r, i, day, open_editor);
                 } else if r.clicked() {
                     self.catalog_select(&c, i, day);
+                }
+                if trash {
+                    r.context_menu(|ui| {
+                        if ui.button("복구").clicked() {
+                            pending.push(if let Some(t) = tab {
+                                TableCommand::RestoreTab(i, t)
+                            } else {
+                                TableCommand::Restore(i)
+                            });
+                            ui.close_menu();
+                        }
+                    });
                 }
             }
             {
@@ -1193,6 +1235,76 @@ impl App {
                 ui.scroll_to_rect(target, Some(egui::Align::Center));
             }
             let _ = response;
+        });
+    }
+
+    /// A deleted wiki tab or folder in the bin: "이름/", opened like a folder
+    /// to list its memos. Restoring it restores everything in it.
+    fn catalog_group_row(&mut self, ui: &mut egui::Ui, g: Group, pending: &mut Vec<TableCommand>) {
+        let name = self.group_name(g);
+        let count = self.group_members(g).len();
+        let open = self.catalog.trash_open.contains(&g);
+        let height = match self.desktop.row_spacing {
+            0 => 34.,
+            2 => 52.,
+            _ => 42.,
+        };
+        ui.push_id(("trash_group", g), |ui| {
+            let (rect, row) = ui.allocate_exact_size(
+                Vec2::new(self.catalog.table_width.max(TABLE_WIDTH), height),
+                Sense::click(),
+            );
+            let fill = if row.hovered() {
+                ui::t(ui).hover.gamma_multiply(0.6)
+            } else {
+                ui::t(ui).hover.gamma_multiply(0.3)
+            };
+            ui.painter().rect_filled(rect, 6., fill);
+            let cells = table_cells(rect, &self.catalog);
+            let mut restore = false;
+            let mut menu = |ui: &mut egui::Ui| {
+                if ui.button("복구").clicked() {
+                    restore = true;
+                    ui.close_menu();
+                }
+            };
+            row.context_menu(&mut menu);
+            if row.clicked() {
+                pending.push(TableCommand::ToggleGroup(g));
+            }
+            {
+                let mut c = table_cell(ui, cells[0], "group_restore");
+                if action(&mut c, Action::Restore, "탭·폴더와 메모 전체 복구", false)
+                    .on_hover_text("탭·폴더와 메모 전체 복구")
+                    .clicked()
+                {
+                    pending.push(TableCommand::RestoreGroup(g));
+                }
+            }
+            {
+                let mut c = table_cell(ui, cells[2], "group_title");
+                let r = c.add(
+                    egui::Label::new(
+                        RichText::new(format!("{} {name}/", if open { "▾" } else { "▸" })).strong(),
+                    )
+                    .truncate()
+                    .sense(Sense::click()),
+                );
+                if r.clicked() {
+                    pending.push(TableCommand::ToggleGroup(g));
+                }
+                r.context_menu(&mut menu);
+            }
+            if restore {
+                pending.push(TableCommand::RestoreGroup(g));
+            }
+            {
+                let mut c = table_cell(ui, cells[3], "group_count");
+                c.add(
+                    egui::Label::new(RichText::new(format!("메모 {count}개")).color(MUTED))
+                        .truncate(),
+                );
+            }
         });
     }
 
@@ -1464,6 +1576,7 @@ impl App {
         }
         let selected = self.catalog.folder_selected == Some(f);
         let mut remove = false;
+        let mut remove_all = false;
         let inner = if self.catalog.rename == Some(f) {
             ui.horizontal(|ui| {
                 let r = ui.add(
@@ -1569,6 +1682,10 @@ impl App {
                     remove = true;
                     ui.close_menu();
                 }
+                if ui.button("폴더 삭제 · 메모 삭제").clicked() {
+                    remove_all = true;
+                    ui.close_menu();
+                }
             });
             r
         };
@@ -1576,6 +1693,10 @@ impl App {
         self.catalog_folder_drop(ui, &inner.response, Some(f));
         if remove {
             self.catalog.remove_folder(f);
+            return;
+        }
+        if remove_all {
+            self.trash_catalog_folder_with_notes(f);
             return;
         }
         if self.catalog.folders[f].open {
@@ -1742,14 +1863,35 @@ impl App {
             "삭제한 메모와 본문 탭을 복원하거나 영구 삭제합니다 · 삭제한 메모는 설정의 보관 기간이 지나면 자동으로 지워집니다",
         );
         ui.add_space(10.);
-        let notes: Vec<_> = self
+        let groups = self.trash_groups();
+        let grouped: std::collections::HashSet<usize> =
+            groups.iter().flat_map(|&g| self.group_members(g)).collect();
+        let mut group_rows = vec![];
+        for &g in &groups {
+            group_rows.push(TableRow::Group(g));
+            if self.catalog.trash_open.contains(&g) {
+                group_rows.extend(
+                    self.group_members(g)
+                        .into_iter()
+                        .map(|i| TableRow::Child(i, g)),
+                );
+            }
+        }
+        let flat: Vec<_> = self
             .data
             .notes
             .iter()
             .enumerate()
-            .filter(|(_, n)| n.deleted && !n.purged)
+            .filter(|(i, n)| n.deleted && !n.purged && !grouped.contains(i))
             .map(|(i, n)| TableRow::Note(i, n.date))
             .collect();
+        let notes: Vec<_> = group_rows.into_iter().chain(flat).collect();
+        let note_count = self
+            .data
+            .notes
+            .iter()
+            .filter(|n| n.deleted && !n.purged)
+            .count();
         let tabs: Vec<_> = self
             .data
             .notes
@@ -1762,7 +1904,7 @@ impl App {
             ui,
             crate::icons::Icon::Trash,
             "휴지통",
-            Some(notes.len() + tabs.len()),
+            Some(note_count + tabs.len()),
         );
         let rows: Vec<_> = notes.into_iter().chain(tabs).collect();
         if rows.is_empty() {

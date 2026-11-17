@@ -56,14 +56,18 @@ pub enum Icon {
 
 /// An icon-only control with a consistent hit area, keyboard focus and a spoken label.
 pub fn icon_button(ui: &mut Ui, icon: Icon, tooltip: &str) -> Response {
-    icon_button_sense(ui, icon, tooltip, Sense::click())
+    icon_button_sense(ui, icon, tooltip, Sense::click(), 28.0)
+}
+/// `icon_button` in a `side` px square, for the icon-only sidebar.
+pub fn icon_button_sized(ui: &mut Ui, icon: Icon, tooltip: &str, side: f32) -> Response {
+    icon_button_sense(ui, icon, tooltip, Sense::click(), side)
 }
 /// Like `icon_button`, and it can also be dragged.
 pub fn icon_button_drag(ui: &mut Ui, icon: Icon, tooltip: &str) -> Response {
-    icon_button_sense(ui, icon, tooltip, Sense::click_and_drag())
+    icon_button_sense(ui, icon, tooltip, Sense::click_and_drag(), 28.0)
 }
-fn icon_button_sense(ui: &mut Ui, icon: Icon, tooltip: &str, sense: Sense) -> Response {
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(28.0), sense);
+fn icon_button_sense(ui: &mut Ui, icon: Icon, tooltip: &str, sense: Sense, side: f32) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(side), sense);
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, ui.is_enabled(), tooltip));
     if response.hovered() || response.has_focus() {
         let fill = if ui.visuals().dark_mode {
@@ -88,7 +92,7 @@ fn icon_button_sense(ui: &mut Ui, icon: Icon, tooltip: &str, sense: Sense) -> Re
     } else {
         ui.visuals().weak_text_color()
     };
-    paint_icon(ui.painter(), rect.shrink(5.5), icon, color);
+    paint_icon(ui.painter(), rect.shrink(side * 0.2), icon, color);
     response
         .on_hover_cursor(if ui.is_enabled() {
             CursorIcon::PointingHand
@@ -100,7 +104,11 @@ fn icon_button_sense(ui: &mut Ui, icon: Icon, tooltip: &str, sense: Sense) -> Re
 
 /// Icon button that shows a persistent "on" state.
 pub fn toggle_icon(ui: &mut Ui, icon: Icon, tooltip: &str, on: bool) -> Response {
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(28.0), Sense::click());
+    toggle_icon_sized(ui, icon, tooltip, on, 28.0)
+}
+/// `toggle_icon` in a `side` px square, for the icon-only sidebar.
+pub fn toggle_icon_sized(ui: &mut Ui, icon: Icon, tooltip: &str, on: bool, side: f32) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(side), Sense::click());
     response.widget_info(|| WidgetInfo::selected(WidgetType::Button, true, on, tooltip));
     if on {
         ui.painter()
@@ -123,7 +131,7 @@ pub fn toggle_icon(ui: &mut Ui, icon: Icon, tooltip: &str, on: bool) -> Response
             .text_color()
             .gamma_multiply(if response.hovered() { 1.0 } else { 0.7 })
     };
-    paint_icon(ui.painter(), rect.shrink(5.5), icon, color);
+    paint_icon(ui.painter(), rect.shrink(side * 0.2), icon, color);
     response
         .on_hover_cursor(CursorIcon::PointingHand)
         .on_hover_text(tooltip)
