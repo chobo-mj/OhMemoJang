@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing release tag, e.g. v0.5.0'
+        description: 'Existing release tag, e.g. v0.6.0'
         required: true
-        default: v0.5.0
+        default: v0.6.0
 
 permissions:
   contents: read
@@ -255,6 +255,11 @@ jobs:
           이 배포는 서명되지 않았습니다. 사내 실행·반입 정책에 따라 사용하세요.
           빌드 원본: $env:SOURCE_COMMIT
           "@ | Set-Content -LiteralPath 'dist/RELEASE_NOTES.md' -Encoding utf8
+          $versionNotes = "docs/releases/$env:APP_VERSION.md"
+          if (Test-Path -LiteralPath $versionNotes) {
+            Get-Content -LiteralPath $versionNotes -Raw -Encoding utf8 | Set-Content -LiteralPath 'dist/RELEASE_NOTES.md' -Encoding utf8
+            "`n빌드 원본: $env:SOURCE_COMMIT" | Add-Content -LiteralPath 'dist/RELEASE_NOTES.md' -Encoding utf8
+          }
 
       - uses: actions/upload-artifact@v4
         with:

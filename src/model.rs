@@ -1,5 +1,31 @@
 use chrono::{DateTime, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime};
 use eframe::egui::Vec2;
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+    #[test]
+    fn deadline_uses_end_date_and_completes_as_one_task() {
+        let day = NaiveDate::from_ymd_opt(2026, 11, 17).unwrap();
+        let mut w = Workspace::sample(day);
+        let n = &mut w.notes[0];
+        n.deadline = true;
+        n.set_span(
+            day.and_hms_opt(9, 0, 0).unwrap(),
+            (day + Duration::days(4)).and_hms_opt(18, 0, 0).unwrap(),
+        );
+        assert_eq!(n.deadline_date(), Some(day + Duration::days(4)));
+        assert!(!n.occurs(day));
+        assert!(n.occurs(day + Duration::days(4)));
+        assert_eq!(n.dday(day), "D-4");
+        assert_eq!(n.dday(day + Duration::days(4)), "D-day");
+        assert_eq!(n.dday(day + Duration::days(5)), "D+1");
+        w.complete(0, true, Local::now());
+        assert!(w.notes[0].done_on(Some(day)));
+        w.notes[0].clear_schedule();
+        assert_eq!(w.notes[0].date, None);
+        assert!(w.notes[0].done);
+    }
+}
 #[derive(Clone)]
 pub struct Note {
     pub title: String,
@@ -9,6 +35,7 @@ pub struct Note {
     pub locked: bool,
     pub purged: bool,
     pub date: Option<NaiveDate>,
+    pub deadline: bool,
     pub duration: u16,
     pub end_time: Option<NaiveTime>,
     pub occurrence_completed: std::collections::BTreeMap<NaiveDate, NaiveDateTime>,
@@ -48,6 +75,7 @@ impl Note {
             locked: false,
             purged: false,
             date,
+            deadline: false,
             duration: 1,
             end_time: None,
             occurrence_completed: Default::default(),
@@ -78,6 +106,30 @@ impl Note {
     }
 }
 impl Note {
+    pub fn deadline_date(&self) -> Option<NaiveDate> {
+        self.deadline
+            .then(|| {
+                self.date
+                    .map(|d| d + Duration::days(i64::from(self.duration.max(1)) - 1))
+            })
+            .flatten()
+    }
+    pub fn dday(&self, today: NaiveDate) -> String {
+        match self.deadline_date().map(|d| (d - today).num_days()) {
+            Some(0) => "D-day".into(),
+            Some(n) if n > 0 => format!("D-{n}"),
+            Some(n) => format!("D+{}", -n),
+            None => String::new(),
+        }
+    }
+    pub fn clear_schedule(&mut self) {
+        self.date = None;
+        self.deadline = false;
+        self.duration = 1;
+        self.end_time = None;
+        self.repeat = Default::default();
+        self.recurring = false;
+    }
     /// Update an explicit schedule as one operation. Completion timestamps record
     /// when work finished; moving a schedule only moves its occurrence date keys.
     pub fn set_span(&mut self, first: NaiveDateTime, last: NaiveDateTime) {
@@ -135,6 +187,9 @@ impl Note {
         }
     }
     pub fn days(&self) -> Vec<NaiveDate> {
+        if let Some(end) = self.deadline_date() {
+            return vec![end];
+        }
         self.date
             .map(|d| {
                 (0..self.duration.max(1))
@@ -144,6 +199,9 @@ impl Note {
             .unwrap_or_default()
     }
     pub fn occurs(&self, d: NaiveDate) -> bool {
+        if let Some(end) = self.deadline_date() {
+            return d == end || (!self.repeat.is_none() && self.repeat.matches(end, d));
+        }
         self.date.is_some_and(|start| {
             let len = self.duration.max(1) as i64;
             (d >= start && d < start + Duration::days(len))
@@ -152,13 +210,16 @@ impl Note {
         })
     }
     pub fn done_on(&self, d: Option<NaiveDate>) -> bool {
-        if self.duration > 1 && self.date.is_some() {
+        if self.duration > 1 && self.date.is_some() && !self.deadline {
             d.is_some_and(|d| self.occurrence_completed.contains_key(&d))
         } else {
             self.done
         }
     }
     pub fn refresh_done(&mut self) {
+        if self.deadline {
+            return;
+        }
         let Some(start) = self.date else {
             return;
         };
@@ -285,7 +346,7 @@ impl Workspace {
     }
     pub fn complete(&mut self, i: usize, done: bool, now: DateTime<Local>) {
         let n = &mut self.notes[i];
-        if n.duration > 1 && n.date.is_some() {
+        if n.duration > 1 && n.date.is_some() && !n.deadline {
             for d in n.days() {
                 if done {
                     n.occurrence_completed.entry(d).or_insert(now.naive_local());

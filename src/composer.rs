@@ -1144,7 +1144,7 @@ fn content_impl(
             // first and the text would still turn into a second, separate
             // paste once its event finally showed up. Read the clipboard's
             // own text synchronously instead of waiting on that event.
-            let clipboard_has_text = arboard::Clipboard::new()
+            let clipboard_has_text = crate::clipboard_copy::Clipboard::new()
                 .and_then(|mut c| c.get_text())
                 .is_ok_and(|t| !t.trim().is_empty());
             if !clipboard_has_text {
@@ -1259,7 +1259,9 @@ fn content_impl(
         .max(1.);
     let rows = (body_height / (doc.font_size * doc.zoom * 1.4)).clamp(1., 18.) as usize;
     let previous_selection = doc.selection.clone();
-    let mut output = egui::ScrollArea::vertical()
+    let body_width = ui.available_width().max(32.);
+    let oversized_picture = pictures.iter().any(|p| !p.fit && p.width > body_width);
+    let mut output = egui::ScrollArea::new([oversized_picture, true])
         .id_salt(id.with(("text_scroll", doc.active)))
         .max_height(body_height)
         .auto_shrink([false, false])
@@ -1269,7 +1271,7 @@ fn content_impl(
                 .id(text_id)
                 .font(font.clone())
                 .frame(false)
-                .desired_width(f32::INFINITY)
+                .desired_width(body_width)
                 .desired_rows(rows)
                 .lock_focus(true)
                 .hint_text("여기에 메모하세요…")
@@ -1443,7 +1445,7 @@ fn content_impl(
             }
         }
         if ui.button("붙여넣기").clicked() {
-            match arboard::Clipboard::new().and_then(|mut c| c.get_text()) {
+            match crate::clipboard_copy::Clipboard::new().and_then(|mut c| c.get_text()) {
                 Ok(text) => ui.data_mut(|d| {
                     d.insert_temp(id.with("edit_menu_events"), vec![egui::Event::Paste(text)])
                 }),
@@ -1652,7 +1654,7 @@ pub fn view(ui: &mut egui::Ui, legacy: &str, doc: &Document, id: impl Hash) {
                 let width = if picture.fit {
                     available
                 } else {
-                    (picture.width as f32 * picture.scale).min(available)
+                    picture.width as f32 * picture.scale
                 };
                 let size = Vec2::new(width, width * picture.height as f32 / picture.width as f32);
                 let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
@@ -2438,7 +2440,7 @@ struct PictureSize {
 impl PictureSize {
     fn at(&self, wrap: f32) -> Vec2 {
         let room = (wrap - 4.).max(16.);
-        let w = if self.fit { room } else { self.width.min(room) };
+        let w = if self.fit { room } else { self.width };
         // Quantized so continuous window resizing reuses cached font sizes.
         let w = ((w / 4.).floor() * 4.).max(8.);
         Vec2::new(w, (w * self.ratio).max(4.))
@@ -2717,18 +2719,36 @@ fn paint_pictures(
         );
         let mut close = false;
         let mut delete = false;
+        // The text layout may extend beyond the viewport for oversized images.
+        // Keep controls in the visible viewport, independently of that layout.
+        let toolbar_bounds = output
+            .text_clip_rect
+            .intersect(ui.ctx().screen_rect())
+            .shrink(4.);
+        let toolbar_width = toolbar_bounds.width().clamp(120., 360.);
+        let anchor = doc
+            .picture_tool_at
+            .unwrap_or_else(|| picture_toolbar_pos(rect, output.text_clip_rect.top()));
+        let toolbar_pos = egui::pos2(
+            anchor.x.clamp(
+                toolbar_bounds.left(),
+                (toolbar_bounds.right() - toolbar_width).max(toolbar_bounds.left()),
+            ),
+            anchor.y.clamp(
+                toolbar_bounds.top(),
+                (toolbar_bounds.bottom() - 76.).max(toolbar_bounds.top()),
+            ),
+        );
         egui::Area::new(id.with(("picture_tools", pid)))
             .order(egui::Order::Foreground)
-            .fixed_pos(
-                doc.picture_tool_at
-                    .unwrap_or_else(|| picture_toolbar_pos(rect, output.text_clip_rect.top())),
-            )
-            .constrain_to(output.text_clip_rect)
+            .fixed_pos(toolbar_pos)
+            .constrain_to(toolbar_bounds)
             .show(ui.ctx(), |ui| {
+                ui.set_width(toolbar_width);
                 egui::Frame::popup(ui.style())
                     .inner_margin(egui::Margin::same(4))
                     .show(ui, |ui| {
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             ui.spacing_mut().item_spacing.x = 2.;
                             for (value, label) in
                                 [(0.25, "25%"), (0.5, "50%"), (0.75, "75%"), (1., "100%")]
@@ -2749,7 +2769,7 @@ fn paint_pictures(
                             }
                             ui.separator();
                             if ui.button("복사").clicked() {
-                                if let Ok(mut c) = arboard::Clipboard::new() {
+                                if let Ok(mut c) = crate::clipboard_copy::Clipboard::new() {
                                     let _ = c.set_image(arboard::ImageData {
                                         width: p.width,
                                         height: p.height,
@@ -3336,7 +3356,9 @@ fn tbl_begin_edit(t: &mut Table, s: &mut TSel, replace: bool, ctx: &egui::Contex
 fn copy_range(t: &Table, rng: crate::table_edit::Rng, status: &mut String) {
     let html = crate::table_edit::range_html(t, rng);
     let tsv = crate::table_edit::range_tsv(t, rng);
-    if let Err(e) = arboard::Clipboard::new().and_then(|mut c| c.set_html(html, Some(tsv))) {
+    if let Err(e) =
+        crate::clipboard_copy::Clipboard::new().and_then(|mut c| c.set_html(html, Some(tsv)))
+    {
         *status = format!("복사 실패: {e}");
     } else {
         *status = "표 셀을 복사했습니다 (Excel 형식)".into();
@@ -3351,7 +3373,7 @@ fn clipboard_html_table() -> Option<Table> {
     crate::clipboard_html::read()
         .and_then(|h| Table::from_html(&h))
         .or_else(|| {
-            arboard::Clipboard::new()
+            crate::clipboard_copy::Clipboard::new()
                 .ok()
                 .and_then(|mut c| c.get().html().ok())
                 .and_then(|h| Table::from_html(&h))
@@ -3363,7 +3385,7 @@ fn clipboard_table(event_text: Option<&str>) -> Option<Table> {
         return html;
     }
     let text = event_text.map(str::to_owned).or_else(|| {
-        arboard::Clipboard::new()
+        crate::clipboard_copy::Clipboard::new()
             .ok()
             .and_then(|mut c| c.get_text().ok())
     })?;
@@ -4249,7 +4271,7 @@ fn picture_from_file(path: &Path, scale: f32, fit: bool) -> Result<Picture, Stri
     })
 }
 fn picture_from_clipboard(scale: f32, fit: bool) -> Result<Picture, String> {
-    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    let mut clipboard = crate::clipboard_copy::Clipboard::new().map_err(|e| e.to_string())?;
     let image = clipboard
         .get_image()
         .map_err(|_| "클립보드에 이미지가 없습니다".to_string())?;
@@ -5452,6 +5474,20 @@ mod tests {
 #[cfg(test)]
 mod inline_picture_tests {
     use super::*;
+    #[test]
+    fn non_fit_images_can_exceed_body_width_without_changing_fit_behavior() {
+        let size = PictureSize {
+            key: 'x',
+            width: 1000.,
+            ratio: 0.5,
+            fit: false,
+        };
+        assert_eq!(size.at(320.), Vec2::new(1000., 500.));
+        assert_eq!(
+            PictureSize { fit: true, ..size }.at(320.),
+            Vec2::new(316., 158.)
+        );
+    }
     fn picture(w: usize, h: usize) -> Picture {
         Picture {
             id: 0,
@@ -5807,7 +5843,10 @@ mod inline_table_tests {
     fn probe_real_clipboard_table() {
         let html = match crate::clipboard_html::read() {
             Some(h) => Ok(h),
-            None => arboard::Clipboard::new().unwrap().get().html(),
+            None => crate::clipboard_copy::Clipboard::new()
+                .unwrap()
+                .get()
+                .html(),
         };
         match &html {
             Ok(h) => println!(
@@ -5836,7 +5875,7 @@ mod inline_table_tests {
                 }
             }
         }
-        let text = arboard::Clipboard::new()
+        let text = crate::clipboard_copy::Clipboard::new()
             .unwrap()
             .get_text()
             .unwrap_or_default();
@@ -5853,7 +5892,10 @@ mod inline_table_tests {
     #[test]
     #[ignore]
     fn real_clipboard_paste_into_memo_then_copy_back() {
-        let pasted_text = arboard::Clipboard::new().unwrap().get_text().unwrap();
+        let pasted_text = crate::clipboard_copy::Clipboard::new()
+            .unwrap()
+            .get_text()
+            .unwrap();
         let ctx = egui::Context::default();
         let mut doc = Document::default();
         let mut body = String::new();
@@ -5921,7 +5963,7 @@ mod inline_table_tests {
     fn seed_excel_like_clipboard() {
         let fragment = "\r\n <col width=265 style='mso-width-source:userset;mso-width-alt:8464;width:198pt'>\r\n <col width=72 span=3 style='width:54pt'>\r\n <tr height=23 style='height:16.9pt'>\r\n  <td rowspan=3 height=69 class=xl81 width=265 style='border-bottom:.5pt solid black;\r\n  height:50.7pt;width:198pt'>병합1<br />\r\n    <span style='mso-spacerun:yes'>&nbsp;</span>줄바꿈 앞에 띄어쓰기 1칸<br />\r\n    <span style='mso-spacerun:yes'>&nbsp; </span>띄어쓰기 2칸</td>\r\n  <td class=xl65 width=72 style='width:54pt'>표 복사 테스트</td>\r\n  <td class=xl65 width=72 style='width:54pt'>표 복사 테스트</td>\r\n  <td rowspan=2 class=xl75 width=72 style='border-bottom:.5pt solid black;\r\n  width:54pt'>병합3</td>\r\n </tr>\r\n <tr height=23 style='height:16.9pt'>\r\n  <td height=23 class=xl67 style='height:16.9pt'>표 복사 테스트</td>\r\n  <td class=xl67>표 복사 테스트</td>\r\n </tr>\r\n <tr height=23 style='height:16.9pt'>\r\n  <td colspan=2 height=23 class=xl73 style='border-right:.5pt solid black;\r\n  height:16.9pt;border-left:none'>병합2</td>\r\n  <td class=xl67>표 복사 테스트</td>\r\n </tr>\r\n <tr height=23 style='height:16.9pt'>\r\n  <td height=23 class=xl66 style='height:16.9pt'>표 복사 테스트</td>\r\n  <td class=xl67>표 복사 테스트</td>\r\n  <td colspan=2 rowspan=2 class=xl77 style='border-right:.5pt solid black;\r\n  border-bottom:.5pt solid black'>병합4</td>\r\n </tr>\r\n <tr height=23 style='height:16.9pt'>\r\n  <td height=23 class=xl66 style='height:16.9pt'>표 복사 테스트</td>\r\n  <td class=xl67>표 복사 테스트</td>\r\n </tr>\r\n <tr height=23 style='height:16.9pt'>\r\n  <td height=23 class=xl66 style='height:16.9pt'>표 복사 테스트</td>\r\n  <td class=xl67>표 복사 테스트</td>\r\n  <td class=xl67>표 복사 테스트</td>\r\n  <td class=xl67>표 복사 테스트</td>\r\n </tr>\r\n <tr height=23 style='height:16.9pt'>\r\n  <td colspan=4 height=23 class=xl68 style='border-right:.5pt solid black;\r\n  height:16.9pt'>병합5</td>\r\n </tr>\r\n";
         let tsv = "\"병합1\n 줄바꿈 앞에 띄어쓰기 1칸\n  띄어쓰기 2칸\"\t표 복사 테스트\t표 복사 테스트\t병합3\r\n\t표 복사 테스트\t표 복사 테스트\t\r\n\t병합2\t\t표 복사 테스트\r\n표 복사 테스트\t표 복사 테스트\t병합4\t\r\n표 복사 테스트\t표 복사 테스트\t\t\r\n표 복사 테스트\t표 복사 테스트\t표 복사 테스트\t표 복사 테스트\r\n병합5\t\t\t\r\n";
-        arboard::Clipboard::new()
+        crate::clipboard_copy::Clipboard::new()
             .unwrap()
             .set_html(fragment, Some(tsv))
             .unwrap();

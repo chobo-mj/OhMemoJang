@@ -239,6 +239,8 @@ impl ClipboardHistory {
         let before = self.settings.clone();
         ui::card(ui, |ui| {
             let s = &mut self.settings;
+            ui.checkbox(&mut s.ignore_own_copy, "메모장 복사 수집 안 하기")
+                .on_hover_text("OhMemoJang에서 복사한 내용은 수집하지 않습니다");
             ui.label(RichText::new("정리 기준 (체크한 기준만 적용)").strong());
             ui.horizontal(|ui| {
                 ui.checkbox(&mut s.count_limit, "개수로 제한");
@@ -268,21 +270,7 @@ impl ClipboardHistory {
                         });
                 });
             });
-            ui.add_enabled_ui(s.period_limit, |ui| {
-                ui::field(ui, "자동 정리 주기", |ui| {
-                    egui::ComboBox::from_id_salt("cb_tidy")
-                        .selected_text(tidy_label(s.tidy_hours))
-                        .show_ui(ui, |ui| {
-                            for n in Settings::TIDY_CHOICES {
-                                ui.selectable_value(&mut s.tidy_hours, n, tidy_label(n));
-                            }
-                        });
-                });
-            });
-            ui::hint(
-                ui,
-                "개수 기준은 새로 복사할 때마다 적용됩니다. 자동 정리 주기는 기간 기준에만 쓰이며,                  복사가 없는 동안에도 오래된 항목을 지웁니다.",
-            );
+            ui::hint(ui, "매일 낮 12시에 자동 정리합니다. 앱이 꺼져 있었다면 다음 실행 때 정리합니다. 개수·용량 제한은 복사 시에도 적용됩니다.");
             ui::hint(ui, "용량은 합계 256 MB까지이며 오래된 항목부터 지웁니다");
             ui.add_space(4.0);
             ui::divider(ui);
@@ -531,14 +519,6 @@ impl ClipboardHistory {
         if want_more {
             self.load_more();
         }
-    }
-}
-
-fn tidy_label(hours: u32) -> String {
-    if hours == 0 {
-        "시작할 때만".into()
-    } else {
-        format!("{}일마다", hours / 24)
     }
 }
 

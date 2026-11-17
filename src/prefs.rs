@@ -6,6 +6,11 @@ use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Prefs {
+    pub sidebar_width: f32,
+    pub drop_schedule_choice: bool,
+    pub close_completed_sticker: bool,
+    pub rearrange_completed_stickers: bool,
+
     /// Page shown when the app starts (a page index of the main menu).
     pub start_page: usize,
     /// Menu pages hidden from the sidebar (never page 0, 내 작업실).
@@ -33,6 +38,10 @@ pub struct Prefs {
 impl Default for Prefs {
     fn default() -> Self {
         Self {
+            sidebar_width: 236.,
+            drop_schedule_choice: false,
+            close_completed_sticker: true,
+            rearrange_completed_stickers: false,
             start_page: 0,
             hidden_pages: BTreeSet::new(),
             cal_theme: 0,
@@ -53,7 +62,11 @@ impl Prefs {
     pub fn to_text(&self) -> String {
         let hidden: Vec<String> = self.hidden_pages.iter().map(|p| p.to_string()).collect();
         format!(
-            "start_page={}\nhidden_pages={}\ncal_theme={}\ncal_font={}\ncal_hide_done={}\ncal_strike={}\ncal_weeks={}\ndata_path={}\nfirst_run_done={}\ntray_hint_done={}\ncal_side_work={}\ncal_side_page={}\n",
+            "sidebar_width={}\ndrop_schedule_choice={}\nclose_completed_sticker={}\nrearrange_completed_stickers={}\nstart_page={}\nhidden_pages={}\ncal_theme={}\ncal_font={}\ncal_hide_done={}\ncal_strike={}\ncal_weeks={}\ndata_path={}\nfirst_run_done={}\ntray_hint_done={}\ncal_side_work={}\ncal_side_page={}\n",
+            self.sidebar_width,
+            self.drop_schedule_choice,
+            self.close_completed_sticker,
+            self.rearrange_completed_stickers,
             self.start_page,
             hidden.join(","),
             self.cal_theme,
@@ -77,6 +90,12 @@ impl Prefs {
             };
             let value = value.trim();
             match key.trim() {
+                "sidebar_width" => {
+                    p.sidebar_width = value.parse().unwrap_or(p.sidebar_width).clamp(64., 360.)
+                }
+                "drop_schedule_choice" => p.drop_schedule_choice = value == "true",
+                "close_completed_sticker" => p.close_completed_sticker = value == "true",
+                "rearrange_completed_stickers" => p.rearrange_completed_stickers = value == "true",
                 "start_page" => p.start_page = value.parse().unwrap_or(p.start_page),
                 "hidden_pages" => {
                     p.hidden_pages = value
@@ -142,6 +161,7 @@ mod tests {
             tray_hint_done: true,
             cal_side_work: false,
             cal_side_page: true,
+            ..Prefs::default()
         };
         assert_eq!(Prefs::from_text(&p.to_text()), p);
         let q = Prefs::from_text("start_page=x\nhidden_pages=0,3\ncal_font=99\nnoise");

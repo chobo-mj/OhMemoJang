@@ -9,6 +9,7 @@ pub enum Repeat {
     #[default]
     None,
     Daily,
+    Yearly,
     /// Every `every` weeks on the weekdays in `days` (bit 0 = 월 … bit 6 = 일).
     Weekly {
         every: u8,
@@ -57,6 +58,10 @@ impl Repeat {
         match *self {
             Repeat::None => d == start,
             Repeat::Daily => true,
+            Repeat::Yearly => {
+                d.month() == start.month()
+                    && d.day() == start.day().min(last_day(d.year(), d.month()))
+            }
             Repeat::Weekly { every, days } => {
                 let week =
                     |x: NaiveDate| x - Duration::days(x.weekday().num_days_from_monday() as i64);
@@ -89,6 +94,7 @@ impl Repeat {
         match *self {
             Repeat::None => "반복 안 함".into(),
             Repeat::Daily => "매일".into(),
+            Repeat::Yearly => "매년".into(),
             Repeat::Weekly { every, days } => {
                 let names: Vec<_> = (0..7)
                     .filter(|i| days & (1 << i) != 0)
@@ -131,6 +137,15 @@ mod tests {
     use super::*;
     fn d(y: i32, m: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+    #[test]
+    fn yearly_follows_month_and_clamps_leap_day() {
+        let start = d(2024, 2, 29);
+        assert!(Repeat::Yearly.matches(start, d(2025, 2, 28)));
+        assert!(Repeat::Yearly.matches(start, d(2028, 2, 29)));
+        assert!(!Repeat::Yearly.matches(start, d(2028, 2, 28)));
+        assert!(!Repeat::Yearly.matches(start, d(2025, 3, 28)));
+        assert!(!Repeat::Yearly.matches(start, d(2023, 2, 28)));
     }
     #[test]
     fn weekly_and_biweekly_follow_their_weekday() {

@@ -6,6 +6,7 @@ use chrono::{Datelike, Duration, Local, NaiveDate, Timelike, Weekday};
 use eframe::egui::{self, RichText};
 
 pub struct ScheduleEdit {
+    deadline: bool,
     note: usize,
     start: NaiveDate,
     start_hm: (u32, u32),
@@ -27,6 +28,7 @@ impl ScheduleEdit {
         let end = start + Duration::days(n.duration.max(1) as i64 - 1);
         let end_time = n.end_time.unwrap_or_else(|| n.time + Duration::hours(1));
         let mut s = Self {
+            deadline: n.deadline,
             note,
             start,
             start_hm: (n.time.hour(), n.time.minute()),
@@ -43,6 +45,7 @@ impl ScheduleEdit {
         match n.repeat {
             Repeat::None => {}
             Repeat::Daily => s.kind = 1,
+            Repeat::Yearly => s.kind = 5,
             Repeat::Weekly { every, days } => {
                 s.kind = if every >= 2 { 3 } else { 2 };
                 s.days = days;
@@ -60,6 +63,7 @@ impl ScheduleEdit {
     fn rule(&self) -> Repeat {
         match self.kind {
             1 => Repeat::Daily,
+            5 => Repeat::Yearly,
             2 | 3 => Repeat::Weekly {
                 every: if self.kind == 3 { 2 } else { 1 },
                 days: if self.days == 0 {
@@ -190,12 +194,14 @@ impl App {
                             };
                         }
                         ui.add_space(10.);
+                        ui.checkbox(&mut s.deadline, "🚩 이날까지 업무 (종료 날짜 기준)");
+                        ui.add_space(8.);
                         crate::ui::caption(ui, "반복");
                         ui.add_space(4.);
                         crate::ui::segmented(
                             ui,
                             &mut s.kind,
-                            &["안 함", "매일", "매주", "격주", "매월"],
+                            &["안 함", "매일", "매주", "격주", "매월", "매년"],
                         );
                         ui.add_space(6.);
                         if s.kind == 2 || s.kind == 3 {
@@ -278,15 +284,20 @@ impl App {
         let n = &mut self.data.notes[s.note];
         open &= !cancel;
         if apply {
+            n.deadline = s.deadline;
             let at = |d: NaiveDate, hm: (u32, u32)| d.and_hms_opt(hm.0, hm.1, 0);
             if let (Some(first), Some(last)) = (at(s.start, s.start_hm), at(s.end, s.end_hm)) {
                 n.set_span(first, last);
             }
             n.repeat = s.rule();
             n.recurring = !n.repeat.is_none();
+            if n.deadline && self.desktop.daily_today {
+                self.desktop.daily_shown = None;
+            }
             open = false;
         }
         if clear {
+            n.clear_schedule();
             n.date = None;
             n.duration = 1;
             n.end_time = None;

@@ -66,6 +66,7 @@ pub struct SessionRec {
 #[derive(Serialize, Deserialize, Default, Clone, PartialEq)]
 #[serde(default)]
 pub struct NoteRec {
+    pub deadline: bool,
     pub title: String,
     pub body: String,
     pub document: DocRec,
@@ -763,6 +764,7 @@ fn note_rec(n: &Note) -> NoteRec {
         occurrence_comments: n.occurrence_comments.clone(),
         time: Some(n.time),
         done: n.done,
+        deadline: n.deadline,
         completed: n.completed,
         starred: n.starred,
         recurring: n.recurring,
@@ -801,6 +803,7 @@ fn note_from(r: &NoteRec, i: usize) -> Note {
         n.time = t;
     }
     n.done = r.done;
+    n.deadline = r.deadline;
     n.completed = r.completed;
     n.starred = r.starred;
     n.recurring = r.recurring;
@@ -1447,6 +1450,21 @@ impl Saving {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn deadline_roundtrip_and_legacy_default() {
+        let old: NoteRec = serde_json::from_str("{\"title\":\"old\"}").unwrap();
+        assert!(!old.deadline);
+        let current = NoteRec {
+            deadline: true,
+            ..old
+        };
+        let serialized = serde_json::to_string(&current).unwrap();
+        assert!(
+            serde_json::from_str::<NoteRec>(&serialized)
+                .unwrap()
+                .deadline
+        );
+    }
     #[test]
     fn memos_wiki_settings_and_pictures_survive_saving() {
         let dir = std::env::temp_dir().join(format!(

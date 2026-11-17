@@ -135,7 +135,7 @@ pub fn parse_bookmarks(html: &str) -> Vec<(String, String)> {
 impl App {
     fn copy_image_bytes(&mut self, bytes: &[u8]) -> Result<(), String> {
         let img = decode(bytes)?;
-        let mut c = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+        let mut c = crate::clipboard_copy::Clipboard::new().map_err(|e| e.to_string())?;
         c.set_image(arboard::ImageData {
             width: img.width() as usize,
             height: img.height() as usize,
@@ -188,7 +188,7 @@ impl App {
                         ))
                         .collect::<String>()
                 );
-                self.toast = match arboard::Clipboard::new()
+                self.toast = match crate::clipboard_copy::Clipboard::new()
                     .and_then(|mut c| c.set_html(html, Some(text)))
                 {
                     Ok(_) => "표를 HTML / 탭 구분 텍스트로 복사했습니다".into(),

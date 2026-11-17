@@ -1092,6 +1092,7 @@ impl App {
         } else {
             vec![i]
         };
+        self.drag_source_on(ui, r, i, day);
         self.catalog
             .drag_sources
             .push((r.rect.intersect(ui.clip_rect()), FolderDrag::Notes(notes)));

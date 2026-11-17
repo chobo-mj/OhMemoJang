@@ -8,11 +8,13 @@ pub struct Source {
     pub note: usize,
     pub card: bool,
     pub folder: bool,
+    pub clear_on_miss: bool,
     pub occurrence: Option<NaiveDate>,
 }
 #[derive(Clone)]
 pub enum Destination {
     Date(NaiveDate),
+    DayList(NaiveDate),
     Parent(usize),
     /// A wiki folder, or `None` for the unfiled wiki memos.
     WikiFolder(Option<usize>),
@@ -31,8 +33,153 @@ pub struct Drag {
     origin: Pos2,
     initial: Vec2,
     current: Pos2,
+    screen_origin: Vec2,
+    shift: bool,
+    moved: bool,
 }
 impl App {
+    pub fn assign_dropped_date(
+        &mut self,
+        note: usize,
+        date: NaiveDate,
+        shift: bool,
+        calendar: bool,
+        occurrence: Option<NaiveDate>,
+    ) {
+        if note >= self.data.notes.len() {
+            return;
+        }
+        self.schedule_drop_serial = self.schedule_drop_serial.wrapping_add(1);
+        if calendar && self.prefs.drop_schedule_choice && !shift {
+            self.pending_date_drop = Some((note, date));
+            self.desktop.focus_dialog = true;
+            return;
+        }
+        let n = &mut self.data.notes[note];
+        let start = if shift {
+            date
+        } else {
+            match (n.date, occurrence) {
+                (Some(start), Some(from)) if !n.deadline => start + (date - from),
+                _ => date,
+            }
+        };
+        if shift || n.deadline || occurrence.is_none() {
+            n.duration = 1;
+        }
+        n.deadline = shift;
+        n.move_start(start);
+        self.day = date;
+        self.toast = format!(
+            "{} → {}{}",
+            n.title,
+            date,
+            if shift { " · 이날까지 업무" } else { "" }
+        );
+        if shift && self.desktop.daily_today {
+            self.desktop.daily_shown = None;
+        }
+    }
+    pub fn date_drop_dialog(&mut self, ctx: &egui::Context) {
+        let Some((note, date)) = self.pending_date_drop else {
+            return;
+        };
+        let mut open = true;
+        let mut choice = None;
+        let mut cancel = false;
+        crate::ui::dialog(
+            ctx,
+            "date_drop_choice",
+            "일정으로 추가",
+            [360., 190.],
+            true,
+            &mut open,
+            |ui| {
+                ui.label(format!("{} · {}", date, self.data.notes[note].title));
+                ui.add_space(14.);
+                ui.horizontal(|ui| {
+                    if ui.button("당일 일정").clicked() {
+                        choice = Some(false);
+                    }
+                    if ui.button("🚩 이날까지 업무").clicked() {
+                        choice = Some(true);
+                    }
+                    if ui.button("취소").clicked() {
+                        cancel = true;
+                    }
+                });
+            },
+        );
+        if let Some(deadline) = choice {
+            self.pending_date_drop = None;
+            self.assign_dropped_date(note, date, deadline, false, None);
+        } else if !open || cancel {
+            self.pending_date_drop = None;
+        }
+    }
+    pub fn schedule_target_at(&self, point: Pos2, now: f64) -> Option<(NaiveDate, bool)> {
+        let days = self
+            .day_cells
+            .iter()
+            .filter_map(|(id, (time, rect, date))| {
+                (now - time < 1. && rect.contains(point)).then_some((*id, *date, false))
+            });
+        let calendars = self.cal_cells.iter().filter_map(|(id, (time, cells))| {
+            if now - time >= 1. {
+                return None;
+            }
+            cells
+                .iter()
+                .find(|(rect, _)| rect.contains(point))
+                .map(|(_, date)| (*id, *date, true))
+        });
+        // Only on release: resolve overlapping calendars by native window order.
+        // HashMap iteration order must never decide which date receives a memo.
+        days.chain(calendars)
+            .min_by_key(|(id, _, _)| {
+                self.schedule_origins
+                    .get(id)
+                    .and_then(|origin| crate::system::window_rank_at_origin(origin.x, origin.y))
+                    .unwrap_or(usize::MAX)
+            })
+            .map(|(_, date, calendar)| (date, calendar))
+    }
+    /// Finish a drag outside its original viewport, where egui may not receive release.
+    pub fn finish_note_drag(&mut self, ctx: &egui::Context) {
+        let Some(d) = self.drag.as_ref() else {
+            return;
+        };
+        if !d.moved || d.source.card || d.source.folder || crate::system::left_button_down() {
+            return;
+        }
+        let Some((x, y)) = crate::system::cursor_pos() else {
+            return;
+        };
+        let p = Pos2::new(x as f32, y as f32) / ctx.pixels_per_point().max(0.5);
+        // Local release events are handled by drag_input with their exact modifiers.
+        let source_viewport = d.source.viewport;
+        if ctx.input(|i| {
+            i.raw
+                .viewports
+                .get(&source_viewport)
+                .and_then(|v| v.inner_rect)
+                .is_some_and(|r| r.contains(p))
+        }) {
+            return;
+        }
+        let d = self.drag.take().unwrap();
+        if let Some((date, calendar)) = self.schedule_target_at(p, ctx.input(|i| i.time)) {
+            self.assign_dropped_date(
+                d.source.note,
+                date,
+                d.shift || crate::system::shift_down(),
+                calendar,
+                d.source.occurrence,
+            );
+        } else if d.source.clear_on_miss {
+            self.data.notes[d.source.note].clear_schedule();
+        }
+    }
     pub fn drag_source(&mut self, ui: &egui::Ui, r: &egui::Response, note: usize, card: bool) {
         self.sources.push(Source {
             viewport: ui.ctx().viewport_id(),
@@ -41,6 +188,7 @@ impl App {
             note,
             card,
             folder: false,
+            clear_on_miss: false,
             occurrence: None,
         });
     }
@@ -87,6 +235,13 @@ impl App {
                                 origin: pos,
                                 initial,
                                 current: pos,
+                                screen_origin: ctx.input(|i| {
+                                    i.viewport()
+                                        .inner_rect
+                                        .map_or(Vec2::ZERO, |r| r.min.to_vec2())
+                                }),
+                                shift: ctx.input(|i| i.modifiers.shift),
+                                moved: false,
                             });
                         }
                     }
@@ -95,6 +250,7 @@ impl App {
                     if let Some(d) = &mut self.drag {
                         if d.source.viewport == viewport {
                             d.current = pos;
+                            d.moved |= d.origin.distance(pos) > 4.;
                             if d.source.card && d.origin.distance(pos) > 4. {
                                 self.data.notes[d.source.note].pos = (d.initial
                                     + (pos - d.origin)
@@ -110,10 +266,12 @@ impl App {
                     pos,
                     button: egui::PointerButton::Primary,
                     pressed: false,
-                    ..
+                    modifiers,
                 } => {
                     if let Some(d) = self.drag.take() {
-                        if d.source.viewport == viewport && d.origin.distance(pos) > 4. {
+                        if (d.source.viewport == viewport && d.origin.distance(pos) > 4.)
+                            || (d.source.viewport != viewport && d.moved)
+                        {
                             if d.source.card {
                                 self.data.notes[d.source.note].pos = (d.initial
                                     + (pos - d.origin)
@@ -138,14 +296,37 @@ impl App {
                                 match t.kind {
                                     Destination::Date(date) => {
                                         if !d.source.folder {
-                                            let n = &mut self.data.notes[d.source.note];
-                                            let new_start = match (n.date, d.source.occurrence) {
-                                                (Some(start), Some(from)) => start + (date - from),
-                                                _ => date,
-                                            };
-                                            n.move_start(new_start);
-                                            self.day = date;
-                                            self.toast = format!("{} → {}", n.title, new_start);
+                                            self.assign_dropped_date(
+                                                d.source.note,
+                                                date,
+                                                modifiers.shift || d.shift,
+                                                true,
+                                                d.source.occurrence,
+                                            );
+                                        }
+                                    }
+                                    Destination::DayList(date) => {
+                                        if !d.source.folder {
+                                            if d.source.clear_on_miss
+                                                && !modifiers.shift
+                                                && !d.shift
+                                                && d.source.viewport == viewport
+                                                && t.rect.contains(d.source.rect.center())
+                                                && d.source.occurrence == Some(date)
+                                                && !self.sources.iter().any(|s| {
+                                                    s.viewport == viewport && s.rect.contains(pos)
+                                                })
+                                            {
+                                                self.data.notes[d.source.note].clear_schedule();
+                                            } else {
+                                                self.assign_dropped_date(
+                                                    d.source.note,
+                                                    date,
+                                                    modifiers.shift || d.shift,
+                                                    false,
+                                                    None,
+                                                );
+                                            }
                                         }
                                     }
                                     Destination::WikiFolder(folder) => {
@@ -181,13 +362,36 @@ impl App {
                                         }
                                     }
                                 }
+                            } else if !d.source.folder {
+                                let screen = pos
+                                    + if d.source.viewport == viewport {
+                                        d.screen_origin
+                                    } else {
+                                        ctx.input(|i| {
+                                            i.viewport()
+                                                .inner_rect
+                                                .map_or(Vec2::ZERO, |r| r.min.to_vec2())
+                                        })
+                                    };
+                                if let Some((date, calendar)) =
+                                    self.schedule_target_at(screen, ctx.input(|i| i.time))
+                                {
+                                    self.assign_dropped_date(
+                                        d.source.note,
+                                        date,
+                                        modifiers.shift || d.shift,
+                                        calendar,
+                                        d.source.occurrence,
+                                    );
+                                } else if d.source.clear_on_miss && !d.source.rect.contains(pos) {
+                                    self.data.notes[d.source.note].clear_schedule();
+                                    self.toast = "일정을 지웠습니다".into();
+                                }
                             }
                         }
                     }
                 }
-                egui::Event::WindowFocused(false) => {
-                    self.drag = None;
-                }
+                egui::Event::WindowFocused(false) => {}
                 _ => {}
             }
         }
@@ -200,6 +404,9 @@ impl App {
 mod tests {
     use super::*;
     pub(super) fn simulate(a: &mut App, from: Pos2, to: Pos2) {
+        simulate_shift(a, from, to, false);
+    }
+    fn simulate_shift(a: &mut App, from: Pos2, to: Pos2, shift: bool) {
         let ctx = egui::Context::default();
         let events = vec![
             egui::Event::PointerMoved(from),
@@ -207,14 +414,20 @@ mod tests {
                 pos: from,
                 button: egui::PointerButton::Primary,
                 pressed: true,
-                modifiers: egui::Modifiers::NONE,
+                modifiers: egui::Modifiers {
+                    shift,
+                    ..Default::default()
+                },
             },
             egui::Event::PointerMoved(to),
             egui::Event::PointerButton {
                 pos: to,
                 button: egui::PointerButton::Primary,
                 pressed: false,
-                modifiers: egui::Modifiers::NONE,
+                modifiers: egui::Modifiers {
+                    shift,
+                    ..Default::default()
+                },
             },
         ];
         let _ = ctx.run(
@@ -233,8 +446,84 @@ mod tests {
             note: 0,
             card: false,
             folder: false,
+            clear_on_miss: false,
             occurrence: None,
         }
+    }
+    #[test]
+    fn calendar_choice_is_opt_in_and_shift_always_bypasses_it() {
+        let day = NaiveDate::from_ymd_opt(2026, 11, 17).unwrap();
+        for choice in [false, true] {
+            for shift in [false, true] {
+                for calendar in [false, true] {
+                    let mut a = App::sample(day);
+                    a.prefs.drop_schedule_choice = choice;
+                    a.assign_dropped_date(
+                        0,
+                        day + chrono::Duration::days(5),
+                        shift,
+                        calendar,
+                        None,
+                    );
+                    assert_eq!(a.pending_date_drop.is_some(), choice && calendar && !shift);
+                    if a.pending_date_drop.is_none() {
+                        assert_eq!(a.data.notes[0].deadline, shift);
+                        assert_eq!(a.data.notes[0].date, Some(day + chrono::Duration::days(5)));
+                    } else {
+                        assert_eq!(a.data.notes[0].date, Some(day));
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    fn shift_release_on_date_makes_a_deadline_even_when_choice_is_on() {
+        let day = NaiveDate::from_ymd_opt(2026, 11, 17).unwrap();
+        let mut a = App::sample(day);
+        a.prefs.drop_schedule_choice = true;
+        a.sources.push(source());
+        a.targets.push(Target {
+            viewport: ViewportId::ROOT,
+            layer: egui::LayerId::background(),
+            rect: Rect::from_min_max(Pos2::new(200., 10.), Pos2::new(300., 100.)),
+            kind: Destination::Date(day),
+        });
+        simulate_shift(&mut a, Pos2::new(30., 30.), Pos2::new(230., 30.), true);
+        assert!(a.data.notes[0].deadline);
+        assert!(a.pending_date_drop.is_none());
+    }
+    #[test]
+    fn only_schedule_list_drag_out_removes_schedule() {
+        let day = NaiveDate::from_ymd_opt(2026, 11, 17).unwrap();
+        let mut a = App::sample(day);
+        let mut source = source();
+        source.clear_on_miss = true;
+        a.sources.push(source);
+        a.data.notes[0].deadline = true;
+        simulate(&mut a, Pos2::new(30., 30.), Pos2::new(500., 500.));
+        assert!(a.data.notes[0].date.is_none());
+        assert!(!a.data.notes[0].deadline);
+        assert!(a.data.notes[0].repeat.is_none());
+    }
+    #[test]
+    fn fast_sticker_drag_uses_screen_space_calendar_cells() {
+        let day = NaiveDate::from_ymd_opt(2026, 11, 17).unwrap();
+        let mut a = App::sample(day);
+        a.prefs.drop_schedule_choice = true;
+        a.sources.push(source());
+        a.cal_cells.insert(
+            ViewportId::from_hash_of("calendar"),
+            (
+                0.,
+                vec![(
+                    Rect::from_min_max(Pos2::new(200., 10.), Pos2::new(300., 100.)),
+                    day,
+                )],
+            ),
+        );
+        simulate(&mut a, Pos2::new(30., 30.), Pos2::new(230., 30.));
+        assert_eq!(a.pending_date_drop, Some((0, day)));
+        assert_eq!(a.schedule_drop_serial, 1);
     }
     #[test]
     fn fast_drag_in_one_frame_moves_date_and_preserves_original_note() {
@@ -292,6 +581,7 @@ mod zoom_tests {
             note: 0,
             card: true,
             folder: false,
+            clear_on_miss: false,
             occurrence: None,
         });
         let initial = a.data.notes[0].pos;

@@ -60,6 +60,7 @@ pub struct Counters {
 pub struct Shared {
     /// Collection is on (enabled and not paused). Checked before reading.
     pub collecting: AtomicBool,
+    pub ignore_own_copy: AtomicBool,
     /// Raised whenever collection stops or restarts: older captures are dropped.
     pub generation: AtomicU64,
     /// Capture order; delete-all uses it as a watermark.
@@ -76,6 +77,7 @@ impl Shared {
     fn new() -> Self {
         Self {
             collecting: AtomicBool::new(false),
+            ignore_own_copy: AtomicBool::new(true),
             generation: AtomicU64::new(1),
             seq: AtomicU64::new(0),
             epoch: AtomicU64::new(0),
@@ -126,7 +128,6 @@ pub enum Cmd {
     },
     Policy {
         policy: Policy,
-        tidy_hours: u32,
     },
 }
 
@@ -189,9 +190,7 @@ pub struct Settings {
     /// Delete items older than `retention_days` (off: no time limit).
     pub period_limit: bool,
     pub retention_days: u32,
-    /// How often the rules are applied without a new copy, in hours
-    /// (24/48/72). 0: at start only. Used only with the period limit.
-    pub tidy_hours: u32,
+    pub ignore_own_copy: bool,
 }
 
 impl Default for Settings {
@@ -199,11 +198,11 @@ impl Default for Settings {
         Self {
             enabled: false,
             paused: false,
-            count_limit: true,
+            count_limit: false,
             max_items: 100,
             period_limit: true,
             retention_days: 30,
-            tidy_hours: 24,
+            ignore_own_copy: true,
         }
     }
 }
@@ -211,7 +210,6 @@ impl Default for Settings {
 impl Settings {
     pub const ITEM_CHOICES: [usize; 5] = [50, 100, 300, 500, 1000];
     pub const DAY_CHOICES: [u32; 3] = [7, 30, 90];
-    pub const TIDY_CHOICES: [u32; 4] = [24, 48, 72, 0];
 
     pub fn collecting(&self) -> bool {
         self.enabled && !self.paused
@@ -239,7 +237,7 @@ count_limit={}
 max_items={}
 period_limit={}
 retention_days={}
-tidy_hours={}
+ignore_own_copy={}
 ",
             self.enabled,
             self.paused,
@@ -247,7 +245,7 @@ tidy_hours={}
             self.max_items,
             self.period_limit,
             self.retention_days,
-            self.tidy_hours
+            self.ignore_own_copy
         )
     }
     pub fn from_text(text: &str) -> Self {
@@ -276,13 +274,7 @@ tidy_hours={}
                         .filter(|n| Self::DAY_CHOICES.contains(n))
                         .unwrap_or(s.retention_days)
                 }
-                "tidy_hours" => {
-                    s.tidy_hours = v
-                        .parse()
-                        .ok()
-                        .filter(|n| Self::TIDY_CHOICES.contains(n))
-                        .unwrap_or(s.tidy_hours)
-                }
+                "ignore_own_copy" => s.ignore_own_copy = v != "false",
                 _ => {}
             }
         }
@@ -365,6 +357,9 @@ impl ClipboardHistory {
             .unwrap_or_default();
         let shared = Arc::new(Shared::new());
         shared.collecting.store(settings.collecting(), Relaxed);
+        shared
+            .ignore_own_copy
+            .store(settings.ignore_own_copy, Relaxed);
         let (tx, worker_rx) = channel::<Cmd>();
         let (ev_tx, rx) = channel::<Event>();
         worker::spawn(
@@ -412,10 +407,14 @@ impl ClipboardHistory {
     }
 
     fn policy_changed(&self) {
+        if let Some(l) = &self.live {
+            l.shared
+                .ignore_own_copy
+                .store(self.settings.ignore_own_copy, Relaxed);
+        }
         self.save_settings();
         self.send(Cmd::Policy {
             policy: self.settings.policy(),
-            tidy_hours: self.settings.tidy_hours,
         });
     }
 
@@ -565,12 +564,12 @@ mod tests {
             max_items: 300,
             period_limit: false,
             retention_days: 90,
-            tidy_hours: 48,
+            ignore_own_copy: false,
         };
         assert_eq!(Settings::from_text(&s.to_text()), s);
         let bad = Settings::from_text("max_items=7\nretention_days=x\nenabled=true\nzzz");
         assert_eq!(bad.max_items, 100);
-        assert!(bad.enabled && !bad.paused && bad.count_limit && bad.period_limit);
+        assert!(bad.enabled && !bad.paused && !bad.count_limit && bad.period_limit);
         assert_eq!(s.policy().retention_days, 0);
         assert!(s.policy().max_items > 1_000_000);
         assert!(!Settings::default().collecting());
@@ -602,6 +601,40 @@ mod tests {
 /// `cargo test clipboard_history::live -- --ignored --test-threads=1`.
 #[cfg(all(test, windows))]
 mod live {
+    #[test]
+    #[ignore = "uses the Windows clipboard"]
+    fn own_copy_exclusion_can_be_toggled() {
+        let dir = std::env::temp_dir().join(format!("omj-own-copy-{}", std::process::id()));
+        std::env::set_var("LOCALAPPDATA", &dir);
+        let ctx = egui::Context::default();
+        crate::clipboard_copy::install(&ctx);
+        let mut h = ClipboardHistory::start(&ctx);
+        let mut cb = crate::clipboard_copy::Clipboard::new().unwrap();
+        h.set_state(true, false);
+        std::thread::sleep(Duration::from_millis(300));
+        let output = ctx.run(Default::default(), |ctx| {
+            ctx.copy_text("OMJ own-copy excluded test".into())
+        });
+        assert!(output.platform_output.commands.is_empty());
+        std::thread::sleep(Duration::from_millis(400));
+        h.refresh();
+        std::thread::sleep(Duration::from_millis(200));
+        h.poll(&ctx);
+        assert!(h.items.is_empty());
+        h.settings.ignore_own_copy = false;
+        h.policy_changed();
+        cb.set_text("OMJ own-copy included test").unwrap();
+        wait(&mut h, &ctx, "own copy enabled", |h| h.items.len() == 1);
+        h.settings.ignore_own_copy = true;
+        h.policy_changed();
+        cb.set_text("OMJ own-copy excluded again").unwrap();
+        std::thread::sleep(Duration::from_millis(400));
+        h.refresh();
+        std::thread::sleep(Duration::from_millis(200));
+        h.poll(&ctx);
+        assert_eq!(h.items.len(), 1);
+        h.set_state(false, false);
+    }
     use super::*;
     use std::time::{Duration, Instant};
 
@@ -630,6 +663,8 @@ mod live {
         std::env::set_var("LOCALAPPDATA", &dir);
         let ctx = egui::Context::default();
         let mut h = ClipboardHistory::start(&ctx);
+        h.settings.ignore_own_copy = false;
+        h.policy_changed();
         let mut cb = arboard::Clipboard::new().unwrap();
         cb.set_text("시작 전 내용").unwrap();
         std::thread::sleep(Duration::from_millis(300));
@@ -696,6 +731,8 @@ mod live {
         std::env::set_var("LOCALAPPDATA", &dir);
         let ctx = egui::Context::default();
         let mut h = ClipboardHistory::start(&ctx);
+        h.settings.ignore_own_copy = false;
+        h.policy_changed();
         let mut cb = arboard::Clipboard::new().unwrap();
         h.set_state(true, false);
         std::thread::sleep(Duration::from_millis(300));
@@ -745,6 +782,8 @@ mod live {
         std::env::set_var("LOCALAPPDATA", &dir);
         let ctx = egui::Context::default();
         let mut h = ClipboardHistory::start(&ctx);
+        h.settings.ignore_own_copy = false;
+        h.policy_changed();
         h.set_state(true, false);
         std::thread::sleep(Duration::from_millis(500));
         println!("READY");
@@ -786,6 +825,8 @@ mod live {
         std::env::set_var("LOCALAPPDATA", &dir);
         let ctx = egui::Context::default();
         let mut h = ClipboardHistory::start(&ctx);
+        h.settings.ignore_own_copy = false;
+        h.policy_changed();
         let mut cb = arboard::Clipboard::new().unwrap();
         h.set_state(true, false);
         std::thread::sleep(Duration::from_millis(400));
@@ -810,6 +851,8 @@ mod live {
         std::env::set_var("LOCALAPPDATA", &dir);
         let ctx = egui::Context::default();
         let mut h = ClipboardHistory::start(&ctx);
+        h.settings.ignore_own_copy = false;
+        h.policy_changed();
         let mut cb = arboard::Clipboard::new().unwrap();
         h.set_state(true, false);
         let mut t = 0.0;

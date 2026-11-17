@@ -485,6 +485,7 @@ impl App {
                 "reminder_dialog",
                 "purge_dialog",
                 "schedule_dialog",
+                "date_drop_choice",
             ] {
                 crate::ui::raise(ctx, id);
             }
@@ -747,6 +748,7 @@ impl App {
             }
         }
         self.schedule_dialog(ctx);
+        self.date_drop_dialog(ctx);
         if let Some(i) = self.desktop.purge_target {
             let mut open = true;
             let mut purge = false;
@@ -877,38 +879,6 @@ impl App {
                     "메모창을 작업표시줄에 표시",
                     "끄면 새로 여는 스티커 메모 창이 작업표시줄에 나타나지 않습니다",
                 );
-                section(ui, "새 스티커 메모 크기");
-                let mut preset = match self.desktop.sticker_size {
-                    s if s == Vec2::new(340., 240.) => 0,
-                    s if s == Vec2::splat(360.) => 1,
-                    s if s == Vec2::new(460., 440.) => 2,
-                    _ => 3,
-                };
-                if segmented(ui, &mut preset, &["작게", "보통", "크게", "직접 설정"]) {
-                    match preset {
-                        0 => self.desktop.sticker_size = Vec2::new(340., 240.),
-                        1 => self.desktop.sticker_size = Vec2::splat(360.),
-                        2 => self.desktop.sticker_size = Vec2::new(460., 440.),
-                        _ => {}
-                    }
-                }
-                ui.horizontal(|ui| {
-                    ui.label("너비");
-                    ui.add(
-                        egui::Slider::new(&mut self.desktop.sticker_size.x, 340.0..=900.0)
-                            .step_by(10.)
-                            .suffix(" px"),
-                    );
-                    ui.add_space(12.);
-                    ui.label("높이");
-                    ui.add(
-                        egui::Slider::new(&mut self.desktop.sticker_size.y, 220.0..=900.0)
-                            .step_by(10.)
-                            .suffix(" px"),
-                    );
-                });
-                hint(ui, "새로 여는 스티커 메모에 적용됩니다");
-                ui.add_space(6.);
                 if toggle_row(
                     ui,
                     &mut self.desktop.daily_today,
@@ -919,6 +889,26 @@ impl App {
                     && self.desktop.daily_today
                 {
                     self.desktop.daily_shown = None;
+                }
+                toggle_row(
+                    ui,
+                    &mut self.prefs.drop_schedule_choice,
+                    "메모 끌어 놓기 시 이날까지 업무 선택창 띄우기",
+                    "캘린더에서만 표시 · Shift 드래그는 선택창 없이 이날까지 업무로 지정",
+                );
+                toggle_row(
+                    ui,
+                    &mut self.prefs.close_completed_sticker,
+                    "스티커 메모 체크완료 시 스티커 닫기",
+                    "완료한 스티커를 화면에서 닫습니다",
+                );
+                if self.prefs.close_completed_sticker {
+                    toggle_row(
+                        ui,
+                        &mut self.prefs.rearrange_completed_stickers,
+                        "완료메모 발생 시 스티커 재정렬",
+                        "기존 위치 순서를 유지해 오른쪽에 제목만 보기로 정렬합니다",
+                    );
                 }
                 let monitors = crate::native_window::monitors(ui.ctx()).len();
                 let mut pick = self.desktop.arrange_monitor.is_some() || self.desktop.monitor_pick;
@@ -1028,6 +1018,39 @@ impl App {
                 toggle_row(ui, &mut self.desktop.hide_completed, "완료 메모 숨기기", "");
             }
             2 => {
+                section(ui, "새 스티커 메모 크기");
+                let mut preset = match self.desktop.sticker_size {
+                    s if s == Vec2::new(340., 240.) => 0,
+                    s if s == Vec2::splat(360.) => 1,
+                    s if s == Vec2::new(460., 440.) => 2,
+                    _ => 3,
+                };
+                if segmented(ui, &mut preset, &["작게", "보통", "크게", "직접 설정"]) {
+                    match preset {
+                        0 => self.desktop.sticker_size = Vec2::new(340., 240.),
+                        1 => self.desktop.sticker_size = Vec2::splat(360.),
+                        2 => self.desktop.sticker_size = Vec2::new(460., 440.),
+                        _ => {}
+                    }
+                }
+                ui.horizontal(|ui| {
+                    ui.label("너비");
+                    ui.add(
+                        egui::Slider::new(&mut self.desktop.sticker_size.x, 340.0..=900.0)
+                            .step_by(10.)
+                            .suffix(" px"),
+                    );
+                    ui.add_space(12.);
+                    ui.label("높이");
+                    ui.add(
+                        egui::Slider::new(&mut self.desktop.sticker_size.y, 220.0..=900.0)
+                            .step_by(10.)
+                            .suffix(" px"),
+                    );
+                });
+                hint(ui, "새로 여는 스티커 메모에 적용됩니다");
+                ui.add_space(6.);
+
                 toggle_row(
                     ui,
                     &mut self.desktop.always_sticker,
@@ -1157,21 +1180,29 @@ impl App {
                     hint(ui, &self.hotkey_status);
                 });
                 hint(ui, "예: Ctrl+Alt+N · 충돌하면 기존 설정으로 복구됩니다");
-                section(ui, "프로그램 사용 중");
-                let tone = crate::ui::t(ui);
+                section(ui, "메모 본문영역 서식 단축키");
                 for (key, label) in [
-                    ("Ctrl+Shift+H", "모든 스티커 닫기"),
-                    ("Ctrl+T", "항상 위에 켜기/끄기"),
                     ("Ctrl+B / I / U", "굵게 / 기울임 / 밑줄"),
                     ("~~ Space", "직전 단어 취소선"),
                     ("~~~ Space", "한 줄 전체 취소선"),
                     ("[] Space", "체크박스 넣기"),
                     ("Ctrl+;", "날짜 넣기"),
                     ("Ctrl+Shift+;", "날짜와 시간 넣기"),
+                    ("#이름 Space", "본문 첫 줄에서 프로젝트 지정"),
+                ] {
+                    crate::ui::field(ui, label, |ui| {
+                        ui.label(key);
+                    });
+                }
+                section(ui, "프로그램 사용 중");
+                let tone = crate::ui::t(ui);
+                for (key, label) in [
+                    ("Ctrl+Shift+H", "모든 스티커 닫기"),
+                    ("Shift+드래그", "날짜에 이날까지 업무 추가 (선택창 생략)"),
+                    ("Ctrl+T", "항상 위에 켜기/끄기"),
                     ("Ctrl+F", "빠른 검색"),
                     ("Ctrl+H", "찾아 바꾸기"),
                     ("Ctrl+P", "프로젝트 선택"),
-                    ("#이름 Space", "본문 첫 줄에서 프로젝트 지정"),
                     ("Esc Esc", "메모 닫기"),
                 ] {
                     ui.horizontal(|ui| {
@@ -1249,15 +1280,14 @@ impl App {
     }
 }
 fn font_choice(ui: &mut egui::Ui, id: &str, value: &mut String) {
-    ui.push_id(id, |ui| {
-        ui.horizontal_wrapped(|ui| {
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(value.as_str())
+        .width(220.)
+        .show_ui(ui, |ui| {
             for name in crate::composer::font_choices() {
-                if crate::ui::pill(ui, value == name, name).clicked() {
-                    *value = name.into();
-                }
+                ui.selectable_value(value, name.into(), name);
             }
         });
-    });
     crate::ui::hint(ui, "설치된 글꼴을 사용하며 없으면 기본 글꼴로 표시합니다.");
 }
 pub fn color_choices(ui: &mut egui::Ui, color: &mut Color32) {

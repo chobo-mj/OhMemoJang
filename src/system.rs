@@ -1,5 +1,41 @@
 //! Small Windows integrations: start with Windows and the alert sound.
 
+/// Resolve a known client origin to its Z-order. Called only when dropping a memo.
+pub fn window_rank_at_origin(x: f32, y: f32) -> Option<usize> {
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::Foundation::POINT;
+        use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            GetTopWindow, GetWindow, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
+            GW_HWNDNEXT,
+        };
+        let mut window = GetTopWindow(std::ptr::null_mut());
+        let mut rank = 0;
+        while !window.is_null() {
+            let mut process = 0;
+            GetWindowThreadProcessId(window, &mut process);
+            if process == std::process::id()
+                && IsWindowVisible(window) != 0
+                && IsIconic(window) == 0
+            {
+                let mut origin = POINT { x: 0, y: 0 };
+                if ClientToScreen(window, &mut origin) != 0
+                    && (origin.x as f32 - x).abs() < 2.
+                    && (origin.y as f32 - y).abs() < 2.
+                {
+                    return Some(rank);
+                }
+            }
+            window = GetWindow(window, GW_HWNDNEXT);
+            rank += 1;
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = (x, y);
+    None
+}
+
 /// The program was called OmniMemoJang before: its data folders move to the
 /// new name once, so nothing saved is lost. Does nothing when the new folder
 /// exists already or there is no old one.
@@ -105,6 +141,19 @@ pub fn left_button_down() -> bool {
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
         // SAFETY: reads the key state only.
         unsafe { (GetAsyncKeyState(i32::from(VK_LBUTTON)) as u16 & 0x8000) != 0 }
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+pub fn shift_down() -> bool {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_SHIFT};
+        // SAFETY: reads a virtual key state without pointers.
+        unsafe { GetAsyncKeyState(i32::from(VK_SHIFT)) < 0 }
     }
     #[cfg(not(windows))]
     {

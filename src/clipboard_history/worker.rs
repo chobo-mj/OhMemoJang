@@ -37,8 +37,8 @@ struct Worker {
     tx: Sender<Event>,
     ctx: egui::Context,
     policy: Policy,
-    tidy_hours: u32,
-    last_tidy: i64,
+    last_tidy: Option<chrono::NaiveDate>,
+    tidy_path: PathBuf,
     /// Captures numbered up to this were made before the last delete-all.
     watermark: u64,
 }
@@ -71,11 +71,13 @@ impl Worker {
             tx,
             ctx,
             policy: settings.policy(),
-            tidy_hours: settings.tidy_hours,
-            last_tidy: 0,
+            last_tidy: std::fs::read_to_string(dir.join("last-tidy.txt"))
+                .ok()
+                .and_then(|s| s.trim().parse().ok()),
+            tidy_path: dir.join("last-tidy.txt"),
             watermark: 0,
         };
-        w.tidy();
+        w.tidy_if_due();
         w
     }
 
@@ -85,12 +87,17 @@ impl Worker {
     }
 
     fn tidy(&mut self) {
-        self.last_tidy = now_ms();
+        let now = now_ms();
+        let slot = noon_slot(chrono::Local::now().naive_local());
         let policy = self.policy;
         let mut changed = false;
         if let Some(s) = &mut self.store {
-            match s.apply_retention(&policy, self.last_tidy) {
-                Ok(n) => changed = n > 0,
+            match s.apply_retention(&policy, now) {
+                Ok(n) => {
+                    changed = n > 0;
+                    self.last_tidy = Some(slot);
+                    let _ = std::fs::write(&self.tidy_path, slot.to_string());
+                }
                 Err(_) => {
                     self.shared.counters.store_errors.fetch_add(1, Relaxed);
                 }
@@ -102,6 +109,12 @@ impl Worker {
         }
     }
 
+    fn tidy_if_due(&mut self) {
+        let slot = noon_slot(chrono::Local::now().naive_local());
+        if self.last_tidy.is_none_or(|last| last < slot) {
+            self.tidy();
+        }
+    }
     fn stats(&self) {
         if let Some(s) = &self.store {
             if let (Ok(count), Ok(bytes)) = (s.count(), s.total_bytes()) {
@@ -112,7 +125,13 @@ impl Worker {
 
     fn run(&mut self, rx: Receiver<Cmd>) {
         loop {
-            match rx.recv_timeout(Duration::from_secs(60)) {
+            self.tidy_if_due();
+            let now = chrono::Local::now().naive_local();
+            let next_noon = (noon_slot(now) + chrono::Duration::days(1))
+                .and_hms_opt(12, 0, 0)
+                .unwrap();
+            let wait_ms = (next_noon - now).num_milliseconds().clamp(1, 60_000) as u64;
+            match rx.recv_timeout(Duration::from_millis(wait_ms)) {
                 // One bad item or request must not end the worker: nothing
                 // would be collected after it.
                 Ok(cmd) => {
@@ -126,12 +145,7 @@ impl Worker {
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {
-                    // The wall clock is used, so a late wake-up after sleep
-                    // runs one catch-up pass.
-                    let every = self.tidy_hours as i64 * 3_600_000;
-                    if self.tidy_hours > 0 && now_ms() - self.last_tidy >= every {
-                        self.tidy();
-                    }
+                    self.tidy_if_due();
                 }
                 Err(RecvTimeoutError::Disconnected) => break,
             }
@@ -171,9 +185,8 @@ impl Worker {
                 }
                 self.after_delete();
             }
-            Cmd::Policy { policy, tidy_hours } => {
+            Cmd::Policy { policy } => {
                 self.policy = policy;
-                self.tidy_hours = tidy_hours;
                 self.tidy();
                 self.emit(Event::Changed);
             }
@@ -214,7 +227,14 @@ impl Worker {
         let Some(store) = &mut self.store else {
             return false;
         };
-        match store.insert(&item, &self.policy, now_ms()) {
+        match store.insert(
+            &item,
+            &Policy {
+                retention_days: 0,
+                ..self.policy
+            },
+            now_ms(),
+        ) {
             Ok(_) => true,
             Err(InsertError::TooLarge) => {
                 self.shared.counters.oversize.fetch_add(1, Relaxed);
@@ -578,5 +598,26 @@ mod tests {
         assert_eq!(it.kind, "image");
         assert!(it.formats.iter().any(|f| f.key == "dibv5" && f.derived));
         assert_eq!(it.previews[0].0, "thumb");
+    }
+}
+
+/// The most recent local noon, including the previous day before noon.
+fn noon_slot(now: chrono::NaiveDateTime) -> chrono::NaiveDate {
+    use chrono::Timelike;
+    now.date() - chrono::Duration::days(i64::from(now.hour() < 12))
+}
+
+#[cfg(test)]
+mod noon_tests {
+    use super::*;
+    #[test]
+    fn noon_rollover_and_startup_catchup() {
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 11, 17).unwrap();
+        assert_eq!(
+            noon_slot(day.and_hms_opt(11, 59, 59).unwrap()),
+            day.pred_opt().unwrap()
+        );
+        assert_eq!(noon_slot(day.and_hms_opt(12, 0, 0).unwrap()), day);
+        assert_eq!(noon_slot(day.and_hms_opt(23, 59, 59).unwrap()), day);
     }
 }

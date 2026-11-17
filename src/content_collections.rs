@@ -136,7 +136,7 @@ impl App {
                 });
             });
             if copy == 1 {
-                let result = arboard::Clipboard::new().and_then(|mut clipboard| {
+                let result = crate::clipboard_copy::Clipboard::new().and_then(|mut clipboard| {
                     clipboard.set_html(table_html(table), Some(crate::table_edit::table_tsv(table)))
                 });
                 self.toast = result
@@ -409,7 +409,7 @@ fn table_html(table: &Table) -> String {
 }
 
 fn copy_rgba(width: usize, height: usize, pixels: Vec<u8>) -> Result<(), String> {
-    arboard::Clipboard::new()
+    crate::clipboard_copy::Clipboard::new()
         .and_then(|mut c| {
             c.set_image(arboard::ImageData {
                 width,

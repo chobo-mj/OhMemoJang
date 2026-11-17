@@ -3,6 +3,7 @@ mod alarm;
 mod app_icon;
 mod calendar_dock;
 mod catalog;
+mod clipboard_copy;
 mod clipboard_history;
 mod clipboard_html;
 mod composer;
@@ -64,6 +65,8 @@ struct App {
     page: usize,
     active: usize,
     sidebar: bool,
+    sidebar_width: f32,
+    sidebar_dragging: bool,
     split: bool,
     dark: bool,
     search: String,
@@ -73,6 +76,11 @@ struct App {
     cal_side_frac: f32,
     /// Where each calendar window drew its dates last (screen points), by
     /// window and when: a sticker let go over one files its memo there.
+    completed_stickers: Vec<usize>,
+    schedule_drop_serial: u64,
+    pending_date_drop: Option<(usize, NaiveDate)>,
+    day_cells: std::collections::HashMap<egui::ViewportId, (f64, egui::Rect, NaiveDate)>,
+    schedule_origins: std::collections::HashMap<egui::ViewportId, egui::Pos2>,
     cal_cells: std::collections::HashMap<egui::ViewportId, (f64, Vec<(egui::Rect, NaiveDate)>)>,
     cal: calendar_dock::Dock,
     /// Settings kept between runs, and the text last written to disk.
@@ -106,6 +114,7 @@ struct App {
     picked: Vec<usize>,
     project_name: String,
     link_source: Option<usize>,
+    board_relation_kind: usize,
     journal_month: bool,
     journal_date: String,
     toast: String,
@@ -173,9 +182,11 @@ impl App {
         composer::add_spacer_font(&mut fonts);
         cc.egui_ctx.set_fonts(fonts);
         storage::watch_input(&cc.egui_ctx);
+        clipboard_copy::install(&cc.egui_ctx);
         let mut a = Self::sample(Local::now().date_naive());
         a.clipboard = clipboard_history::ClipboardHistory::start(&cc.egui_ctx);
         a.prefs = prefs::Prefs::load();
+        a.sidebar_width = a.prefs.sidebar_width;
         a.cal.theme = a.prefs.cal_theme;
         a.load_or_start();
         a.prefs_saved = a.prefs.to_text();
@@ -200,12 +211,19 @@ impl App {
             page: 0,
             active: 0,
             sidebar: true,
+            sidebar_width: 236.,
+            sidebar_dragging: false,
             split: true,
             dark: false,
             search: String::new(),
             editor: false,
             sticky: false,
             cal_side_frac: 0.38,
+            completed_stickers: Vec::new(),
+            schedule_drop_serial: 0,
+            pending_date_drop: None,
+            day_cells: Default::default(),
+            schedule_origins: Default::default(),
             cal_cells: Default::default(),
             cal: calendar_dock::Dock::default(),
             prefs: prefs::Prefs::default(),
@@ -229,6 +247,7 @@ impl App {
             picked: vec![],
             project_name: "새 프로젝트".into(),
             link_source: None,
+            board_relation_kind: 0,
             journal_month: false,
             journal_date: today.to_string(),
             toast: String::new(),
@@ -429,6 +448,7 @@ impl eframe::App for App {
         }
         self.theme(ctx);
         self.finish_sticker_drag(ctx);
+        self.finish_note_drag(ctx);
         self.clipboard.poll(ctx);
         if self.page != 7 {
             self.clipboard.idle();
@@ -477,6 +497,7 @@ impl eframe::App for App {
         self.monitor_picker(ctx);
         self.apply_arrangement(ctx);
         self.detached_note(ctx);
+        self.finish_completed_stickers(ctx);
         self.global_dialogs(ctx);
         self.extra_windows(ctx);
         self.desktop_dialogs(ctx);
@@ -624,8 +645,43 @@ impl App {
     fn main_ui(&mut self, ctx: &egui::Context) {
         let tone = ui::tone(self.dark);
         if self.sidebar {
+            let left = ctx.screen_rect().left();
+            let edge = left + self.sidebar_width;
+            for event in ctx.input(|i| i.events.clone()) {
+                match event {
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        ..
+                    } if (pos.x - edge).abs() <= 6. => self.sidebar_dragging = true,
+                    egui::Event::PointerMoved(pos) if self.sidebar_dragging => {
+                        self.sidebar_width = (pos.x - left).clamp(64., 360.)
+                    }
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        ..
+                    } if self.sidebar_dragging => {
+                        self.sidebar_width = (pos.x - left).clamp(64., 360.);
+                        self.prefs.sidebar_width = self.sidebar_width;
+                        self.sidebar_dragging = false;
+                    }
+                    _ => {}
+                }
+            }
+            if self.sidebar_dragging
+                || ctx.input(|i| {
+                    i.pointer
+                        .hover_pos()
+                        .is_some_and(|p| (p.x - edge).abs() <= 6.)
+                })
+            {
+                ctx.set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            }
             egui::SidePanel::left("sidebar")
-                .exact_width(236.)
+                .exact_width(self.sidebar_width)
                 .resizable(false)
                 .show_separator_line(false)
                 .frame(
@@ -752,16 +808,73 @@ impl App {
             });
         });
     }
+    fn compact_sidebar(&mut self, ui: &mut egui::Ui) {
+        let id = egui::Id::new("sidebar_app_icon");
+        let texture = ui
+            .ctx()
+            .data_mut(|d| d.get_temp::<egui::TextureHandle>(id))
+            .unwrap_or_else(|| {
+                let icon = app_icon::window();
+                let image = egui::ColorImage::from_rgba_unmultiplied(
+                    [icon.width as usize, icon.height as usize],
+                    &icon.rgba,
+                );
+                let tex =
+                    ui.ctx()
+                        .load_texture("sidebar_app_icon", image, egui::TextureOptions::LINEAR);
+                ui.ctx().data_mut(|d| d.insert_temp(id, tex.clone()));
+                tex
+            });
+        ui.vertical_centered(|ui| {
+            ui.image((texture.id(), Vec2::splat(36.)));
+            ui.add_space(12.);
+            let search = ui.menu_button("   ", |ui| {
+                let r = ui::search_field(ui, &mut self.search, "compact_search", "검색", 220.);
+                if r.changed() {
+                    self.extra.search_mode = !self.search.is_empty();
+                    self.page = 0;
+                }
+            });
+            icons::paint_icon(
+                ui.painter(),
+                search.response.rect.shrink(5.),
+                icons::Icon::Search,
+                ui::t(ui).ink,
+            );
+            search.response.on_hover_text("검색");
+            if icons::icon_button(ui, icons::Icon::PlusCircle, "빠른 메모").clicked() {
+                self.new_sticker();
+            }
+            for (page, name, icon) in PAGES {
+                if !self.prefs.hidden_pages.contains(&page)
+                    && icons::toggle_icon(ui, icon, name, self.page == page).clicked()
+                {
+                    self.page = page;
+                }
+            }
+            ui.add_space(12.);
+            if icons::icon_button(ui, icons::Icon::Settings, "설정").clicked() {
+                self.settings = true;
+            }
+        });
+    }
     fn sidebar_ui(&mut self, ui: &mut egui::Ui) {
+        if ui.available_width() < 160. {
+            self.compact_sidebar(ui);
+            return;
+        }
         ui.horizontal(|ui| {
-            ui::banner(ui, ui.available_width() - 32.);
+            ui::banner(
+                ui,
+                (ui.available_width() - 28. - ui.spacing().item_spacing.x).max(16.),
+            );
             if icons::icon_button(ui, icons::Icon::Sidebar, "사이드바 접기").clicked() {
                 self.sidebar = false;
             }
         });
         ui.add_space(12.);
         ui.horizontal(|ui| {
-            let width = ui.available_width() - 34.;
+            let width = ui.available_width() - 28. - ui.spacing().item_spacing.x;
             let r = ui::search_field(ui, &mut self.search, "global_search", "검색", width);
             if r.changed() {
                 self.extra.search_mode = !self.search.is_empty();

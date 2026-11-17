@@ -113,7 +113,7 @@ fn scope_card(
 impl App {
     pub fn done_at(&mut self, i: usize, day: Option<NaiveDate>, value: bool) {
         let n = &self.data.notes[i];
-        if n.duration > 1 && n.date.is_some() {
+        if n.duration > 1 && n.date.is_some() && !n.deadline {
             let today = Local::now().date_naive();
             let day = day.unwrap_or_else(|| {
                 if n.occurs(today) {
@@ -129,6 +129,9 @@ impl App {
             self.extra.scope_owner = main_viewport();
         } else {
             self.data.complete(i, value, Local::now());
+            if value {
+                self.completed_stickers.push(i);
+            }
         }
     }
     pub fn complete_span(
@@ -150,6 +153,9 @@ impl App {
             }
         }
         n.refresh_done();
+        if value {
+            self.completed_stickers.push(i);
+        }
         if self.active == i {
             self.extra.edit_occurrence = Some(date);
             self.completion_edit = n
@@ -299,6 +305,7 @@ impl App {
             note: f,
             card: false,
             folder: true,
+            clear_on_miss: false,
             occurrence: None,
         });
     }

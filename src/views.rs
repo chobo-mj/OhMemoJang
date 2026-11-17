@@ -77,6 +77,9 @@ impl App {
             );
             row.dnd_set_drag_payload(NoteDrag);
             self.drag_source_on(ui, &row, i, occurrence);
+            if let Some(source) = self.sources.last_mut() {
+                source.clear_on_miss = occurrence.is_some() || matches!(self.page, 2 | 3);
+            }
             if hovered {
                 for (dx, dy) in [(0., -4.), (0., 0.), (0., 4.), (4., -4.), (4., 0.), (4., 4.)] {
                     ui.painter().circle_filled(
@@ -116,6 +119,11 @@ impl App {
                 "제목 없음".to_owned()
             } else {
                 n.title.clone()
+            };
+            let title = if n.deadline {
+                format!("🚩 [{}] {}", n.dday(Local::now().date_naive()), title)
+            } else {
+                title
             };
             let text_left = rect.left() + 48. + lead;
             let actions = if hovered || n.starred { 64. } else { 0. };
@@ -776,6 +784,26 @@ impl App {
     }
     /// The selected day's title bar and its list of memos.
     pub fn calendar_day_detail(&mut self, ui: &mut egui::Ui) {
+        let drop_rect = ui.available_rect_before_wrap().intersect(ui.clip_rect());
+        self.targets.push(dragging::Target {
+            viewport: ui.ctx().viewport_id(),
+            layer: ui.layer_id(),
+            rect: drop_rect,
+            kind: dragging::Destination::DayList(self.day),
+        });
+        let origin = ui.ctx().input(|i| {
+            i.viewport()
+                .inner_rect
+                .map_or(Vec2::ZERO, |r| r.min.to_vec2())
+        });
+        self.day_cells.insert(
+            ui.ctx().viewport_id(),
+            (ui.input(|i| i.time), drop_rect.translate(origin), self.day),
+        );
+        self.schedule_origins.insert(
+            ui.ctx().viewport_id(),
+            (origin * ui.ctx().pixels_per_point()).to_pos2(),
+        );
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new(format!(
@@ -784,7 +812,7 @@ impl App {
                     ui::weekday(self.day)
                 ))
                 .strong()
-                .size(14.),
+                .size(20.),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("+ 이 날짜에 스티커").clicked() {
@@ -798,15 +826,21 @@ impl App {
         let mut cache = std::mem::take(&mut self.lists);
         let key = crate::lists::key((self.day, self.data.notes.len()));
         let ids = cache.get("calendar_day", key, || {
-            self.data
+            let mut ids = self
+                .data
                 .notes
                 .iter()
                 .enumerate()
                 .filter(|(i, n)| {
-                    self.visible(*i) && !self.is_guide(*i) && self.calendar_matches(n, self.day)
+                    self.visible(*i)
+                        && !self.is_guide(*i)
+                        && !n.deadline
+                        && self.calendar_matches(n, self.day)
                 })
                 .map(|(i, _)| i)
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            ids.sort_by_key(|&i| (self.data.notes[i].time, i));
+            ids
         });
         self.lists = cache;
         let ids = (*ids).clone();
@@ -816,6 +850,32 @@ impl App {
         }
         for i in ids {
             self.task_row_on(ui, i, Some(self.day));
+        }
+        ui.add_space(16.);
+        ui.label(RichText::new("🚩 이날까지 업무").strong().size(16.));
+        ui::divider(ui);
+        let mut cache = std::mem::take(&mut self.lists);
+        let deadlines = cache.get("calendar_deadlines", key, || {
+            let mut ids = self
+                .data
+                .notes
+                .iter()
+                .enumerate()
+                .filter(|(i, n)| self.visible(*i) && n.deadline_date().is_some() && !n.done)
+                .map(|(i, _)| i)
+                .collect::<Vec<_>>();
+            ids.sort_by_key(|&i| {
+                (
+                    self.data.notes[i].deadline_date(),
+                    self.data.notes[i].time,
+                    i,
+                )
+            });
+            ids
+        });
+        self.lists = cache;
+        for &i in deadlines.iter() {
+            self.task_row_on(ui, i, self.data.notes[i].deadline_date());
         }
     }
     /// Memo bands of the month grid. A memo shown on several days in a row
@@ -858,6 +918,10 @@ impl App {
             }
             let now = ctx.input(|i| i.time);
             self.cal_cells.insert(ctx.viewport_id(), (now, cells));
+            self.schedule_origins.insert(
+                ctx.viewport_id(),
+                (origin * ctx.pixels_per_point()).to_pos2(),
+            );
         }
         let month = self.month.month();
         let whole_weeks = self.prefs.cal_weeks > 0;
@@ -1014,6 +1078,11 @@ impl App {
             "제목 없음".to_owned()
         } else {
             n.title.clone()
+        };
+        let label = if n.deadline {
+            format!("🚩 {label}")
+        } else {
+            label
         };
         let mut job = egui::text::LayoutJob::single_section(
             label,
@@ -1222,84 +1291,136 @@ impl App {
             return;
         }
         ui.add_space(6.);
+        self.picked
+            .retain(|&i| self.data.notes.get(i).is_some_and(|n| !n.deleted));
+        if self
+            .link_source
+            .is_some_and(|i| i >= self.data.notes.len() || !self.visible(i))
+        {
+            self.link_source = None;
+        }
         ui.horizontal_wrapped(|ui| {
-            let tone = ui::t(ui);
-            ui.label(
-                RichText::new(format!("{}개 선택", self.picked.len())).color(
-                    if self.picked.is_empty() {
-                        tone.faint
-                    } else {
-                        ACCENT
-                    },
-                ),
+            let previous = self.board_relation_kind;
+            ui::segmented(
+                ui,
+                &mut self.board_relation_kind,
+                &["관련 메모 연결", "상위 → 하위 연결"],
             );
-            let enabled = !self.picked.is_empty();
-            ui.add_enabled_ui(enabled, |ui| {
-                if ui
-                    .button("연결")
-                    .on_hover_text("선택한 두 메모를 연결")
-                    .clicked()
-                {
-                    if self.picked.len() == 2 {
-                        self.data.connect(self.picked[0], self.picked[1]);
-                    } else {
-                        self.toast = "연결할 메모 2개를 선택하세요".into();
-                    }
-                }
-                if ui.button("연결 해제").clicked() && self.picked.len() == 2 {
-                    let (a, b) = (self.picked[0], self.picked[1]);
-                    self.data.links.retain(|e| *e != (a.min(b), a.max(b)));
-                }
-                if ui
-                    .button("첫 메모 아래로 종속")
-                    .on_hover_text("처음 선택한 메모 아래로 나머지를 묶습니다")
-                    .clicked()
-                    && self.picked.len() >= 2
-                {
-                    let p = self.picked[0];
-                    for c in self.picked[1..].iter().copied() {
-                        if !self.data.reparent(c, p) {
-                            self.toast = "자기 자신 또는 순환 관계는 만들 수 없습니다".into();
-                        }
-                    }
-                }
-                if ui.button("종속 해제").clicked() {
-                    for &i in &self.picked {
-                        self.data.notes[i].parents.clear();
-                    }
-                }
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.project_name)
-                        .desired_width(120.)
-                        .hint_text("프로젝트 이름"),
-                );
-                if ui.button("프로젝트로 묶기").clicked() {
-                    if self.picked.is_empty() || self.project_name.trim().is_empty() {
-                        self.toast = "메모와 프로젝트 이름을 선택하세요".into();
-                    } else {
-                        let p = self
-                            .data
-                            .projects
-                            .iter()
-                            .position(|s| s == self.project_name.trim())
-                            .unwrap_or_else(|| {
-                                self.data.projects.push(self.project_name.trim().into());
-                                self.data.projects.len() - 1
-                            });
-                        for &i in &self.picked {
-                            self.data.notes[i].project = Some(p);
-                        }
-                    }
-                }
-                if ui.button("선택 해제").clicked() {
-                    self.picked.clear();
+            if previous != self.board_relation_kind {
+                self.link_source = None;
+            }
+            if let Some(source) = self.link_source {
+                ui.label(format!(
+                    "{} → 대상 카드를 선택하세요",
+                    shorten(&self.data.notes[source].title, 20)
+                ));
+                if ui.button("취소 · Esc").clicked() {
                     self.link_source = None;
                 }
-            });
+            } else {
+                ui.label(if self.board_relation_kind == 1 {
+                    "상위 카드의 ‘상위로 지정’을 누르세요"
+                } else {
+                    "카드의 ‘연결 시작’을 누르세요"
+                });
+            }
         });
+        if !self.picked.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                let tone = ui::t(ui);
+                ui.label(
+                    RichText::new(format!("{}개 선택", self.picked.len())).color(
+                        if self.picked.is_empty() {
+                            tone.faint
+                        } else {
+                            ACCENT
+                        },
+                    ),
+                );
+                let enabled = !self.picked.is_empty();
+                ui.add_enabled_ui(enabled, |ui| {
+                    if ui
+                        .add_enabled(
+                            self.picked.len() == 2,
+                            egui::Button::new("선택한 두 메모 연결"),
+                        )
+                        .on_hover_text("방향 없는 관련 메모 관계")
+                        .clicked()
+                    {
+                        if self.picked.len() == 2 {
+                            self.data.connect(self.picked[0], self.picked[1]);
+                        } else {
+                            self.toast = "연결할 메모 2개를 선택하세요".into();
+                        }
+                    }
+                    if ui
+                        .add_enabled(self.picked.len() == 2, egui::Button::new("연결 해제"))
+                        .clicked()
+                        && self.picked.len() == 2
+                    {
+                        let (a, b) = (self.picked[0], self.picked[1]);
+                        self.data.links.retain(|e| *e != (a.min(b), a.max(b)));
+                    }
+                    if ui
+                        .add_enabled(
+                            self.picked.len() >= 2,
+                            egui::Button::new("선택한 상위 아래로 연결"),
+                        )
+                        .on_hover_text("처음 선택한 메모 아래로 나머지를 묶습니다")
+                        .clicked()
+                        && self.picked.len() >= 2
+                    {
+                        let p = self.picked[0];
+                        for c in self.picked[1..].iter().copied() {
+                            if !self.data.reparent(c, p) {
+                                self.toast = "자기 자신 또는 순환 관계는 만들 수 없습니다".into();
+                            }
+                        }
+                    }
+                    if ui.button("종속 해제").clicked() {
+                        for &i in &self.picked {
+                            self.data.notes[i].parents.clear();
+                        }
+                    }
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.project_name)
+                            .desired_width(120.)
+                            .hint_text("프로젝트 이름"),
+                    );
+                    if ui.button("프로젝트로 묶기").clicked() {
+                        if self.picked.is_empty() || self.project_name.trim().is_empty() {
+                            self.toast = "메모와 프로젝트 이름을 선택하세요".into();
+                        } else {
+                            let p = self
+                                .data
+                                .projects
+                                .iter()
+                                .position(|s| s == self.project_name.trim())
+                                .unwrap_or_else(|| {
+                                    self.data.projects.push(self.project_name.trim().into());
+                                    self.data.projects.len() - 1
+                                });
+                            for &i in &self.picked {
+                                self.data.notes[i].project = Some(p);
+                            }
+                        }
+                    }
+                    if ui.button("선택 해제").clicked() {
+                        self.picked.clear();
+                        self.link_source = None;
+                    }
+                });
+            });
+        }
+        if let Some(&first) = self.picked.first().filter(|_| self.picked.len() >= 2) {
+            ui::hint(
+                ui,
+                format!("선택한 상위 메모 · {}", self.data.notes[first].title),
+            );
+        }
         ui::hint(
             ui,
-            "카드 제목을 끌어 이동 · ≡ 를 다른 카드로 끌면 종속 · 카드의 연결 버튼으로 관계 연결",
+            "제목을 끌어 카드 이동 · ≡ 를 상위 카드로 끌어 하위로 연결 · 화살표는 상위 → 하위",
         );
         ui.add_space(8.);
         self.extra.scene_size = ui.available_size();
@@ -1334,26 +1455,22 @@ impl App {
                     shown[i] = true;
                 }
                 for &(a, b) in &self.data.links {
-                    if shown[a] && shown[b] {
+                    if shown.get(a).copied().unwrap_or(false) && shown.get(b).copied().unwrap_or(false) {
                         edge(
                             ui.painter(),
                             rects[a],
                             rects[b],
                             Color32::from_rgb(161, 167, 153),
-                            true,
+                            false,
+                            self.extra.zoom,
                         );
                     }
                 }
                 for &i in &ids {
                     for &p in &self.data.notes[i].parents {
                         if shown.get(p).copied().unwrap_or(false) {
-                            let a = rects[p].center_bottom();
-                            let b = rects[i].center_top();
-                            ui.painter().arrow(
-                                a,
-                                b - a,
-                                Stroke::new(2.0_f32, Color32::from_rgb(133, 121, 177)),
-                            );
+                            edge(ui.painter(), rects[p], rects[i],
+                                Color32::from_rgb(133, 121, 177), true, self.extra.zoom);
                         }
                     }
                 }
@@ -1363,7 +1480,7 @@ impl App {
                     if !ui.is_rect_visible(rect) {
                         continue;
                     }
-                    let selected = self.picked.contains(&i);
+                    let selected = self.picked.contains(&i) || self.link_source == Some(i);
                     let tone = ui::t(ui);
                     let fill = if self.dark {
                         Color32::from_rgb(39, 40, 38)
@@ -1506,24 +1623,25 @@ impl App {
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
                                     let linking = self.link_source == Some(i);
-                                    if ui::pill(
-                                        ui,
-                                        linking,
-                                        if linking {
-                                            "대상 선택 중"
-                                        } else {
-                                            "연결"
-                                        },
-                                    )
-                                    .on_hover_text("두 카드를 차례로 눌러 연결합니다")
-                                    .clicked()
-                                    {
-                                        if let Some(s) = self.link_source.take() {
-                                            self.data.connect(s, i);
-                                        } else {
-                                            self.link_source = Some(i);
-                                            self.toast = "다른 카드의 연결 버튼을 누르세요".into();
-                                        }
+                                    let label = if linking { "선택 취소" }
+                                        else if self.link_source.is_some() {
+                                            if self.board_relation_kind == 1 { "하위로 연결" } else { "이 메모와 연결" }
+                                        } else if self.board_relation_kind == 1 { "상위로 지정" }
+                                        else { "연결 시작" };
+                                    if ui::pill(ui, linking, label).clicked() {
+                                        if linking { self.link_source = None; }
+                                        else if let Some(source) = self.link_source {
+                                            if self.board_relation_kind == 0 {
+                                                self.data.connect(source, i);
+                                                self.link_source = None;
+                                                self.toast = "관련 메모를 연결했습니다".into();
+                                            } else if self.data.reparent(i, source) {
+                                                self.link_source = None;
+                                                self.toast = "상위 → 하위 관계를 연결했습니다".into();
+                                            } else {
+                                                self.toast = "순환 관계가 됩니다. 다른 하위 메모를 선택하세요".into();
+                                            }
+                                        } else { self.link_source = Some(i); }
                                     }
                                     if ui::pill(ui, false, "열기").clicked() {
                                         self.open_note(i);
@@ -1565,41 +1683,76 @@ fn overlay(ui: &mut egui::Ui, rect: Rect, id: usize, f: impl FnOnce(&mut egui::U
     let mut child = ui.new_child(egui::UiBuilder::new().id_salt(id).max_rect(rect));
     f(&mut child);
 }
-fn edge(p: &egui::Painter, a: Rect, b: Rect, color: Color32, both: bool) {
-    let points = |r: Rect| {
-        [
-            r.center_top(),
-            r.center_bottom(),
-            r.left_center(),
-            r.right_center(),
-        ]
-    };
-    let mut best = (a.center(), b.center());
-    let mut dist = f32::INFINITY;
-    for x in points(a) {
-        for y in points(b) {
-            let d = x.distance_sq(y);
-            if d < dist {
-                best = (x, y);
-                dist = d;
-            }
-        }
+/// Attach to facing card borders. Overlapping cards have no visible gap.
+fn edge_ports(a: Rect, b: Rect) -> Option<(egui::Pos2, egui::Pos2, Vec2)> {
+    if a.right() < b.left() {
+        Some((a.right_center(), b.left_center(), Vec2::X))
+    } else if b.right() < a.left() {
+        Some((a.left_center(), b.right_center(), -Vec2::X))
+    } else if a.bottom() < b.top() {
+        Some((a.center_bottom(), b.center_top(), Vec2::Y))
+    } else if b.bottom() < a.top() {
+        Some((a.center_top(), b.center_bottom(), -Vec2::Y))
+    } else {
+        None
     }
-    let (x, y) = best;
-    if x.distance(y) < 1. {
+}
+fn edge(p: &egui::Painter, a: Rect, b: Rect, color: Color32, directed: bool, zoom: f32) {
+    if !p.clip_rect().intersects(a.union(b).expand(16.)) {
         return;
     }
-    p.line_segment([x, y], Stroke::new(1.5_f32, color));
-    let head = |tip: egui::Pos2, other: egui::Pos2| {
-        let u = (tip - other).normalized();
-        let back = tip - u * 9.;
-        let n = Vec2::new(-u.y, u.x) * 4.;
-        p.line_segment([tip, back + n], Stroke::new(1.5_f32, color));
-        p.line_segment([tip, back - n], Stroke::new(1.5_f32, color));
+    let Some((start, end, direction)) = edge_ports(a, b) else {
+        return;
     };
-    head(y, x);
-    if both {
-        head(x, y);
+    let scale = zoom.clamp(0.4, 1.8);
+    let gap = (end - start).dot(direction);
+    let inset = (3. / scale).min(gap * 0.15);
+    let start = start + direction * inset;
+    let end = end - direction * inset;
+    let bend = (gap * 0.45).clamp(8., 90.);
+    let stroke = Stroke::new(1.5 / scale, color);
+    p.add(egui::epaint::CubicBezierShape::from_points_stroke(
+        [start, start + direction * bend, end - direction * bend, end],
+        false,
+        Color32::TRANSPARENT,
+        stroke,
+    ));
+    if directed {
+        let length = (7. / scale).min(gap * 0.3);
+        let back = end - direction * length;
+        let normal = Vec2::new(-direction.y, direction.x) * length * 0.48;
+        p.line_segment([back + normal, end], stroke);
+        p.line_segment([back - normal, end], stroke);
+    }
+}
+
+#[cfg(test)]
+mod board_edge_tests {
+    use super::*;
+
+    #[test]
+    fn connections_follow_facing_borders_in_all_directions() {
+        let a = Rect::from_min_size(egui::pos2(100., 100.), Vec2::new(254., 152.));
+        for direction in [Vec2::X, -Vec2::X, Vec2::Y, -Vec2::Y] {
+            let b = a.translate(direction * 500.);
+            let (start, end, actual) = edge_ports(a, b).unwrap();
+            assert_eq!(actual, direction);
+            assert!(a.contains(start));
+            assert!(b.contains(end));
+            assert!((end - start).dot(direction) > 0.);
+            let (reverse_start, reverse_end, reverse_direction) = edge_ports(b, a).unwrap();
+            assert_eq!(
+                (reverse_start, reverse_end, reverse_direction),
+                (end, start, -direction)
+            );
+        }
+    }
+
+    #[test]
+    fn overlapping_cards_do_not_draw_backwards_arrows() {
+        let a = Rect::from_min_size(egui::Pos2::ZERO, Vec2::splat(100.));
+        assert!(edge_ports(a, a).is_none());
+        assert!(edge_ports(a, a.translate(Vec2::splat(50.))).is_none());
     }
 }
 /// A run of consecutive days of one week row on which memo `note` shows.
@@ -1854,6 +2007,7 @@ mod sticker_drop_tests {
         a.studio.windows.get_mut(&i).unwrap().mode = Mode::Title; // carried as the title-only sticker
         let date = today + Duration::days(3);
         let d = StickerDrag {
+            shift: false,
             note: i,
             origin: egui::pos2(140., 220.),
             mode: Mode::Sticker,

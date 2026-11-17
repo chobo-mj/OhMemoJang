@@ -304,8 +304,18 @@ mod imp {
         }
 
         unsafe fn capture(&mut self) {
+            // Never block the listener while a UI clipboard write is in progress.
+            // The write records its final sequence before releasing this lock.
+            let Ok(own_sequence) = crate::clipboard_copy::LAST_WRITE.try_lock() else {
+                SetTimer(self.listener, RETRY_TIMER, 10, None);
+                return;
+            };
             let current = GetClipboardSequenceNumber();
             if current != 0 && current == self.ignore_seq {
+                return;
+            }
+            if current != 0 && current == *own_sequence && self.shared.ignore_own_copy.load(Relaxed)
+            {
                 return;
             }
             let seq = self.shared.seq.fetch_add(1, Relaxed) + 1;
@@ -349,6 +359,16 @@ mod imp {
         /// is read.
         unsafe fn read_open(&mut self) -> Read {
             let owner = GetClipboardOwner();
+            if !owner.is_null() && self.shared.ignore_own_copy.load(Relaxed) {
+                let mut process = 0;
+                windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(
+                    owner,
+                    &mut process,
+                );
+                if process == std::process::id() {
+                    return Read::Skip;
+                }
+            }
             if !owner.is_null() && owner == self.owner {
                 return Read::Skip;
             }

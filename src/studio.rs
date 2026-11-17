@@ -50,6 +50,7 @@ pub enum Layout {
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Arrange {
+    pub preserve_sticker_order: bool,
     pub layout: Layout,
     pub fold: Option<Mode>,
     pub area: Rect,
@@ -184,6 +185,7 @@ impl Window {
 /// A sticker being carried over a calendar: dropped on a date it takes that
 /// date, then it goes back where it was.
 pub struct StickerDrag {
+    pub shift: bool,
     pub note: usize,
     /// Where the window was (outer position, points) and what it showed.
     pub origin: Pos2,
@@ -196,6 +198,7 @@ pub struct StickerDrag {
 }
 #[derive(Default)]
 pub struct Studio {
+    raw_date_drop: Option<(usize, f64)>,
     pub windows: BTreeMap<usize, Window>,
     pub help: bool,
     pub drag: Option<StickerDrag>,
@@ -265,18 +268,60 @@ pub fn plan(layout: Layout, area: Rect, sizes: &[Vec2]) -> Vec<Pos2> {
     out
 }
 impl App {
+    pub fn finish_completed_stickers(&mut self, ctx: &egui::Context) {
+        let completed = std::mem::take(&mut self.completed_stickers);
+        if !self.prefs.close_completed_sticker {
+            return;
+        }
+        let mut rearrange = false;
+        for i in completed {
+            if let Some(w) = self.studio.windows.get_mut(&i) {
+                if w.open && matches!(w.mode, Mode::Sticker | Mode::Title) {
+                    w.open = false;
+                    ctx.send_viewport_cmd_to(viewport(i), egui::ViewportCommand::Close);
+                    rearrange = true;
+                }
+            }
+        }
+        if rearrange && self.prefs.rearrange_completed_stickers {
+            self.arrange = Some(Arrange {
+                preserve_sticker_order: true,
+                layout: Layout::Right,
+                fold: Some(Mode::Title),
+                area: self.arrange_area(ctx),
+            });
+        }
+    }
     /// Apply a pending desktop arrangement to every open sticker window.
     pub fn apply_arrangement(&mut self, _ctx: &egui::Context) {
         let Some(a) = self.arrange.take() else {
             return;
         };
-        let ids: Vec<_> = self
+        let mut ids: Vec<_> = self
             .studio
             .windows
             .iter()
-            .filter(|(&i, w)| w.open && !self.data.notes[i].deleted && self.visible(i))
+            .filter(|(&i, w)| {
+                w.open
+                    && !self.data.notes[i].deleted
+                    && self.visible(i)
+                    && (!a.preserve_sticker_order || matches!(w.mode, Mode::Sticker | Mode::Title))
+            })
             .map(|(&i, _)| i)
             .collect();
+        if a.preserve_sticker_order {
+            ids.sort_by(|a, b| {
+                let position = |i: &usize| {
+                    self.studio.windows[i]
+                        .place
+                        .or(self.studio.windows[i].last_pos)
+                        .unwrap_or(Pos2::ZERO)
+                };
+                let a = position(a);
+                let b = position(b);
+                a.y.total_cmp(&b.y).then_with(|| b.x.total_cmp(&a.x))
+            });
+        }
         let mut sizes = vec![];
         for &i in &ids {
             let locked = self.data.notes[i].locked;
@@ -334,6 +379,7 @@ impl App {
             self.open_sticker(i, Some(today));
         }
         self.arrange = Some(Arrange {
+            preserve_sticker_order: false,
             layout: Layout::Right,
             fold: Some(Mode::Title),
             area: self.arrange_area(ctx),
@@ -348,10 +394,11 @@ impl App {
             .filter(|(i, n)| {
                 self.visible(*i)
                     && !n.locked
-                    && n.date.is_some_and(|d| {
-                        (d < today && !n.done_on(Some(d)))
-                            || n.occurs(today) && !n.done_on(Some(today))
-                    })
+                    && ((n.deadline_date().is_some() && !n.done)
+                        || n.date.is_some_and(|d| {
+                            (d < today && !n.done_on(Some(d)))
+                                || n.occurs(today) && !n.done_on(Some(today))
+                        }))
             })
             .map(|(i, _)| i)
             .collect()
@@ -469,6 +516,7 @@ impl App {
         }
         if ui.button("계단식으로 정렬").clicked() {
             self.arrange = Some(Arrange {
+                preserve_sticker_order: false,
                 layout: Layout::Cascade,
                 fold: None,
                 area,
@@ -508,6 +556,7 @@ impl App {
         ] {
             if ui.button(label).clicked() {
                 self.arrange = Some(Arrange {
+                    preserve_sticker_order: false,
                     layout,
                     fold: Some(fold),
                     area,
@@ -1013,10 +1062,12 @@ impl App {
         mode: Mode,
         restore: bool,
     ) {
+        self.drag = None;
         let origin = ctx
             .input(|v| v.viewport().outer_rect.map(|r| r.min))
             .unwrap_or(Pos2::ZERO);
         self.studio.drag = Some(StickerDrag {
+            shift: ctx.input(|v| v.modifiers.shift) || crate::system::shift_down(),
             note,
             origin,
             mode,
@@ -1034,6 +1085,7 @@ impl App {
         };
         let now = ctx.input(|v| v.time);
         if crate::system::left_button_down() {
+            d.shift |= crate::system::shift_down();
             d.saw_down = true;
             self.studio.drag = Some(d);
             ctx.request_repaint_after(std::time::Duration::from_millis(30));
@@ -1048,8 +1100,21 @@ impl App {
         let ppp = ctx.pixels_per_point().max(0.5);
         let at =
             crate::system::cursor_pos().map(|(x, y)| Pos2::new(x as f32 / ppp, y as f32 / ppp));
-        let date = at.and_then(|p| self.calendar_date_at(p, now));
-        self.drop_sticker(&d, date);
+        let target = at.and_then(|p| self.schedule_target_at(p, now));
+        self.drop_sticker(&d, None);
+        if let Some((date, calendar)) = target {
+            self.assign_dropped_date(
+                d.note,
+                date,
+                d.shift || crate::system::shift_down(),
+                calendar,
+                None,
+            );
+            if let Some(w) = self.studio.windows.get_mut(&d.note) {
+                w.mode = d.mode;
+                w.place = Some(d.origin);
+            }
+        }
     }
     /// The sticker was let go: over a calendar date it takes the date, and
     /// it goes back to its place when it was dropped on a date or was only
@@ -1057,10 +1122,7 @@ impl App {
     pub fn drop_sticker(&mut self, d: &StickerDrag, date: Option<NaiveDate>) {
         if let Some(date) = date {
             if d.note < self.data.notes.len() {
-                let n = &mut self.data.notes[d.note];
-                n.move_start(date);
-                self.day = date;
-                self.toast = format!("{} → {}", n.title, date);
+                self.assign_dropped_date(d.note, date, false, true, None);
             }
         }
         if date.is_some() || d.always_restore {
@@ -1072,11 +1134,11 @@ impl App {
     }
     /// The calendar date shown under a screen point (points), if a calendar
     /// drew its grid there lately.
+    #[cfg(test)]
     pub fn calendar_date_at(&self, p: Pos2, now: f64) -> Option<NaiveDate> {
-        self.cal_cells
-            .values()
-            .filter(|(t, _)| now - t < 1.0)
-            .find_map(|(_, cells)| cells.iter().find(|(r, _)| r.contains(p)).map(|(_, d)| *d))
+        self.schedule_target_at(p, now)
+            .filter(|(_, calendar)| *calendar)
+            .map(|(date, _)| date)
     }
     pub fn new_sticker(&mut self) -> usize {
         let i = self.data.notes.len();
@@ -1180,6 +1242,10 @@ impl App {
             }
             root.show_viewport_immediate(viewport(i), builder, |ctx, _| {
                 self.theme(ctx);
+                let serial = self.schedule_drop_serial;
+                self.drag_input(ctx);
+                self.studio.raw_date_drop =
+                    (serial != self.schedule_drop_serial).then_some((i, ctx.input(|v| v.time)));
                 if w.move_caret_to_body {
                     w.move_caret_to_body = false;
                     self.data.notes[i].document.requested_selection = Some(0..0);
@@ -1312,6 +1378,11 @@ impl App {
                                 } else {
                                     ui.add_space(button);
                                 }
+                                let mut done = self.data.notes[i].done_on(w.occurrence);
+                                if crate::ui::round_check(ui, &mut done, None).changed() {
+                                    self.done_at(i, w.occurrence, done);
+                                    self.extra.scope_owner = ctx.viewport_id();
+                                }
                                 let starred = self.data.notes[i].starred;
                                 if starred {
                                     ui.label(RichText::new("★").color(STAR).size(15.));
@@ -1319,17 +1390,32 @@ impl App {
                                 let width = (ui.available_width() - 2. * button).max(40.);
                                 let r = ui.add_sized(
                                     [width, 26.],
-                                    egui::Label::new(if self.data.notes[i].title.is_empty() {
-                                        "새 메모"
-                                    } else {
-                                        &self.data.notes[i].title
+                                    egui::Label::new({
+                                        let n = &self.data.notes[i];
+                                        let title = if n.title.is_empty() {
+                                            "새 메모"
+                                        } else {
+                                            &n.title
+                                        };
+                                        if n.deadline {
+                                            format!(
+                                                "[{}] {}",
+                                                n.dday(Local::now().date_naive()),
+                                                title
+                                            )
+                                        } else {
+                                            title.to_owned()
+                                        }
                                     })
                                     .truncate()
                                     .sense(Sense::click_and_drag()),
                                 );
+                                self.drag_source(ui, &r, i, false);
                                 if r.clicked() {
                                     w.sticker();
-                                } else if r.drag_started() || r.drag_stopped() {
+                                } else if (r.drag_started() || r.drag_stopped())
+                                    && self.studio.raw_date_drop != Some((i, ctx.input(|v| v.time)))
+                                {
                                     if r.drag_started() {
                                         // Carried over a calendar date, it files the memo there.
                                         self.begin_sticker_drag(ctx, i, Mode::Title, false);
@@ -1810,9 +1896,13 @@ impl App {
                 let r = crate::icons::icon_button_drag(ui, Icon::Calendar, &tip).on_hover_text(
                     "클릭: 일정 설정 · 끌어서 캘린더의 날짜에 놓으면 그 날짜의 일정이 됩니다",
                 );
+                self.drag_source(ui, &r, i, false);
                 if r.clicked() {
                     self.open_schedule(i);
-                } else if r.drag_started() && mode == Mode::Sticker {
+                } else if r.drag_started()
+                    && mode == Mode::Sticker
+                    && self.studio.raw_date_drop != Some((i, ctx.input(|v| v.time)))
+                {
                     // Shown as the title-only sticker while it is carried; it
                     // comes back as the sticker, where it was.
                     self.begin_sticker_drag(ctx, i, Mode::Sticker, true);
@@ -2190,6 +2280,39 @@ mod occurrence_window_tests {
 mod arrangement_tests {
     use super::*;
     #[test]
+    fn future_deadlines_are_opened_and_completed_ones_are_excluded() {
+        let day = Local::now().date_naive();
+        let mut app = App::sample(day);
+        app.data.notes[0].date = Some(day + chrono::Duration::days(20));
+        app.data.notes[0].deadline = true;
+        assert!(app.daily_due(day).contains(&0));
+        app.data.notes[0].done = true;
+        assert!(!app.daily_due(day).contains(&0));
+    }
+    #[test]
+    fn completion_closes_only_when_enabled_and_rearranges_in_visual_order() {
+        let mut app = App::sample(Local::now().date_naive());
+        for i in 0..3 {
+            app.open_sticker(i, None);
+        }
+        app.studio.windows.get_mut(&1).unwrap().last_pos = Some(Pos2::new(800., 300.));
+        app.studio.windows.get_mut(&2).unwrap().last_pos = Some(Pos2::new(800., 100.));
+        let ctx = egui::Context::default();
+        app.prefs.close_completed_sticker = false;
+        app.completed_stickers.push(0);
+        app.finish_completed_stickers(&ctx);
+        assert!(app.studio.windows[&0].open);
+        app.prefs.close_completed_sticker = true;
+        app.prefs.rearrange_completed_stickers = true;
+        app.completed_stickers.push(0);
+        app.finish_completed_stickers(&ctx);
+        assert!(!app.studio.windows[&0].open);
+        app.apply_arrangement(&ctx);
+        assert_eq!(app.studio.windows[&1].mode, Mode::Title);
+        assert_eq!(app.studio.windows[&2].mode, Mode::Title);
+        assert!(app.studio.windows[&2].place.unwrap().y < app.studio.windows[&1].place.unwrap().y);
+    }
+    #[test]
     fn daily_auto_open_keeps_undated_stickers_open() {
         let today = daily_day(daily_now());
         let mut app = App::sample(today);
@@ -2281,6 +2404,7 @@ mod arrangement_tests {
         let first = a.new_sticker();
         let second = a.new_sticker();
         a.arrange = Some(Arrange {
+            preserve_sticker_order: false,
             layout: Layout::Right,
             fold: Some(Mode::Swatch),
             area: Rect::from_min_size(Pos2::ZERO, Vec2::new(1600., 900.)),
