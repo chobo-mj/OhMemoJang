@@ -195,6 +195,7 @@ impl App {
             builder = builder.with_position(at).with_inner_size(size);
         }
         let mut minimize = false;
+        let mut close = false;
         let mut stand = false;
         let mut stand_rect = Rect::NOTHING;
         ctx.show_viewport_immediate(
@@ -205,8 +206,9 @@ impl App {
                 self.theme_with(ctx, theme.map_or(self.dark, |t| t.dark));
                 self.drag_input(ctx);
                 if ctx.input(|i| i.viewport().close_requested()) {
-                    // Closing returns the calendar to its color box.
-                    minimize = true;
+                    // The window's close button closes the calendar; only
+                    // the minimize button folds it into the color box.
+                    close = true;
                 }
                 let (outer, inner, ppp) = ctx.input(|i| {
                     let v = i.viewport();
@@ -281,6 +283,8 @@ impl App {
         }
         if minimize && self.cal.standing.is_none() {
             self.cal.minimize_to_box();
+        } else if close && self.cal.standing.is_none() {
+            self.cal.state = DockState::Hidden;
         }
     }
     /// The grid on the left and the selected day's memos on the right,
