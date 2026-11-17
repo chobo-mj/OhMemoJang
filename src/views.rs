@@ -5,7 +5,7 @@ impl App {
     pub fn filters(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 6.;
-            egui::ComboBox::from_id_salt(ui.id().with("projects"))
+            let combo = egui::ComboBox::from_id_salt(ui.id().with("projects"))
                 .width(150.)
                 .selected_text(format!(
                     "# {}",
@@ -26,7 +26,14 @@ impl App {
                         }
                         ui.selectable_value(&mut self.project_filter, Some(i), p);
                     }
+                    // The open list too: it must stay usable in the tutorial.
+                    crate::tutorial::mark(
+                        ui.ctx(),
+                        crate::tutorial::Spot::Filter,
+                        ui.min_rect().expand(8.),
+                    );
                 });
+            crate::tutorial::mark(ui.ctx(), crate::tutorial::Spot::Filter, combo.response.rect);
             if ui::pill(ui, self.recurring, "정기 일정 포함").clicked() {
                 self.recurring = !self.recurring;
             }
@@ -393,6 +400,13 @@ impl App {
         let today = Local::now().date_naive();
         self.filters(ui);
         ui.add_space(14.);
+        if mode == 0 {
+            crate::tutorial::mark(
+                ui.ctx(),
+                crate::tutorial::Spot::List,
+                ui.available_rect_before_wrap().intersect(ui.clip_rect()),
+            );
+        }
         let mut cache = std::mem::take(&mut self.lists);
         let key = crate::lists::key((mode, today, self.data.notes.len()));
         let rows = cache.get("agenda", key, || self.agenda_rows(mode, today));
@@ -688,6 +702,14 @@ impl App {
             }
         }
         self.calendar_bands(ui, all, first, rows, col, height);
+        if side.is_some() {
+            // The main window's grid: a drop target the tutorial points at.
+            crate::tutorial::mark(
+                ui.ctx(),
+                crate::tutorial::Spot::Grid,
+                ui.min_rect().intersect(ui.clip_rect()),
+            );
+        }
         toggled
     }
     /// The main window's calendar. `work` is 내 작업실's panel, else the

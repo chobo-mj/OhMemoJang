@@ -12,6 +12,8 @@ mod desktop;
 mod dragging;
 mod extras;
 mod guide;
+#[cfg(test)]
+mod guide_stage;
 mod icons;
 mod lists;
 mod media;
@@ -92,6 +94,7 @@ struct App {
     /// Settings kept between runs, and the text last written to disk.
     prefs: prefs::Prefs,
     prefs_saved: prefs::Prefs,
+    tutorial_live: tutorial::Live,
     /// Autosave state for memos, wiki and settings.
     saving: storage::Saving,
     alarms: alarm::Alarms,
@@ -241,6 +244,7 @@ impl App {
             cal: calendar_dock::Dock::default(),
             prefs: prefs::Prefs::default(),
             prefs_saved: prefs::Prefs::default(),
+            tutorial_live: Default::default(),
             saving: storage::Saving::default(),
             alarms: alarm::Alarms::default(),
             autostart_applied: None,
@@ -437,6 +441,7 @@ impl eframe::App for App {
         self.autosave(0., true);
     }
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        tutorial::begin_frame(self.extra.tutorial != 0);
         for action in self.tray.poll() {
             match action {
                 tray::Action::Open => {
@@ -504,6 +509,8 @@ impl eframe::App for App {
         self.desktop_dialogs(ctx);
         self.check_alarms(ctx);
         self.tray_notice(ctx);
+        // Last: every window has said where its parts are.
+        self.tutorial_window(ctx);
         // The program stays in the tray for days: old trash is emptied and
         // unused picture textures are released while it runs.
         let now = ctx.input(|i| i.time);
@@ -858,7 +865,9 @@ impl App {
                     }
                     return;
                 }
-                if icons::icon_button(ui, icons::Icon::Detach, "캘린더 분리창").clicked() {
+                let detach = icons::icon_button(ui, icons::Icon::Detach, "캘린더 분리창");
+                tutorial::mark(ui.ctx(), tutorial::Spot::Detach, detach.rect);
+                if detach.clicked() {
                     self.show_calendar();
                 }
                 if icons::icon_button(
@@ -962,7 +971,12 @@ impl App {
                 }
                 any = true;
                 let selected = self.project_filter == Some(i);
-                if studio::project_button(ui, p, selected).clicked() {
+                if tutorial::marked(
+                    studio::project_button(ui, p, selected),
+                    tutorial::Spot::Projects,
+                )
+                .clicked()
+                {
                     self.project_filter = if selected { None } else { Some(i) };
                     if !matches!(self.page, 0 | 2 | 3) {
                         self.page = 0;
@@ -1057,7 +1071,11 @@ impl App {
                 continue;
             }
             let badge = (page == 2 && today_count > 0).then(|| today_count.to_string());
-            if studio::nav_button(ui, name, self.page == page, icon, badge, false).clicked() {
+            let r = studio::nav_button(ui, name, self.page == page, icon, badge, false);
+            if page == 6 {
+                tutorial::mark(ui.ctx(), tutorial::Spot::NavUtilities, r.rect);
+            }
+            if r.clicked() {
                 self.page = page;
             }
         }
@@ -1085,7 +1103,12 @@ impl App {
                     }
                     any = true;
                     let selected = self.project_filter == Some(i);
-                    if studio::project_button(ui, p, selected).clicked() {
+                    if tutorial::marked(
+                        studio::project_button(ui, p, selected),
+                        tutorial::Spot::Projects,
+                    )
+                    .clicked()
+                    {
                         self.project_filter = if selected { None } else { Some(i) };
                         if !matches!(self.page, 0 | 2 | 3) {
                             self.page = 0;

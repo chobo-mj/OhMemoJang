@@ -1101,6 +1101,7 @@ pub(crate) fn menu_window<R>(
     };
     let mut add = Some(add);
     ctx.show_viewport_immediate(id, builder, |ctx, _| {
+        crate::tutorial::mark(ctx, crate::tutorial::Spot::Popup, ctx.screen_rect());
         shown.focused = ctx.input(|v| v.viewport().focused == Some(true));
         shown.escape = ctx.input(|v| v.key_pressed(egui::Key::Escape));
         crate::win_style::shape(ctx, 1.);
@@ -1341,6 +1342,7 @@ impl App {
                 builder = builder.with_inner_size(size);
             }
             root.show_viewport_immediate(viewport(i), builder, |ctx, _| {
+                crate::tutorial::mark(ctx, crate::tutorial::Spot::Note(i), ctx.screen_rect());
                 self.theme(ctx);
                 let serial = self.schedule_drop_serial;
                 self.drag_input(ctx);

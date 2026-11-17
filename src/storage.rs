@@ -46,6 +46,7 @@ pub struct Saved {
     pub guide_version: u32,
     /// Where the first-run tutorial stands (0: not running).
     pub tutorial: u32,
+    pub tutorial_notes: Vec<usize>,
     pub deleted_at: Vec<(usize, NaiveDateTime)>,
     /// Salted SHA-256 of memo passwords: "salt$hex".
     pub password_hashes: Vec<(usize, String)>,
@@ -918,6 +919,7 @@ impl App {
             deleted_wiki_tabs: sorted(self.extra.deleted_wiki_tabs.iter().copied()),
             guide_version: self.extra.guide_version,
             tutorial: self.extra.tutorial,
+            tutorial_notes: self.extra.tutorial_notes.clone(),
             deleted_at: self
                 .desktop
                 .deleted_at
@@ -994,6 +996,7 @@ impl App {
         self.extra.deleted_wiki_tabs = s.deleted_wiki_tabs.iter().copied().collect();
         self.extra.guide_version = s.guide_version;
         self.extra.tutorial = s.tutorial;
+        self.extra.tutorial_notes = s.tutorial_notes.clone();
         self.desktop.deleted_at = s.deleted_at.iter().copied().collect();
         self.desktop.passwords = s.password_hashes.iter().cloned().collect();
         // Memos with a password start locked.

@@ -1386,7 +1386,14 @@ impl App {
                 );
                 ui.add_space(10.);
                 ui.label("메모·위키·설정은 자동으로 저장됩니다.");
-                ui.add_space(6.);
+                ui.add_space(12.);
+                ui.label(RichText::new("제작 : 오민재 (minjae1.oh)").strong());
+                ui.add_space(4.);
+                ui.label("1. 불편 사항이나 버그 제보 주시면 빠르게 수정합니다.");
+                ui.label(
+                    "2. 근무표 갱신시 edm한번 열리는건 어쩔수가 없어요. 저는 해결을 못했는데 해결하는법 아시는분 조언 부탁드립니다.",
+                );
+                ui.add_space(12.);
                 if ui.button("사용법 보기").clicked() {
                     self.open_guide();
                     self.settings = false;

@@ -116,6 +116,13 @@ pub struct Dock {
     split_frac: f32,
 }
 
+impl Dock {
+    /// The calendar stands on the desktop.
+    pub fn standing_pinned(&self) -> bool {
+        self.standing.as_ref().is_some_and(|s| s.pinned)
+    }
+}
+
 impl Default for Dock {
     fn default() -> Self {
         Self {
@@ -232,6 +239,7 @@ impl App {
                     )
                     .show(ctx, |ui| {
                         let (pressed, button) = self.calendar_toolbar(ui, &mut minimize);
+                        crate::tutorial::mark(ui.ctx(), crate::tutorial::Spot::Stand, button);
                         stand_rect = button;
                         if pressed {
                             stand = true;

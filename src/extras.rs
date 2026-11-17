@@ -116,6 +116,8 @@ pub struct Extra {
     pub guide_version: u32,
     /// First-run tutorial state (see `tutorial.rs`).
     pub tutorial: u32,
+    /// The tutorial's example memos (see `tutorial.rs`).
+    pub tutorial_notes: Vec<usize>,
     /// Width of the wiki's left tree/unfiled column, in pixels. `0.` keeps
     /// the proportional default (22% of the wiki area, clamped 210-280).
     pub wiki_left_width: f32,
@@ -194,6 +196,7 @@ impl Default for Extra {
             deleted_wiki_tabs: HashSet::new(),
             guide_version: 0,
             tutorial: 0,
+            tutorial_notes: vec![],
             wiki_left_width: 0.,
             wiki_pane_frac: 0.5,
             delete_wiki_tab: None,
@@ -1006,11 +1009,11 @@ impl App {
         self.missing_image_dialog(ctx);
         self.project_window(ctx);
         self.search_window(ctx);
-        self.tutorial_window(ctx);
     }
 }
 impl App {
     pub fn utilities(&mut self, ui: &mut egui::Ui) {
+        let top = ui.cursor().min;
         ui::tabs(
             ui,
             &mut self.extra.utilities_tab,
@@ -1030,6 +1033,13 @@ impl App {
             3 => self.real_bookmark_gallery(ui),
             _ => self.trash_ui(ui),
         }
+        // What the page shows (the tutorial lights it and keeps clear of it).
+        let shown = egui::Rect::from_min_max(top, ui.min_rect().max);
+        crate::tutorial::mark(
+            ui.ctx(),
+            crate::tutorial::Spot::Utilities,
+            shown.intersect(ui.clip_rect()),
+        );
     }
 }
 #[cfg(test)]

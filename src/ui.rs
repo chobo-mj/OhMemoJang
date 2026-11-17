@@ -731,6 +731,7 @@ pub fn dialog<R>(
     let mut close = false;
     let raise = ctx.data_mut(|d| d.remove_temp::<bool>(raise_key(vid)).unwrap_or(false));
     ctx.show_viewport_immediate(vid, builder, |ctx, class| {
+        crate::tutorial::mark(ctx, crate::tutorial::Spot::Popup, ctx.screen_rect());
         if raise {
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
