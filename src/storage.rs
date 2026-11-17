@@ -40,6 +40,12 @@ pub struct Saved {
     pub catalog_assignments: Vec<(usize, usize)>,
     pub hidden_projects: Vec<usize>,
     pub deleted_projects: Vec<usize>,
+    /// Wiki tabs deleted (soft) so they stay gone after a restart.
+    pub deleted_wiki_tabs: Vec<usize>,
+    /// Version of the usage guide the memos in the guide tab were written for.
+    pub guide_version: u32,
+    /// Where the first-run tutorial stands (0: not running).
+    pub tutorial: u32,
     pub deleted_at: Vec<(usize, NaiveDateTime)>,
     /// Salted SHA-256 of memo passwords: "salt$hex".
     pub password_hashes: Vec<(usize, String)>,
@@ -909,6 +915,9 @@ impl App {
                 .collect(),
             hidden_projects: sorted(self.extra.hidden_projects.iter().copied()),
             deleted_projects: sorted(self.extra.deleted_projects.iter().copied()),
+            deleted_wiki_tabs: sorted(self.extra.deleted_wiki_tabs.iter().copied()),
+            guide_version: self.extra.guide_version,
+            tutorial: self.extra.tutorial,
             deleted_at: self
                 .desktop
                 .deleted_at
@@ -982,6 +991,9 @@ impl App {
         self.catalog.selected = None;
         self.extra.hidden_projects = s.hidden_projects.iter().copied().collect();
         self.extra.deleted_projects = s.deleted_projects.iter().copied().collect();
+        self.extra.deleted_wiki_tabs = s.deleted_wiki_tabs.iter().copied().collect();
+        self.extra.guide_version = s.guide_version;
+        self.extra.tutorial = s.tutorial;
         self.desktop.deleted_at = s.deleted_at.iter().copied().collect();
         self.desktop.passwords = s.password_hashes.iter().cloned().collect();
         // Memos with a password start locked.
@@ -1318,6 +1330,8 @@ impl App {
             Ok(Some(saved)) => {
                 self.restore(&saved);
                 self.mark_saved(&dir);
+                // A newer guide replaces the old pages (saved with the next save).
+                self.refresh_guide();
             }
             Ok(None) => self.start_fresh(),
             Err(e) => {
@@ -1345,6 +1359,7 @@ impl App {
             self.prefs.first_run_done = true;
             self.prefs.save();
             self.open_guide();
+            self.tutorial_offer();
         }
     }
     /// An empty workspace holding only the usage guide.

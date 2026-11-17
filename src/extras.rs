@@ -112,6 +112,10 @@ pub struct Extra {
     /// the same soft-delete approach `deleted_projects` already uses, so
     /// indices into `wiki_tabs` and `Folder::tab` never need reshuffling.
     pub deleted_wiki_tabs: HashSet<usize>,
+    /// Usage guide version the guide memos were written for.
+    pub guide_version: u32,
+    /// First-run tutorial state (see `tutorial.rs`).
+    pub tutorial: u32,
     /// Width of the wiki's left tree/unfiled column, in pixels. `0.` keeps
     /// the proportional default (22% of the wiki area, clamped 210-280).
     pub wiki_left_width: f32,
@@ -188,6 +192,8 @@ impl Default for Extra {
             size_applied: None,
             wiki_tab_colors: HashMap::new(),
             deleted_wiki_tabs: HashSet::new(),
+            guide_version: 0,
+            tutorial: 0,
             wiki_left_width: 0.,
             wiki_pane_frac: 0.5,
             delete_wiki_tab: None,
@@ -1000,6 +1006,7 @@ impl App {
         self.missing_image_dialog(ctx);
         self.project_window(ctx);
         self.search_window(ctx);
+        self.tutorial_window(ctx);
     }
 }
 impl App {

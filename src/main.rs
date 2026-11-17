@@ -30,6 +30,7 @@ mod system;
 mod table_edit;
 mod trash_groups;
 mod tray;
+mod tutorial;
 mod ui;
 mod views;
 mod wake;

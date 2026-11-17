@@ -385,6 +385,7 @@ impl App {
                 // Backups from older versions carry their own pictures.
                 crate::storage::copy_missing(&from.join("images"), &dir.join("images"));
                 self.restore(&saved);
+                self.refresh_guide();
                 self.saving.rewrite();
                 self.autosave(0., true);
                 self.desktop.last_action = format!("복원했습니다: {}", file.display());
@@ -1390,6 +1391,13 @@ impl App {
                     self.open_guide();
                     self.settings = false;
                 }
+                if ui.button("튜토리얼 다시 하기").clicked() {
+                    self.tutorial_start();
+                }
+                hint(
+                    ui,
+                    "예시 메모와 일정을 만들어 주요 기능을 따라 해 봅니다 · 끝나면 예시를 지울 수 있습니다",
+                );
             }
         }
     }
