@@ -409,6 +409,38 @@ impl App {
         };
         self.toast = "폴더를 삭제했습니다 · 안의 메모는 상위로 옮겼습니다".into();
     }
+    /// Delete a wiki folder with its subfolders and every memo in them; the
+    /// memos go to the recycle bin.
+    pub fn delete_wiki_folder_with_notes(&mut self, f: usize) {
+        let mut branch = vec![f];
+        let mut at = 0;
+        while at < branch.len() {
+            let parent = branch[at];
+            for (c, folder) in self.extra.folders.iter().enumerate() {
+                if folder.parent == Some(parent) && !branch.contains(&c) {
+                    branch.push(c);
+                }
+            }
+            at += 1;
+        }
+        let name = self.extra.folders[f].title.clone();
+        let mut count = 0;
+        for i in 0..self.data.notes.len() {
+            if self.data.notes[i]
+                .folder
+                .is_some_and(|g| branch.contains(&g))
+                && !self.data.notes[i].deleted
+            {
+                self.trash_note(i);
+                count += 1;
+            }
+        }
+        branch.sort_unstable_by(|a, b| b.cmp(a));
+        for g in branch {
+            self.delete_wiki_folder(g);
+        }
+        self.toast = format!("‘{name}’ 폴더와 메모 {count}개를 휴지통으로 옮겼습니다");
+    }
     /// Take a memo out of the wiki.
     pub fn unwiki_note(&mut self, i: usize) {
         let n = &mut self.data.notes[i];
@@ -791,8 +823,12 @@ impl App {
                     });
                 }
             });
-        if let Some(f) = self.extra.wiki_folder_delete.take() {
-            self.delete_wiki_folder(f);
+        if let Some((f, with_notes)) = self.extra.wiki_folder_delete.take() {
+            if with_notes {
+                self.delete_wiki_folder_with_notes(f);
+            } else {
+                self.delete_wiki_folder(f);
+            }
         }
         if let Some(folder) = new_folder {
             self.create_wiki_folder(folder);
@@ -1155,7 +1191,11 @@ impl App {
                     ui.close_menu();
                 }
                 if ui.button("폴더 삭제").clicked() {
-                    self.extra.wiki_folder_delete = Some(f);
+                    self.extra.wiki_folder_delete = Some((f, false));
+                    ui.close_menu();
+                }
+                if ui.button("폴더·메모 삭제").clicked() {
+                    self.extra.wiki_folder_delete = Some((f, true));
                     ui.close_menu();
                 }
             });
@@ -1442,6 +1482,29 @@ mod tests {
         assert_eq!(a.data.notes[0].folder, Some(0), "b's memo moved to a");
         assert_eq!(a.data.notes[1].folder, Some(1), "c's memo follows c");
         assert!(a.extra.folder_open.contains(&1) && !a.extra.folder_open.contains(&2));
+    }
+    #[test]
+    fn deleting_a_wiki_folder_with_its_memos_sends_them_to_the_bin() {
+        let mut a = app();
+        let f = |t: &str, parent| crate::extras::Folder {
+            title: t.into(),
+            description: String::new(),
+            parent,
+            tab: 0,
+        };
+        a.extra.folders = vec![f("a", None), f("b", Some(0)), f("c", None)];
+        for n in a.data.notes.iter_mut() {
+            n.folder = None;
+            n.deleted = false;
+        }
+        a.data.notes[0].folder = Some(1);
+        a.data.notes[1].folder = Some(2);
+        a.delete_wiki_folder_with_notes(0);
+        assert!(a.data.notes[0].deleted, "memo of the subfolder");
+        assert!(!a.data.notes[1].deleted, "other folders are untouched");
+        assert_eq!(a.extra.folders.len(), 1);
+        assert_eq!(a.extra.folders[0].title, "c");
+        assert_eq!(a.data.notes[1].folder, Some(0));
     }
     #[test]
     fn taking_a_memo_out_of_the_wiki_clears_its_filing() {

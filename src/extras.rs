@@ -71,7 +71,7 @@ pub struct Extra {
     pub wiki_comments: [bool; 2],
     pub wiki_rename: Option<WikiRename>,
     /// A wiki folder to delete once the tree has been drawn.
-    pub wiki_folder_delete: Option<usize>,
+    pub wiki_folder_delete: Option<(usize, bool)>,
     pub tree_selected: Option<usize>,
     pub drafts: HashMap<(usize, usize, Option<NaiveDate>), String>,
     pub draft_documents: HashMap<(usize, usize, Option<NaiveDate>), crate::composer::Document>,
