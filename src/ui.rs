@@ -97,6 +97,9 @@ pub fn apply(ctx: &egui::Context, dark: bool, family: egui::FontFamily, body: f3
         spread: 0,
         color: Color32::from_black_alpha(if dark { 90 } else { 24 }),
     };
+    // A blinking caret would redraw (and present) its window about ten times
+    // a second for as long as it is there; a steady caret costs nothing.
+    v.text_cursor.blink = false;
     v.striped = false;
     v.slider_trailing_fill = true;
     v.handle_shape = egui::style::HandleShape::Circle;

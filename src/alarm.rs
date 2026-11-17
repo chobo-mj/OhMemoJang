@@ -24,6 +24,21 @@ pub fn due_now(notes: &[Note], now: NaiveDateTime) -> Vec<usize> {
 }
 
 impl App {
+    /// Seconds until the next alarm comes due (`None`: no alarm is waiting).
+    pub fn next_alarm_in(&self, now: NaiveDateTime) -> Option<f64> {
+        if self.desktop.mute && self.alarms.due.is_empty() {
+            return None;
+        }
+        self.data
+            .notes
+            .iter()
+            .filter(|n| !n.deleted)
+            .filter_map(|n| n.reminder)
+            .map(|t| (t - now).num_milliseconds() as f64 / 1000. + 0.05)
+            .filter(|s| *s > 0.)
+            .reduce(f64::min)
+            .filter(|_| !self.desktop.mute)
+    }
     /// Run about once a second from `update`.
     pub fn check_alarms(&mut self, ctx: &egui::Context) {
         let t = ctx.input(|i| i.time);
@@ -212,6 +227,45 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn the_program_sleeps_until_the_next_alarm_that_is_still_ahead() {
+        let d = NaiveDate::from_ymd_opt(2026, 11, 11).unwrap();
+        let mut a = App::sample(d);
+        let at = |h: u32, m: u32| d.and_hms_opt(h, m, 0).unwrap();
+        for n in a.data.notes.iter_mut() {
+            n.reminder = None;
+        }
+        assert_eq!(a.next_alarm_in(at(9, 0)), None, "no alarm: no wake-up");
+        a.data.notes[0].reminder = Some(at(9, 30));
+        a.data.notes[1].reminder = Some(at(9, 10));
+        a.data.notes[2].reminder = Some(at(8, 0));
+        let wait = a.next_alarm_in(at(9, 0)).unwrap();
+        assert!((wait - 600.).abs() < 1., "the nearest alarm ahead: {wait}");
+        a.data.notes[1].deleted = true;
+        let wait = a.next_alarm_in(at(9, 0)).unwrap();
+        assert!(
+            (wait - 1800.).abs() < 1.,
+            "a deleted memo's alarm is ignored"
+        );
+        a.desktop.mute = true;
+        assert_eq!(
+            a.next_alarm_in(at(9, 0)),
+            None,
+            "muted: nothing to wait for"
+        );
+    }
+    #[test]
+    fn the_program_sleeps_until_a_memo_has_to_lock_again() {
+        let d = NaiveDate::from_ymd_opt(2026, 11, 11).unwrap();
+        let mut a = App::sample(d);
+        a.desktop.auto_lock = 0;
+        assert_eq!(a.next_relock_in(), None);
+        a.desktop.unlocked_at.insert(0, std::time::Instant::now());
+        let wait = a.next_relock_in().unwrap();
+        assert!(wait > 50. && wait <= 61., "one minute: {wait}");
+        a.desktop.auto_lock = 3; // never
+        assert_eq!(a.next_relock_in(), None);
+    }
     #[test]
     fn only_reached_alarms_of_live_memos_are_due() {
         let d = NaiveDate::from_ymd_opt(2026, 11, 11).unwrap();

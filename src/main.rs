@@ -30,10 +30,11 @@ mod trash_groups;
 mod tray;
 mod ui;
 mod views;
+mod wake;
 mod win_style;
 use chrono::{Datelike, Local, NaiveDate};
 use eframe::egui::{self, Color32, RichText, Vec2};
-use global_hotkey::{hotkey::HotKey, GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
+use global_hotkey::{hotkey::HotKey, GlobalHotKeyManager};
 use model::{Note, Workspace};
 const PALETTE: [Color32; 10] = [
     Color32::from_rgb(255, 240, 166),
@@ -102,7 +103,6 @@ struct App {
     /// Filtered and sorted memo lists, reused until something changes.
     lists: lists::Cache,
     /// Input counter last seen and when it last moved (egui time).
-    seen_input: (u64, f64),
     /// When hourly housekeeping last ran (egui time).
     tidied: f64,
     /// When unused picture textures were last released.
@@ -202,6 +202,8 @@ impl App {
         // Started with Windows: stay in the tray, stickers on the desktop.
         a.main_open = !(a.tray.active() && std::env::args().any(|x| x == "--tray"));
         a.hotkeys = GlobalHotKeyManager::new().ok();
+        wake::set(&cc.egui_ctx);
+        wake::watch_hotkeys();
         a.apply_shortcuts();
         a
     }
@@ -243,7 +245,6 @@ impl App {
             main_open: true,
             tray_notice: None,
             lists: lists::Cache::default(),
-            seen_input: (0, 0.),
             tidied: f64::MIN,
             textures_checked: 0.,
             settings: false,
@@ -462,37 +463,24 @@ impl eframe::App for App {
         if self.page != 7 {
             self.clipboard.idle();
         }
-        // The tick polls global shortcuts, the tray and alarms. It slows
-        // down after ten seconds without input; any input repaints at once.
-        let now = ctx.input(|i| i.time);
-        let changes = lists::CHANGES.load(std::sync::atomic::Ordering::Relaxed);
-        if changes != self.seen_input.0 {
-            self.seen_input = (changes, now);
-        }
-        let tick = if now - self.seen_input.1 < 10. {
-            100
-        } else {
-            250
-        };
-        ctx.request_repaint_after(std::time::Duration::from_millis(tick));
-        while let Ok(e) = GlobalHotKeyEvent::receiver().try_recv() {
-            if e.state == HotKeyState::Pressed {
-                // Quick memo and new sticker both open a new sticker memo.
-                if self.registered.first().is_some_and(|h| h.id() == e.id)
-                    || self.registered.get(2).is_some_and(|h| h.id() == e.id)
-                {
-                    self.new_sticker();
-                } else if self.registered.get(1).is_some_and(|h| h.id() == e.id) {
-                    self.show_calendar();
-                    ctx.send_viewport_cmd_to(
-                        egui::ViewportId::from_hash_of("calendar"),
-                        egui::ViewportCommand::Minimized(false),
-                    );
-                    ctx.send_viewport_cmd_to(
-                        egui::ViewportId::from_hash_of("calendar"),
-                        egui::ViewportCommand::Focus,
-                    );
-                }
+        // Shortcuts, the tray and a second launch wake the program
+        // themselves; the timed wake-up below is only for what is due later.
+        for id in wake::take_hotkeys() {
+            // Quick memo and new sticker both open a new sticker memo.
+            if self.registered.first().is_some_and(|h| h.id() == id)
+                || self.registered.get(2).is_some_and(|h| h.id() == id)
+            {
+                self.new_sticker();
+            } else if self.registered.get(1).is_some_and(|h| h.id() == id) {
+                self.show_calendar();
+                ctx.send_viewport_cmd_to(
+                    egui::ViewportId::from_hash_of("calendar"),
+                    egui::ViewportCommand::Minimized(false),
+                );
+                ctx.send_viewport_cmd_to(
+                    egui::ViewportId::from_hash_of("calendar"),
+                    egui::ViewportCommand::Focus,
+                );
             }
         }
         self.keep_prefs();
@@ -538,9 +526,30 @@ impl eframe::App for App {
         self.auto_relock();
         self.apply_autostart();
         self.autosave(ctx.input(|i| i.time), false);
+        // Sleep until something is due: an alarm, an automatic lock, a
+        // pending save, the next housekeeping. Input wakes the program anyway.
+        ctx.request_repaint_after(self.next_wake(ctx.input(|i| i.time)));
     }
 }
 impl App {
+    /// How long the program may sleep when nothing is going on.
+    fn next_wake(&self, now: f64) -> std::time::Duration {
+        let mut wait = 30.0_f64;
+        if self.saving.save_due() {
+            wait = wait.min(2.);
+        }
+        if self.tray_notice.is_some() {
+            wait = wait.min(1.);
+        }
+        if let Some(s) = self.next_alarm_in(Local::now().naive_local()) {
+            wait = wait.min(s);
+        }
+        if let Some(s) = self.next_relock_in() {
+            wait = wait.min(s);
+        }
+        wait = wait.min((self.tidied + 3600. - now).max(0.));
+        std::time::Duration::from_secs_f64(wait.max(0.1))
+    }
     /// Ends the program in order after a quit request. The first frame does
     /// the work and draws nothing, so every window closes with it; the next
     /// root frame then sees the close request and eframe leaves its event
@@ -1250,7 +1259,9 @@ fn main() -> eframe::Result {
                 .with_resizable(false)
                 .with_transparent(true)
                 .with_taskbar(false)
+                .with_visible(false)
                 .with_icon(app_icon::window()),
+            vsync: false,
             ..Default::default()
         },
         Box::new(|cc| Ok(Box::new(App::new(cc)))),

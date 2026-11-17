@@ -60,6 +60,7 @@ impl Tray {
                 (sticker.id().clone(), Action::NewSticker),
                 (quit.id().clone(), Action::Quit),
             ];
+            let ctx_for_clicks = ctx.clone();
             let (known, ctx) = (ids.clone(), ctx.clone());
             // Replaces the menu event channel; `poll` still drains the channel
             // in case a handler was already set.
@@ -76,6 +77,27 @@ impl Tray {
                         .unwrap_or_else(|e| e.into_inner())
                         .push(*action);
                     ctx.request_repaint();
+                },
+            ));
+            // Clicks on the icon itself wake the program the same way.
+            let ctx = ctx_for_clicks;
+            tray_icon::TrayIconEvent::set_event_handler(Some(
+                move |e: tray_icon::TrayIconEvent| {
+                    use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
+                    if matches!(
+                        e,
+                        TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } | TrayIconEvent::DoubleClick { .. }
+                    ) {
+                        MENU_ACTIONS
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .push(Action::Open);
+                        ctx.request_repaint();
+                    }
                 },
             ));
             Self { icon, ids }
@@ -164,6 +186,7 @@ pub fn single_instance() -> bool {
                         break;
                     }
                     SHOW.store(true, std::sync::atomic::Ordering::Relaxed);
+                    crate::wake::now();
                 });
             }
         }

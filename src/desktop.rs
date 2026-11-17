@@ -363,6 +363,16 @@ impl App {
     }
     /// Lock password memos again 1, 5 or 15 minutes after they were
     /// unlocked (the last choice keeps them open until the app restarts).
+    /// Seconds until the next unlocked memo locks again.
+    pub fn next_relock_in(&self) -> Option<f64> {
+        let minutes = [1u64, 5, 15].get(self.desktop.auto_lock).copied()?;
+        let limit = std::time::Duration::from_secs(minutes * 60);
+        self.desktop
+            .unlocked_at
+            .values()
+            .map(|at| limit.saturating_sub(at.elapsed()).as_secs_f64() + 0.05)
+            .reduce(f64::min)
+    }
     pub fn auto_relock(&mut self) {
         let Some(minutes) = [1u64, 5, 15].get(self.desktop.auto_lock).copied() else {
             return;

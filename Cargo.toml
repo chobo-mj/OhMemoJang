@@ -27,3 +27,12 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphic
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+
+[patch.crates-io]
+eframe = { path = "vendor/eframe" }

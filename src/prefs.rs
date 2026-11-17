@@ -120,6 +120,10 @@ impl Prefs {
         p
     }
     fn path() -> Option<PathBuf> {
+        // Tests must never read or overwrite the user's real settings.
+        if cfg!(test) {
+            return None;
+        }
         let base = std::env::var_os("APPDATA")
             .map(|d| PathBuf::from(d).join("OhMemoJang"))
             .or_else(|| {

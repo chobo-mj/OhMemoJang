@@ -1445,6 +1445,10 @@ pub struct Saving {
 }
 
 impl Saving {
+    /// A save is waiting for its short delay to pass.
+    pub fn save_due(&self) -> bool {
+        self.pending
+    }
     /// Write everything again at the next autosave.
     pub fn rewrite(&mut self) {
         self.notes.clear();
