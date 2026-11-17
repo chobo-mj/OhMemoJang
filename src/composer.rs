@@ -1144,22 +1144,17 @@ fn content_impl(
             // first and the text would still turn into a second, separate
             // paste once its event finally showed up. Read the clipboard's
             // own text synchronously instead of waiting on that event.
-            let clipboard_has_text = crate::clipboard_copy::Clipboard::new()
-                .and_then(|mut c| c.get_text())
-                .is_ok_and(|t| !t.trim().is_empty());
-            if !clipboard_has_text {
-                if let Ok(picture) = picture_from_clipboard(doc.image_scale, doc.image_fit) {
-                    pending_cursor =
-                        Some(doc.tabs[doc.active].insert_picture(old_range.clone(), picture));
-                    ui.input_mut(|i| {
-                        i.events.retain(|e| {
-                            !matches!(
-                                e,
-                                egui::Event::Paste(_) | egui::Event::Key { key: Key::V, .. }
-                            )
-                        })
-                    });
-                }
+            if let Some(picture) = clipboard_picture_for_paste(doc.image_scale, doc.image_fit) {
+                pending_cursor =
+                    Some(doc.tabs[doc.active].insert_picture(old_range.clone(), picture));
+                ui.input_mut(|i| {
+                    i.events.retain(|e| {
+                        !matches!(
+                            e,
+                            egui::Event::Paste(_) | egui::Event::Key { key: Key::V, .. }
+                        )
+                    })
+                });
             }
         }
         if let Some(id) = doc.selected_picture {
@@ -2406,6 +2401,25 @@ fn show_links(ui: &mut egui::Ui, doc: &mut Document, id: Id) {
         }
     });
 }
+/// The image a Ctrl+V should insert: the clipboard's picture, but only when
+/// it holds no text (a table or text clipboard also carries an image
+/// representation, and the text must win).
+fn clipboard_picture_for_paste(scale: f32, fit: bool) -> Option<Picture> {
+    #[cfg(test)]
+    let _ = (scale, fit);
+    #[cfg(test)]
+    return tests::CLIPBOARD_PICTURE.with(|p| p.borrow().clone());
+    #[cfg(not(test))]
+    {
+        let has_text = crate::clipboard_copy::Clipboard::new()
+            .and_then(|mut c| c.get_text())
+            .is_ok_and(|t| !t.trim().is_empty());
+        if has_text {
+            return None;
+        }
+        picture_from_clipboard(scale, fit).ok()
+    }
+}
 /// True on the frame Ctrl+V goes down. egui turns Ctrl+V into a text paste
 /// event and drops the key entirely, so an image-only clipboard produces no
 /// event at all; read the key state directly instead.
@@ -2414,9 +2428,17 @@ fn paste_chord(ui: &egui::Ui, id: Id) -> bool {
     let down = chord_down() || ui.input(|i| i.modifiers.command && i.key_pressed(Key::V));
     let was = ui.data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
     ui.data_mut(|d| d.insert_temp(key, down));
-    down && !was
+    // `chord_down` reads the keyboard of the whole system, and egui keeps a
+    // text focus per window even while another window is the active one.
+    // Only the window the operating system gave the keyboard to may act.
+    let focused = ui.input(|i| i.viewport().focused != Some(false));
+    down && !was && focused
 }
-#[cfg(windows)]
+#[cfg(test)]
+fn chord_down() -> bool {
+    tests::CHORD.with(|c| c.get())
+}
+#[cfg(all(windows, not(test)))]
 fn chord_down() -> bool {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL};
     // Reads the current physical key state only; no pointers are involved.
@@ -2425,7 +2447,7 @@ fn chord_down() -> bool {
             && (GetAsyncKeyState(0x56) as u16 & 0x8000) != 0
     }
 }
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(test)))]
 fn chord_down() -> bool {
     false
 }
@@ -4719,6 +4741,13 @@ fn shortcut_substitution(
 #[cfg(test)]
 mod tests {
     use super::*;
+    thread_local! {
+        /// Stands in for the keyboard state `chord_down` reads.
+        pub(super) static CHORD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        /// Stands in for the clipboard's picture (`None`: no image, or text).
+        pub(super) static CLIPBOARD_PICTURE: std::cell::RefCell<Option<Picture>> =
+            const { std::cell::RefCell::new(None) };
+    }
     #[test]
     fn remap_cursor_moves_to_the_cut_point_when_a_leading_prefix_is_removed() {
         // "#프로젝트 " (5 chars incl. the trailing space) is stripped from the
@@ -6859,5 +6888,140 @@ mod layout_tests {
                 text.chars().count()
             );
         }
+    }
+}
+
+/// Ctrl+V with an image on the clipboard, with two sticker windows open.
+#[cfg(test)]
+mod paste_focus_tests {
+    use super::tests::{CHORD, CLIPBOARD_PICTURE};
+    use super::*;
+
+    fn picture() -> Picture {
+        Picture {
+            id: 0,
+            name: "붙여 넣은 이미지".into(),
+            pixels: vec![255; 2 * 2 * 4],
+            width: 2,
+            height: 2,
+            scale: 1.,
+            fit: false,
+            file: String::new(),
+            texture: None,
+            texture_used: 0.,
+        }
+    }
+    fn pictures(doc: &Document) -> usize {
+        doc.tabs[0]
+            .blocks
+            .iter()
+            .filter(|b| matches!(b, Block::Picture(_)))
+            .count()
+    }
+    /// One frame of one window (viewport) of the shared context; `focused`
+    /// is what the operating system says about that window.
+    fn frame(
+        ctx: &egui::Context,
+        window: egui::ViewportId,
+        focused: bool,
+        doc: &mut Document,
+        body: &mut String,
+        events: Vec<egui::Event>,
+        time: f64,
+    ) {
+        let mut viewports = egui::ViewportIdMap::default();
+        viewports.insert(
+            window,
+            egui::ViewportInfo {
+                focused: Some(focused),
+                ..Default::default()
+            },
+        );
+        let input = egui::RawInput {
+            viewport_id: window,
+            viewports,
+            focused,
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                Vec2::new(500., 400.),
+            )),
+            events,
+            time: Some(time),
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                show(ui, body, doc, "sticker_body");
+            });
+        });
+    }
+    fn click(pos: egui::Pos2) -> Vec<egui::Event> {
+        [true, false]
+            .into_iter()
+            .map(|pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            })
+            .collect()
+    }
+
+    /// Two stickers both keep the text cursor of their last edit; the
+    /// keyboard is only in the one the operating system gave the focus to.
+    /// Pasting must not put the picture into the other one as well.
+    #[test]
+    fn a_pasted_picture_goes_only_to_the_window_with_the_keyboard_focus() {
+        let ctx = egui::Context::default();
+        let (win_a, win_b) = (
+            egui::ViewportId::from_hash_of("a"),
+            egui::ViewportId::from_hash_of("b"),
+        );
+        let (mut a, mut b) = (Document::default(), Document::default());
+        let (mut body_a, mut body_b) = (a.tabs[0].body.clone(), b.tabs[0].body.clone());
+        let mut t = 0.;
+        let mut step = || {
+            t += 0.05;
+            t
+        };
+        // The user edited in both stickers: both have a text cursor.
+        for (win, doc, body) in [(win_a, &mut a, &mut body_a), (win_b, &mut b, &mut body_b)] {
+            frame(&ctx, win, true, doc, body, vec![], step());
+            frame(
+                &ctx,
+                win,
+                true,
+                doc,
+                body,
+                click(egui::pos2(100., 80.)),
+                step(),
+            );
+            frame(&ctx, win, true, doc, body, vec![], step());
+        }
+        // Now working in A; B is behind it.
+        CLIPBOARD_PICTURE.with(|p| *p.borrow_mut() = Some(picture()));
+        CHORD.with(|c| c.set(true));
+        frame(&ctx, win_a, true, &mut a, &mut body_a, vec![], step());
+        frame(&ctx, win_b, false, &mut b, &mut body_b, vec![], step());
+        assert_eq!(
+            pictures(&a),
+            1,
+            "the window being typed in gets the picture"
+        );
+        assert_eq!(
+            pictures(&b),
+            0,
+            "a window without the keyboard focus must not"
+        );
+        // Keys up, then the same in the other direction.
+        CHORD.with(|c| c.set(false));
+        frame(&ctx, win_a, false, &mut a, &mut body_a, vec![], step());
+        frame(&ctx, win_b, true, &mut b, &mut body_b, vec![], step());
+        CHORD.with(|c| c.set(true));
+        frame(&ctx, win_a, false, &mut a, &mut body_a, vec![], step());
+        frame(&ctx, win_b, true, &mut b, &mut body_b, vec![], step());
+        assert_eq!((pictures(&a), pictures(&b)), (1, 1));
+        CHORD.with(|c| c.set(false));
+        CLIPBOARD_PICTURE.with(|p| *p.borrow_mut() = None);
     }
 }
