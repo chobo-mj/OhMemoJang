@@ -48,6 +48,19 @@ pub fn pin_to_desktop(hwnd: isize, rect: PxRect) -> bool {
     }
 }
 
+/// For a window pinned without being reparented (Windows 11 24H2 and later):
+/// puts it back right above the desktop if something raised it. Returns
+/// whether the window is pinned that way, so the caller keeps calling it.
+pub fn keep_on_desktop(hwnd: isize) -> bool {
+    #[cfg(windows)]
+    return unsafe { desk::keep_on_desktop(hwnd) };
+    #[cfg(not(windows))]
+    {
+        let _ = hwnd;
+        false
+    }
+}
+
 /// Make a pinned window an ordinary top-level window again at `rect`.
 pub fn unpin_from_desktop(hwnd: isize, rect: PxRect) -> bool {
     #[cfg(windows)]
@@ -128,10 +141,12 @@ mod desk {
         Graphics::Gdi::{ClientToScreen, ScreenToClient},
         System::{LibraryLoader::GetModuleHandleW, Threading::GetCurrentThreadId},
         UI::WindowsAndMessaging::{
-            CallNextHookEx, EnumWindows, FindWindowExW, FindWindowW, GetClassNameW, GetMessageW,
-            IsChild, PeekMessageW, SendMessageTimeoutW, SetParent, SetWindowPos, SetWindowsHookExW,
-            UnhookWindowsHookEx, WindowFromPoint, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, SMTO_NORMAL,
-            SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, WH_MOUSE_LL, WM_LBUTTONUP,
+            CallNextHookEx, EnumWindows, FindWindowExW, FindWindowW, GetAncestor, GetClassNameW,
+            GetDesktopWindow, GetMessageW, GetWindow, GetWindowLongW, IsChild, PeekMessageW,
+            SendMessageTimeoutW, SetParent, SetWindowLongW, SetWindowPos, SetWindowsHookExW,
+            UnhookWindowsHookEx, WindowFromPoint, GA_PARENT, GWL_EXSTYLE, GW_HWNDNEXT, HWND_TOP,
+            MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, SMTO_NORMAL, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+            SWP_NOZORDER, SWP_SHOWWINDOW, WH_MOUSE_LL, WM_LBUTTONUP, WS_EX_TOOLWINDOW,
         },
     };
 
@@ -139,9 +154,17 @@ mod desk {
         s.encode_utf16().chain(Some(0)).collect()
     }
 
-    /// The window that draws the wallpaper, behind the desktop icons.
+    unsafe fn progman() -> HWND {
+        FindWindowW(wide("Progman").as_ptr(), std::ptr::null())
+    }
+
+    /// The window that draws the wallpaper behind the desktop icons, on the
+    /// classic desktop layout (a top-level WorkerW next to the one that holds
+    /// the icons). Null on Windows 11 24H2 and later, where the wallpaper's
+    /// WorkerW is a child of Progman: a window made a child of it (or of
+    /// Progman) is not shown there, it just disappears.
     unsafe fn wallpaper_layer() -> HWND {
-        let progman = FindWindowW(wide("Progman").as_ptr(), std::ptr::null());
+        let progman = progman();
         if progman.is_null() {
             return progman;
         }
@@ -170,28 +193,65 @@ mod desk {
             1
         }
         EnumWindows(Some(visit), &mut worker as *mut HWND as LPARAM);
-        if worker.is_null() {
-            // Windows 11 24H2: the WorkerW is a child of Progman, under the icons.
-            worker = FindWindowExW(
+        worker
+    }
+
+    /// Without the classic layout the window stays a top-level window, just
+    /// above the desktop (Progman) in the stacking order: below every other
+    /// window, out of the taskbar and Alt+Tab, and shown on every Windows
+    /// version. `keep_on_desktop` puts it back there when it gets raised.
+    unsafe fn pin_above_desktop(h: HWND, r: PxRect) -> bool {
+        let progman = progman();
+        if progman.is_null() {
+            return false;
+        }
+        let style = GetWindowLongW(h, GWL_EXSTYLE) as u32;
+        SetWindowLongW(h, GWL_EXSTYLE, (style | WS_EX_TOOLWINDOW) as i32);
+        SetWindowPos(
+            h,
+            progman,
+            r[0],
+            r[1],
+            r[2] - r[0],
+            r[3] - r[1],
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+        true
+    }
+
+    fn is_top_level(h: HWND) -> bool {
+        // SAFETY: plain queries on a window handle.
+        unsafe { GetAncestor(h, GA_PARENT) == GetDesktopWindow() }
+    }
+
+    /// Keeps a window pinned in the top-level way right above the desktop.
+    /// Returns whether it is pinned that way (and so needs this called again).
+    pub unsafe fn keep_on_desktop(hwnd: isize) -> bool {
+        let h = hwnd as HWND;
+        if !is_top_level(h) {
+            return false;
+        }
+        let progman = progman();
+        if !progman.is_null() && GetWindow(h, GW_HWNDNEXT) != progman {
+            SetWindowPos(
+                h,
                 progman,
-                std::ptr::null_mut(),
-                wide("WorkerW").as_ptr(),
-                std::ptr::null(),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
             );
         }
-        if worker.is_null() {
-            progman
-        } else {
-            worker
-        }
+        true
     }
 
     pub unsafe fn pin(hwnd: isize, r: PxRect) -> bool {
         let layer = wallpaper_layer();
-        if layer.is_null() {
-            return false;
-        }
         let h = hwnd as HWND;
+        if layer.is_null() {
+            return pin_above_desktop(h, r);
+        }
         // A null previous parent is also a successful result for top-level windows.
         SetLastError(0);
         if SetParent(h, layer).is_null() && GetLastError() != 0 {
@@ -213,6 +273,20 @@ mod desk {
 
     pub unsafe fn unpin(hwnd: isize, r: PxRect) -> bool {
         let h = hwnd as HWND;
+        if is_top_level(h) {
+            let style = GetWindowLongW(h, GWL_EXSTYLE) as u32;
+            SetWindowLongW(h, GWL_EXSTYLE, (style & !WS_EX_TOOLWINDOW) as i32);
+            SetWindowPos(
+                h,
+                HWND_TOP,
+                r[0],
+                r[1],
+                r[2] - r[0],
+                r[3] - r[1],
+                SWP_SHOWWINDOW,
+            );
+            return true;
+        }
         SetLastError(0);
         if SetParent(h, std::ptr::null_mut()).is_null() && GetLastError() != 0 {
             return false;

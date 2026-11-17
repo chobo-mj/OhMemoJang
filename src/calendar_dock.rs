@@ -392,6 +392,13 @@ impl App {
             // Back where it was, title bar included.
             self.restore_standing();
             ctx.request_repaint();
+            return;
+        }
+        // Where the window could not be moved under the desktop icons it is
+        // a top-level window just above the desktop: put it back there when a
+        // click raised it.
+        if crate::win_style::keep_on_desktop(s.hwnd) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }
     }
     /// Right-click anywhere in the calendar window: month, 1-week or
