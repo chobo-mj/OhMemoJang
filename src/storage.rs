@@ -234,6 +234,8 @@ pub struct SettingsRec {
     pub sticker_size: [f32; 2],
     pub daily_today: bool,
     pub arrange_monitor: Option<usize>,
+    pub new_monitor: Option<usize>,
+    pub new_right: bool,
     pub show_done: bool,
     pub cal_box_color: [u8; 4],
     pub cal_box_size: f32,
@@ -272,6 +274,8 @@ impl Default for SettingsRec {
             sticker_size: [360., 360.],
             daily_today: false,
             arrange_monitor: None,
+            new_monitor: None,
+            new_right: true,
             show_done: false,
             cal_box_color: color(PALETTE[6]),
             cal_box_size: 56.,
@@ -310,6 +314,8 @@ impl SettingsRec {
         self.sticker_size = [d.sticker_size.x, d.sticker_size.y];
         self.daily_today = d.daily_today;
         self.arrange_monitor = d.arrange_monitor;
+        self.new_monitor = d.new_monitor;
+        self.new_right = d.new_right;
     }
     fn write_desktop(&self, d: &mut crate::desktop::Desktop) {
         d.hide_completed = self.hide_completed;
@@ -342,6 +348,8 @@ impl SettingsRec {
         );
         d.daily_today = self.daily_today;
         d.arrange_monitor = self.arrange_monitor;
+        d.new_monitor = self.new_monitor;
+        d.new_right = self.new_right;
     }
 }
 

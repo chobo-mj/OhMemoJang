@@ -57,6 +57,15 @@ pub struct Desktop {
     /// Monitor (index into `native_window::monitors`) used for arranging.
     pub arrange_monitor: Option<usize>,
     pub monitor_pick: bool,
+    /// Monitor (index into `native_window::monitors`) new memos open on;
+    /// `None`: the one the program is being used on.
+    pub new_monitor: Option<usize>,
+    /// New memos open on the right edge of the monitor, one below the other.
+    pub new_right: bool,
+    /// The window for setting the size of new stickers is open.
+    pub size_probe: bool,
+    /// The size the size window had when it was last drawn.
+    pub size_probe_last: Option<Vec2>,
 }
 impl Default for Desktop {
     fn default() -> Self {
@@ -110,6 +119,10 @@ impl Default for Desktop {
             daily_shown: None,
             arrange_monitor: None,
             monitor_pick: false,
+            new_monitor: None,
+            new_right: true,
+            size_probe: false,
+            size_probe_last: None,
         }
     }
 }
@@ -1018,48 +1031,96 @@ impl App {
                 toggle_row(ui, &mut self.desktop.hide_completed, "완료 메모 숨기기", "");
             }
             2 => {
-                section(ui, "새 스티커 메모 크기");
-                let mut preset = match self.desktop.sticker_size {
-                    s if s == Vec2::new(340., 240.) => 0,
-                    s if s == Vec2::splat(360.) => 1,
-                    s if s == Vec2::new(460., 440.) => 2,
-                    _ => 3,
-                };
-                if segmented(ui, &mut preset, &["작게", "보통", "크게", "직접 설정"]) {
-                    match preset {
-                        0 => self.desktop.sticker_size = Vec2::new(340., 240.),
-                        1 => self.desktop.sticker_size = Vec2::splat(360.),
-                        2 => self.desktop.sticker_size = Vec2::new(460., 440.),
-                        _ => {}
-                    }
-                }
-                ui.horizontal(|ui| {
-                    ui.label("너비");
-                    ui.add(
-                        egui::Slider::new(&mut self.desktop.sticker_size.x, 340.0..=900.0)
-                            .step_by(10.)
-                            .suffix(" px"),
+                settings_group(ui, "새 메모", |ui| {
+                    section(ui, "새 스티커 메모 크기");
+                    let mut preset = match self.desktop.sticker_size {
+                        s if s == Vec2::new(340., 240.) => 0,
+                        s if s == Vec2::splat(360.) => 1,
+                        s if s == Vec2::new(460., 440.) => 2,
+                        _ => 3,
+                    };
+                    ui.horizontal(|ui| {
+                        if segmented(ui, &mut preset, &["작게", "보통", "크게", "직접 설정"]) {
+                            match preset {
+                                0 => self.desktop.sticker_size = Vec2::new(340., 240.),
+                                1 => self.desktop.sticker_size = Vec2::splat(360.),
+                                2 => self.desktop.sticker_size = Vec2::new(460., 440.),
+                                _ => {}
+                            }
+                        }
+                        ui.add_space(6.);
+                        if ui
+                            .add_enabled(
+                                !self.desktop.size_probe,
+                                egui::Button::new("메모창으로 크기 설정하기"),
+                            )
+                            .on_hover_text(
+                                "스티커 메모가 하나 뜹니다 · 끌어서 크기를 바꾸고 닫으면 아래 너비·높이에 입력됩니다",
+                            )
+                            .clicked()
+                        {
+                            self.desktop.size_probe = true;
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("너비");
+                        ui.add(
+                            egui::Slider::new(&mut self.desktop.sticker_size.x, 340.0..=900.0)
+                                .step_by(10.)
+                                .suffix(" px"),
+                        );
+                        ui.add_space(12.);
+                        ui.label("높이");
+                        ui.add(
+                            egui::Slider::new(&mut self.desktop.sticker_size.y, 220.0..=900.0)
+                                .step_by(10.)
+                                .suffix(" px"),
+                        );
+                    });
+                    hint(ui, "새로 여는 스티커 메모에 적용됩니다");
+                    ui.add_space(6.);
+                    toggle_row(
+                        ui,
+                        &mut self.desktop.always_sticker,
+                        "메모를 항상 스티커 메모로 열기",
+                        "메모 편집 창은 스티커 제목줄의 편집 버튼으로 엽니다",
                     );
-                    ui.add_space(12.);
-                    ui.label("높이");
-                    ui.add(
-                        egui::Slider::new(&mut self.desktop.sticker_size.y, 220.0..=900.0)
-                            .step_by(10.)
-                            .suffix(" px"),
+                    section(ui, "새 메모 기본 색");
+                    color_choices(ui, &mut self.desktop.default_color);
+                    ui.add_space(6.);
+                    section(ui, "새 메모 띄울 모니터");
+                    let monitors = crate::native_window::monitors(ui.ctx()).len();
+                    let mut choice = self
+                        .desktop
+                        .new_monitor
+                        .filter(|m| *m < monitors)
+                        .map_or(0, |m| m + 1);
+                    let labels: Vec<String> = std::iter::once("자동".to_string())
+                        .chain((1..=monitors).map(|k| format!("모니터 {k}")))
+                        .collect();
+                    let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+                    ui.add_enabled_ui(monitors >= 2, |ui| {
+                        if segmented(ui, &mut choice, &labels) {
+                            self.desktop.new_monitor = choice.checked_sub(1);
+                        }
+                    });
+                    hint(
+                        ui,
+                        if monitors >= 2 {
+                            "자동: 지금 쓰고 있는 창이 있는 모니터에 띄웁니다"
+                        } else {
+                            "모니터가 두 대 이상일 때 고를 수 있습니다"
+                        },
+                    );
+                    ui.add_space(6.);
+                    toggle_row(
+                        ui,
+                        &mut self.desktop.new_right,
+                        "새 메모 오른쪽 정렬하기",
+                        "켜면 새 메모가 모니터 오른쪽 가장자리에 위에서부터 차례로 나타납니다",
                     );
                 });
-                hint(ui, "새로 여는 스티커 메모에 적용됩니다");
-                ui.add_space(6.);
-
-                toggle_row(
-                    ui,
-                    &mut self.desktop.always_sticker,
-                    "메모를 항상 스티커 메모로 열기",
-                    "메모 편집 창은 스티커 제목줄의 편집 버튼으로 엽니다",
-                );
-                section(ui, "새 메모 기본 색");
-                color_choices(ui, &mut self.desktop.default_color);
-                ui.add_space(6.);
+                ui.add_space(10.);
                 toggle_row(
                     ui,
                     &mut self.desktop.auto_toolbar,

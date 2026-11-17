@@ -267,7 +267,102 @@ pub fn plan(layout: Layout, area: Rect, sizes: &[Vec2]) -> Vec<Pos2> {
     }
     out
 }
+/// Where a new window of `size` goes on the right edge of `area`: the
+/// topmost spot in the rightmost column not covered by `others`, moving to the
+/// next column to the left when a column is full.
+pub fn right_slot(area: Rect, size: Vec2, others: &[Rect]) -> Pos2 {
+    let margin = 14.;
+    let gap = 8.;
+    let mut x = area.right() - margin - size.x;
+    while x >= area.left() + margin - 0.5 {
+        let mut y = area.top() + margin;
+        while y + size.y <= area.bottom() - margin + 0.5 {
+            let at = Rect::from_min_size(Pos2::new(x, y), size);
+            match others.iter().find(|o| o.shrink(1.).intersects(at)) {
+                None => return at.min,
+                Some(hit) => y = (hit.bottom() + gap).max(y + 1.),
+            }
+        }
+        x -= size.x + gap;
+    }
+    // Everything is covered: stack down the right edge, shifted a little.
+    let step = 30. * (others.len() % 8) as f32;
+    Pos2::new(area.right() - margin - size.x, area.top() + margin + step)
+}
 impl App {
+    /// The window for choosing the size of new stickers: a sticker-colored
+    /// window to resize with the mouse. Closing it enters its size.
+    pub fn size_probe_window(&mut self, ctx: &egui::Context) {
+        if !self.desktop.size_probe {
+            return;
+        }
+        let start = self.desktop.sticker_size;
+        let builder = egui::ViewportBuilder::default()
+            .with_title("새 스티커 메모 크기 설정")
+            .with_inner_size(start)
+            .with_min_inner_size([340., 220.])
+            .with_max_inner_size([900., 900.])
+            .with_taskbar(false)
+            .with_window_level(egui::WindowLevel::AlwaysOnTop);
+        let fill = self.desktop.default_color;
+        let mut closed = false;
+        let mut seen = None;
+        ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("size_probe"),
+            builder,
+            |ctx, _| {
+                self.theme(ctx);
+                if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape))
+                {
+                    closed = true;
+                }
+                seen = ctx.input(|i| i.viewport().inner_rect.map(|r| r.size()));
+                egui::CentralPanel::default()
+                    .frame(
+                        egui::Frame::NONE
+                            .fill(fill)
+                            .inner_margin(egui::Margin::same(18)),
+                    )
+                    .show(ctx, |ui| {
+                        ui.label(
+                            RichText::new("창의 가장자리를 끌어 원하는 크기로 바꾼 뒤, 창을 닫으세요.")
+                                .color(INK),
+                        );
+                        ui.add_space(6.);
+                        ui.label(
+                            RichText::new(
+                                "닫으면 이 크기가 새 스티커 메모의 크기가 됩니다 (Esc로도 닫힙니다).",
+                            )
+                            .color(MUTED),
+                        );
+                        ui.add_space(14.);
+                        if let Some(s) = seen {
+                            ui.label(
+                                RichText::new(format!(
+                                    "너비 {} px  ×  높이 {} px",
+                                    s.x.round(),
+                                    s.y.round()
+                                ))
+                                .size(20.)
+                                .strong()
+                                .color(INK),
+                            );
+                        }
+                    });
+            },
+        );
+        if let Some(s) = seen {
+            self.desktop.size_probe_last = Some(s);
+        }
+        if closed {
+            self.desktop.size_probe = false;
+            if let Some(s) = self.desktop.size_probe_last.take() {
+                let size = Vec2::new(s.x.round().clamp(340., 900.), s.y.round().clamp(220., 900.));
+                self.desktop.sticker_size = size;
+                self.toast = format!("새 스티커 메모 크기를 {} × {}로 정했습니다", size.x, size.y);
+            }
+        }
+    }
     pub fn finish_completed_stickers(&mut self, ctx: &egui::Context) {
         let completed = std::mem::take(&mut self.completed_stickers);
         if !self.prefs.close_completed_sticker {
@@ -1156,7 +1251,9 @@ impl App {
         // The caret starts in the body, so a quick memo can be typed at once.
         n.document.requested_selection = Some(0..0);
         self.data.notes.push(n);
-        self.studio.windows.insert(i, Window::new(Mode::Sticker));
+        let mut w = Window::new(Mode::Sticker);
+        w.sticker_size = self.desktop.sticker_size;
+        self.studio.windows.insert(i, w);
         i
     }
     pub fn render_note_windows(&mut self, root: &egui::Context) {
@@ -1280,8 +1377,29 @@ impl App {
                     }
                 }
                 if changed || w.center {
-                    if let Some(area) = crate::native_window::work_area(ctx) {
-                        let position = if w.center {
+                    // A new window opens on the monitor chosen in the settings.
+                    let chosen = if w.center {
+                        self.desktop
+                            .new_monitor
+                            .and_then(|m| crate::native_window::monitors(ctx).get(m).copied())
+                    } else {
+                        None
+                    };
+                    if let Some(area) = chosen.or_else(|| crate::native_window::work_area(ctx)) {
+                        let position = if w.center && self.desktop.new_right {
+                            let others: Vec<Rect> = self
+                                .studio
+                                .windows
+                                .iter()
+                                .filter(|(_, o)| o.open)
+                                .filter_map(|(&n, o)| {
+                                    let at = o.place.or(o.last_pos)?;
+                                    let locked = self.data.notes.get(n).is_some_and(|n| n.locked);
+                                    Some(Rect::from_min_size(at, o.outer_size(locked)))
+                                })
+                                .collect();
+                            right_slot(area, size, &others)
+                        } else if w.center {
                             // New windows step down-right so they do not
                             // cover the ones already open.
                             let open = self.studio.windows.values().filter(|o| o.open).count();
@@ -1290,9 +1408,12 @@ impl App {
                             ctx.input(|v| v.viewport().outer_rect.map(|r| r.min))
                                 .unwrap_or(area.min)
                         };
-                        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(
-                            crate::native_window::fit_position(position, size, area),
-                        ));
+                        let position = crate::native_window::fit_position(position, size, area);
+                        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(position));
+                        if w.center {
+                            // Seen by the windows opened after this one.
+                            w.last_pos = Some(position);
+                        }
                     } else if w.center {
                         if let Some(cmd) = egui::ViewportCommand::center_on_screen(ctx) {
                             ctx.send_viewport_cmd(cmd);
@@ -2601,5 +2722,168 @@ mod arrangement_tests {
         let arrange = a.arrange.expect("should have arranged");
         assert_eq!(arrange.layout, Layout::Left);
         assert_eq!(arrange.fold, Some(Mode::Swatch));
+    }
+}
+
+#[cfg(test)]
+mod new_memo_placement_tests {
+    use super::*;
+
+    fn area() -> Rect {
+        Rect::from_min_size(Pos2::new(1920., 0.), Vec2::new(1920., 1040.))
+    }
+
+    #[test]
+    fn new_memos_stack_down_the_right_edge_then_start_a_column_to_the_left() {
+        let size = Vec2::new(360., 360.);
+        let mut open: Vec<Rect> = vec![];
+        let mut at = vec![];
+        for _ in 0..4 {
+            let p = right_slot(area(), size, &open);
+            at.push(p);
+            open.push(Rect::from_min_size(p, size));
+        }
+        // The right edge of the monitor, below one another with a gap.
+        assert_eq!(at[0], Pos2::new(1920. + 1920. - 14. - 360., 14.));
+        assert_eq!(at[1].x, at[0].x);
+        assert_eq!(at[1].y, at[0].y + 360. + 8.);
+        // A third does not fit below (14 + 3 * 368 > 1040): a new column starts.
+        assert!(at[2].x < at[0].x && at[2].y == 14.);
+        assert_eq!(at[3].x, at[2].x);
+        assert_eq!(at[3].y, at[2].y + 360. + 8.);
+        for (i, a) in open.iter().enumerate() {
+            for b in &open[i + 1..] {
+                assert!(!a.intersects(*b), "windows must not overlap");
+            }
+        }
+    }
+
+    #[test]
+    fn a_memo_closed_in_the_middle_leaves_its_place_for_the_next_one() {
+        let size = Vec2::new(360., 300.);
+        let first = Rect::from_min_size(right_slot(area(), size, &[]), size);
+        let third = Rect::from_min_size(Pos2::new(first.min.x, first.max.y + 8. + 308.), size);
+        // The second one was closed: the next goes where it was.
+        let p = right_slot(area(), size, &[first, third]);
+        assert_eq!(p, Pos2::new(first.min.x, first.max.y + 8.));
+    }
+
+    #[test]
+    fn windows_on_another_monitor_do_not_count() {
+        let size = Vec2::new(360., 360.);
+        let elsewhere = Rect::from_min_size(Pos2::new(1500., 14.), size);
+        assert_eq!(
+            right_slot(area(), size, &[elsewhere]),
+            Pos2::new(1920. + 1920. - 14. - 360., 14.)
+        );
+    }
+
+    #[test]
+    fn new_stickers_use_the_size_from_the_settings_and_open_on_the_right_by_default() {
+        let mut app = App::sample(Local::now().date_naive());
+        assert!(app.desktop.new_right, "right alignment is on by default");
+        assert_eq!(app.desktop.new_monitor, None);
+        app.desktop.sticker_size = Vec2::new(500., 420.);
+        let i = app.new_sticker();
+        assert_eq!(app.studio.windows[&i].sticker_size, Vec2::new(500., 420.));
+    }
+
+    #[test]
+    fn the_new_memo_settings_are_saved_and_restored() {
+        let mut app = App::sample(Local::now().date_naive());
+        app.desktop.new_monitor = Some(1);
+        app.desktop.new_right = false;
+        let rec = crate::storage::SettingsRec {
+            new_monitor: app.desktop.new_monitor,
+            new_right: app.desktop.new_right,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&rec).unwrap();
+        let back: crate::storage::SettingsRec = serde_json::from_str(&json).unwrap();
+        assert_eq!((back.new_monitor, back.new_right), (Some(1), false));
+        // Settings saved before these options existed: right alignment on.
+        let old: crate::storage::SettingsRec = serde_json::from_str("{}").unwrap();
+        assert!(old.new_right && old.new_monitor.is_none());
+    }
+}
+
+#[cfg(test)]
+mod size_window_tests {
+    use super::*;
+
+    fn frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1200., 800.))),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.size_probe_window(ctx),
+        );
+    }
+    fn escape() -> Vec<egui::Event> {
+        vec![egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        }]
+    }
+
+    #[test]
+    fn closing_the_size_window_enters_its_size_in_the_settings() {
+        let mut app = App::sample(Local::now().date_naive());
+        let ctx = egui::Context::default();
+        app.desktop.sticker_size = Vec2::splat(360.);
+        app.desktop.size_probe = true;
+        // Nothing happens while it is open and untouched.
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.desktop.size_probe);
+        assert_eq!(app.desktop.sticker_size, Vec2::splat(360.));
+        // The user dragged it to this size; the last drawn size is kept.
+        app.desktop.size_probe_last = Some(Vec2::new(612.4, 333.6));
+        frame(&mut app, &ctx, escape());
+        assert!(!app.desktop.size_probe, "it closes");
+        assert_eq!(app.desktop.sticker_size, Vec2::new(612., 334.));
+        // Sizes outside the limits of the sliders are brought inside them.
+        app.desktop.size_probe = true;
+        app.desktop.size_probe_last = Some(Vec2::new(1500., 100.));
+        frame(&mut app, &ctx, escape());
+        assert_eq!(app.desktop.sticker_size, Vec2::new(900., 220.));
+    }
+
+    #[test]
+    fn the_new_memo_group_shows_in_the_settings_with_the_size_button() {
+        let mut app = App::sample(Local::now().date_naive());
+        app.desktop.settings_tab = 2;
+        let ctx = egui::Context::default();
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000., 1200.))),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.ppt_settings(ui));
+            },
+        );
+        let texts: Vec<String> = output
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Text(t) => Some(t.galley.job.text.clone()),
+                _ => None,
+            })
+            .collect();
+        for wanted in [
+            "새 메모",
+            "새 스티커 메모 크기",
+            "메모창으로 크기 설정하기",
+            "새 메모 기본 색",
+            "새 메모 띄울 모니터",
+            "새 메모 오른쪽 정렬하기",
+        ] {
+            assert!(texts.iter().any(|t| t == wanted), "missing: {wanted}");
+        }
     }
 }
