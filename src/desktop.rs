@@ -336,6 +336,37 @@ impl App {
     }
     /// Pick a backed-up `data.json` and load it, after backing up the
     /// current data.
+    /// Ask, then move the pictures nothing uses out of the images folder.
+    pub fn shelve_unused_images(&mut self, dir: &std::path::Path) {
+        self.autosave(0., true);
+        let unused = match crate::storage::unused_images(dir, &self.picture_files()) {
+            Ok(u) => u,
+            Err(e) => {
+                self.desktop.last_action =
+                    format!("이미지를 확인하지 못해 정리하지 않았습니다: {e}");
+                return;
+            }
+        };
+        if unused.is_empty() {
+            self.desktop.last_action = "사용하지 않는 이미지가 없습니다".into();
+            return;
+        }
+        let bytes: u64 = unused.iter().map(|u| u.1).sum();
+        let yes = rfd::MessageDialog::new()
+            .set_title("OhMemoJang")
+            .set_description(format!(
+                "사용하지 않는 이미지 {}개({:.1}MB)를 images\\unused 폴더로 옮길까요?\n지우지는 않습니다.",
+                unused.len(),
+                bytes as f64 / 1_048_576.
+            ))
+            .set_buttons(rfd::MessageButtons::YesNo)
+            .show()
+            == rfd::MessageDialogResult::Yes;
+        if yes {
+            let moved = crate::storage::shelve_images(dir, &unused);
+            self.desktop.last_action = format!("사용하지 않는 이미지 {moved}개를 옮겼습니다");
+        }
+    }
     pub fn restore_from_backup(&mut self, dir: &std::path::Path) {
         let Some(file) = rfd::FileDialog::new()
             .add_filter("OhMemoJang 데이터", &["db", "json"])
@@ -1333,7 +1364,14 @@ impl App {
                 );
                 hint(
                     ui,
-                    "이미지는 화면에 보일 때만 불러오므로 용량이 커져도 느려지지 않습니다 · 이미지는 지우지 않고 모든 백업이 함께 씁니다 · 다른 PC로 옮길 때는 데이터 폴더 전체를 복사하세요",
+                    "이미지는 화면에 보일 때만 불러오므로 용량이 커져도 느려지지 않습니다 · 이미지는 모든 백업이 함께 씁니다 · 다른 PC로 옮길 때는 데이터 폴더 전체를 복사하세요",
+                );
+                if ui.button("사용하지 않는 이미지 정리…").clicked() {
+                    self.shelve_unused_images(&dir);
+                }
+                hint(
+                    ui,
+                    "어떤 메모와 백업에서도 쓰지 않는 이미지를 images\\unused 폴더로 옮깁니다 · 지우지 않으며, 파일을 images 폴더로 다시 옮기면 되돌아옵니다",
                 );
             }
             _ => {

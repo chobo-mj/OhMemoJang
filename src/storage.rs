@@ -1182,6 +1182,9 @@ static FRAME_INPUT: AtomicBool = AtomicBool::new(false);
 
 /// Copy files of `from` missing in `to` (pictures are never changed in place).
 pub fn copy_missing(from: &Path, to: &Path) {
+    // Whatever could not be read while the files were still being copied
+    // is looked for again.
+    let _done = Forget;
     let Ok(entries) = std::fs::read_dir(from) else {
         return;
     };
@@ -1194,7 +1197,114 @@ pub fn copy_missing(from: &Path, to: &Path) {
     }
 }
 
+/// Clears the list of unreadable pictures when dropped.
+struct Forget;
+impl Drop for Forget {
+    fn drop(&mut self) {
+        if let Ok(mut m) = MISSING.lock() {
+            *m = None;
+        }
+    }
+}
+
+/// Picture files in `dir\images` that no memo and no backup uses, with their
+/// sizes. `used` holds the picture files of the memos open in the program.
+/// Backups (`backups\*\data.db`, the older `data.json`) count as users, so
+/// restoring one never finds a picture missing; if any of them cannot be
+/// read the answer is an error rather than a guess.
+pub fn unused_images(dir: &Path, used: &HashSet<String>) -> Result<Vec<(String, u64)>, String> {
+    let images = dir.join("images");
+    let Ok(entries) = std::fs::read_dir(&images) else {
+        return Ok(vec![]);
+    };
+    let mut files: Vec<(String, u64)> = entries
+        .flatten()
+        .filter(|e| e.path().is_file())
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let size = e.metadata().ok()?.len();
+            Some((name, size))
+        })
+        .collect();
+    let mut used = used.clone();
+    let mut texts = vec![];
+    let mut sources = vec![dir.join(DB)];
+    let mut loose = vec![
+        dir.join(FILE),
+        dir.join("data.before-db.json"),
+        dir.join("data.unreadable.json"),
+    ];
+    if let Ok(backups) = std::fs::read_dir(dir.join("backups")) {
+        for b in backups.flatten() {
+            sources.push(b.path().join(DB));
+            loose.push(b.path().join(FILE));
+        }
+    }
+    for path in sources.into_iter().filter(|p| p.exists()) {
+        let saved = read_db(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        used.extend(saved_pictures(&saved));
+    }
+    for path in loose.into_iter().filter(|p| p.exists()) {
+        texts.push(std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?);
+    }
+    files.retain(|(name, _)| !used.contains(name) && !texts.iter().any(|t| t.contains(name)));
+    files.sort();
+    Ok(files)
+}
+
+/// Every picture file the records name (tabs and the tabs in the trash).
+fn saved_pictures(saved: &Saved) -> impl Iterator<Item = String> + '_ {
+    saved
+        .notes
+        .iter()
+        .flat_map(|n| n.document.tabs.iter().chain(n.document.trash.iter()))
+        .flat_map(|t| t.blocks.iter())
+        .filter_map(|b| match b {
+            BlockRec::Picture { file, .. } if !file.is_empty() => Some(file.clone()),
+            _ => None,
+        })
+}
+
+/// Move unused pictures (see `unused_images`) into `images\unused`, never
+/// deleting them: moving them back restores them. Their small previews are
+/// made again when needed, so those are deleted. Returns how many moved.
+pub fn shelve_images(dir: &Path, names: &[(String, u64)]) -> usize {
+    let images = dir.join("images");
+    let shelf = images.join("unused");
+    let mut moved = 0;
+    for (name, _) in names {
+        if name.contains(['/', '\\']) {
+            continue;
+        }
+        if std::fs::create_dir_all(&shelf).is_err() {
+            break;
+        }
+        let target = shelf.join(name);
+        if !target.exists() && std::fs::rename(images.join(name), &target).is_ok() {
+            moved += 1;
+            let _ = std::fs::remove_file(images.join("thumbs").join(name));
+        }
+    }
+    moved
+}
+
 impl App {
+    /// Picture files of every memo in the program.
+    pub fn picture_files(&self) -> HashSet<String> {
+        let mut used = HashSet::new();
+        for n in self.data.notes.iter() {
+            for tab in n.document.tabs.iter().chain(n.document.trash.iter()) {
+                for b in &tab.blocks {
+                    if let Block::Picture(p) = b {
+                        if !p.file.is_empty() {
+                            used.insert(p.file.clone());
+                        }
+                    }
+                }
+            }
+        }
+        used
+    }
     /// At startup: load saved data, or start a new workspace with the usage
     /// guide. The guide page opens only on the very first run; later runs
     /// open the start page chosen in settings.
@@ -1530,6 +1640,57 @@ mod tests {
         }
         // Saving the restored workspace changes nothing.
         assert!(b.snapshot(&dir) == snap);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_pictures_nothing_uses_are_shelved() {
+        let dir = std::env::temp_dir().join(format!("ohmemojang-unused-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = App::sample(NaiveDate::from_ymd_opt(2026, 11, 11).unwrap());
+        let pic = |px: u8| Picture::from_rgba(0, "p".into(), vec![px, 0, 0, 255], [1, 1], 1., true);
+        a.data.notes[0].document.tabs[0]
+            .blocks
+            .push(Block::Picture(pic(1)));
+        let in_db = a.snapshot(&dir);
+        write_all(&dir, &in_db).unwrap();
+        let files = |d: &Path| -> HashSet<String> {
+            std::fs::read_dir(d)
+                .unwrap()
+                .flatten()
+                .filter(|e| e.path().is_file())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        };
+        let images = dir.join("images");
+        let used_now = files(&images);
+        assert_eq!(used_now.len(), 1);
+        // A picture only a backup uses, one only an old json names, one in
+        // memory only, and one nobody uses.
+        let mut b = App::sample(NaiveDate::from_ymd_opt(2026, 11, 11).unwrap());
+        b.data.notes[0].document.tabs[0]
+            .blocks
+            .push(Block::Picture(pic(2)));
+        let in_backup = b.snapshot(&dir);
+        let backup_dir = dir.join("backups").join("20260101-000000");
+        std::fs::create_dir_all(&backup_dir).unwrap();
+        write_all(&backup_dir, &in_backup).unwrap();
+        let _ = std::fs::remove_dir_all(backup_dir.join("images"));
+        std::fs::write(images.join("0000000000000003.png"), b"x").unwrap();
+        std::fs::write(dir.join("data.before-db.json"), "0000000000000003.png").unwrap();
+        std::fs::write(images.join("0000000000000004.png"), b"x").unwrap();
+        std::fs::write(images.join("0000000000000005.png"), b"x").unwrap();
+        let memory: HashSet<String> = ["0000000000000004.png".to_string()].into();
+        let unused = unused_images(&dir, &memory).unwrap();
+        let names: Vec<&str> = unused.iter().map(|u| u.0.as_str()).collect();
+        assert_eq!(names, ["0000000000000005.png"]);
+        assert_eq!(shelve_images(&dir, &unused), 1);
+        assert!(images.join("unused").join("0000000000000005.png").exists());
+        assert!(!images.join("0000000000000005.png").exists());
+        assert!(images.join("0000000000000004.png").exists());
+        // A backup that cannot be read stops the search.
+        std::fs::write(backup_dir.join(DB), b"broken").unwrap();
+        assert!(unused_images(&dir, &memory).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
