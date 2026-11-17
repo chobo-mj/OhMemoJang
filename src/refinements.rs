@@ -368,6 +368,60 @@ impl App {
         }
         id
     }
+    /// Delete a wiki folder. Its memos and subfolders move up into the
+    /// folder above (or the tab's top level), so nothing is lost.
+    pub fn delete_wiki_folder(&mut self, f: usize) {
+        if f >= self.extra.folders.len() {
+            return;
+        }
+        let parent = self.extra.folders[f].parent;
+        let shift = |g: usize| if g > f { g - 1 } else { g };
+        for n in self.data.notes.iter_mut() {
+            if n.folder == Some(f) {
+                n.folder = parent;
+            }
+            n.folder = n.folder.map(shift);
+        }
+        for folder in self.extra.folders.iter_mut() {
+            if folder.parent == Some(f) {
+                folder.parent = parent;
+            }
+            folder.parent = folder.parent.map(shift);
+        }
+        self.extra.folders.remove(f);
+        self.extra.folder_open = self
+            .extra
+            .folder_open
+            .iter()
+            .filter(|&&g| g != f)
+            .map(|&g| shift(g))
+            .collect();
+        self.extra.folder_selected = match self.extra.folder_selected {
+            Some(s) if s == f => None,
+            other => other.map(shift),
+        };
+        self.extra.wiki_rename = match self.extra.wiki_rename {
+            Some(crate::extras::WikiRename::Folder(s)) if s == f => None,
+            Some(crate::extras::WikiRename::Folder(s)) => {
+                Some(crate::extras::WikiRename::Folder(shift(s)))
+            }
+            other => other,
+        };
+        self.toast = "폴더를 삭제했습니다 · 안의 메모는 상위로 옮겼습니다".into();
+    }
+    /// Take a memo out of the wiki.
+    pub fn unwiki_note(&mut self, i: usize) {
+        let n = &mut self.data.notes[i];
+        n.wiki = false;
+        n.folder = None;
+        n.wiki_tab = None;
+        for pane in self.extra.wiki_panes.iter_mut() {
+            if *pane == Some(i) {
+                *pane = None;
+            }
+        }
+        self.toast = "위키에서 해제했습니다".into();
+    }
     /// My wiki: tabs on top; on the left the tab's folder tree (①) over the
     /// unfiled wiki memos (②); on the right two areas that show memos side
     /// by side for comparison.
@@ -737,6 +791,9 @@ impl App {
                     });
                 }
             });
+        if let Some(f) = self.extra.wiki_folder_delete.take() {
+            self.delete_wiki_folder(f);
+        }
         if let Some(folder) = new_folder {
             self.create_wiki_folder(folder);
         }
@@ -831,6 +888,26 @@ impl App {
         if r.clicked() {
             self.wiki_open(i);
         }
+        let (tab, folder) = (self.data.notes[i].wiki_tab, self.data.notes[i].folder);
+        r.context_menu(|ui| {
+            if ui.button("새 폴더").clicked() {
+                self.create_wiki_folder(folder);
+                ui.close_menu();
+            }
+            if ui.button("새 위키 메모").clicked() {
+                let k = self.new_wiki_note(tab, folder);
+                self.wiki_open(k);
+                ui.close_menu();
+            }
+            if ui.button("위키 해제").clicked() {
+                self.unwiki_note(i);
+                ui.close_menu();
+            }
+            if ui.button("메모 삭제").clicked() {
+                self.trash_note(i);
+                ui.close_menu();
+            }
+        });
     }
     /// A new, empty wiki memo filed in `tab` / `folder` (both `None`: unfiled).
     fn new_wiki_note(&mut self, tab: Option<usize>, folder: Option<usize>) -> usize {
@@ -1065,12 +1142,20 @@ impl App {
                     *new_note = Some(Some(f));
                     ui.close_menu();
                 }
+                if ui.button("새 폴더").clicked() {
+                    *new_folder = Some(self.extra.folders[f].parent);
+                    ui.close_menu();
+                }
                 if ui.button("새 하위 폴더").clicked() {
                     *new_folder = Some(Some(f));
                     ui.close_menu();
                 }
                 if ui.button("이름 바꾸기").clicked() {
                     self.extra.wiki_rename = Some(crate::extras::WikiRename::Folder(f));
+                    ui.close_menu();
+                }
+                if ui.button("폴더 삭제").clicked() {
+                    self.extra.wiki_folder_delete = Some(f);
                     ui.close_menu();
                 }
             });
@@ -1332,6 +1417,42 @@ mod tests {
         a.confirm_wiki_tab_delete(0);
         assert!(a.extra.deleted_wiki_tabs.contains(&0));
         assert_eq!(a.extra.delete_wiki_tab, None);
+    }
+    #[test]
+    fn deleting_a_wiki_folder_moves_its_memos_and_subfolders_up() {
+        let mut a = app();
+        a.extra.folders.clear();
+        let f = |t: &str, parent| crate::extras::Folder {
+            title: t.into(),
+            description: String::new(),
+            parent,
+            tab: 0,
+        };
+        a.extra.folders = vec![f("a", None), f("b", Some(0)), f("c", Some(1))];
+        for n in a.data.notes.iter_mut() {
+            n.folder = None;
+        }
+        a.data.notes[0].folder = Some(1);
+        a.data.notes[1].folder = Some(2);
+        a.extra.folder_open = std::collections::HashSet::from([1, 2]);
+        a.delete_wiki_folder(1);
+        assert_eq!(a.extra.folders.len(), 2);
+        assert_eq!(a.extra.folders[1].title, "c");
+        assert_eq!(a.extra.folders[1].parent, Some(0), "c moved under a");
+        assert_eq!(a.data.notes[0].folder, Some(0), "b's memo moved to a");
+        assert_eq!(a.data.notes[1].folder, Some(1), "c's memo follows c");
+        assert!(a.extra.folder_open.contains(&1) && !a.extra.folder_open.contains(&2));
+    }
+    #[test]
+    fn taking_a_memo_out_of_the_wiki_clears_its_filing() {
+        let mut a = app();
+        a.data.notes[0].wiki = true;
+        a.data.notes[0].wiki_tab = Some(0);
+        a.data.notes[0].folder = Some(0);
+        a.extra.wiki_panes = [Some(0), None];
+        a.unwiki_note(0);
+        assert!(!a.data.notes[0].wiki && a.data.notes[0].folder.is_none());
+        assert_eq!(a.extra.wiki_panes, [None, None]);
     }
     #[test]
     fn no_project_filter_is_distinct_from_all() {
