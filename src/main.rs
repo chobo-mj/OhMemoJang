@@ -88,7 +88,7 @@ struct App {
     cal: calendar_dock::Dock,
     /// Settings kept between runs, and the text last written to disk.
     prefs: prefs::Prefs,
-    prefs_saved: String,
+    prefs_saved: prefs::Prefs,
     /// Autosave state for memos, wiki and settings.
     saving: storage::Saving,
     alarms: alarm::Alarms,
@@ -197,7 +197,7 @@ impl App {
         a.sidebar_width = a.prefs.sidebar_width;
         a.cal.theme = a.prefs.cal_theme;
         a.load_or_start();
-        a.prefs_saved = a.prefs.to_text();
+        a.prefs_saved = a.prefs.clone();
         a.tray = tray::Tray::new(&cc.egui_ctx);
         // Started with Windows: stay in the tray, stickers on the desktop.
         a.main_open = !(a.tray.active() && std::env::args().any(|x| x == "--tray"));
@@ -237,7 +237,7 @@ impl App {
             cal_cells: Default::default(),
             cal: calendar_dock::Dock::default(),
             prefs: prefs::Prefs::default(),
-            prefs_saved: String::new(),
+            prefs_saved: prefs::Prefs::default(),
             saving: storage::Saving::default(),
             alarms: alarm::Alarms::default(),
             autostart_applied: None,
@@ -1205,14 +1205,13 @@ impl App {
         if self.prefs.hidden_pages.contains(&self.page) || !PAGES.iter().any(|p| p.0 == self.page) {
             self.page = 0;
         }
-        let text = self.prefs.to_text();
-        if text != self.prefs_saved {
+        if self.prefs != self.prefs_saved {
             // A new data folder gets a full save right away.
-            if prefs::Prefs::from_text(&self.prefs_saved).data_path != self.prefs.data_path {
+            if self.prefs_saved.data_path != self.prefs.data_path {
                 self.saving.rewrite();
             }
             self.prefs.save();
-            self.prefs_saved = text;
+            self.prefs_saved = self.prefs.clone();
         }
     }
 }

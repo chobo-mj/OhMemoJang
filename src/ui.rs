@@ -63,6 +63,14 @@ pub fn t(ui: &Ui) -> Tone {
 
 /// Install visuals and spacing for a whole context. `body` is the body size in points.
 pub fn apply(ctx: &egui::Context, dark: bool, family: egui::FontFamily, body: f32) {
+    // Every window asks for its look every frame; the style is shared, so
+    // build and install it only when what it is made of has changed.
+    let key = egui::Id::new("ui-applied");
+    let want = (dark, family.clone(), body.to_bits());
+    if ctx.data(|d| d.get_temp::<(bool, egui::FontFamily, u32)>(key)) == Some(want.clone()) {
+        return;
+    }
+    ctx.data_mut(|d| d.insert_temp(key, want));
     let c = tone(dark);
     let mut v = if dark {
         egui::Visuals::dark()
