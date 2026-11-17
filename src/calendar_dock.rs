@@ -79,7 +79,7 @@ struct Standing {
     rect: PxRect,
     /// The whole window (with title bar) before it was pinned.
     outer: PxRect,
-    /// The standing button on screen, physical pixels.
+    /// The standing button relative to the client origin, physical pixels.
     button: PxRect,
     pinned: bool,
     /// Frames to wait for the title bar to go before moving to the desktop.
@@ -174,6 +174,7 @@ fn px(r: Rect, ppp: f32) -> PxRect {
 impl App {
     /// Show the calendar window (from the main window or the shortcut).
     pub fn show_calendar(&mut self) {
+        self.restore_standing();
         self.cal.state = DockState::Window;
     }
     pub fn calendar_dock(&mut self, ctx: &egui::Context) {
@@ -257,16 +258,27 @@ impl App {
                             hwnd,
                             rect: px(i, ppp),
                             outer: px(o, ppp),
-                            button: px(stand_rect.translate(i.min.to_vec2()), ppp),
+                            button: px(stand_rect, ctx.pixels_per_point()),
                             pinned: false,
                             wait: 3,
                             click: None,
                         });
                     }
                 }
+                if let Some(s) = self.cal.standing.as_mut() {
+                    s.button = px(stand_rect, ctx.pixels_per_point());
+                    if let Some(click) = &s.click {
+                        click.update(s.button);
+                    }
+                }
             },
         );
-        self.standing_frame(stand);
+        if standing && stand {
+            self.restore_standing();
+            ctx.request_repaint();
+        } else {
+            self.standing_frame(ctx);
+        }
         if minimize && self.cal.standing.is_none() {
             self.cal.minimize_to_box();
         }
@@ -338,14 +350,24 @@ impl App {
         ui.allocate_rect(rect, Sense::hover());
     }
     /// Pin, poll and unpin the standing calendar.
-    fn standing_frame(&mut self, button_clicked: bool) {
+    fn restore_standing(&mut self) {
+        if let Some(s) = self.cal.standing.as_ref() {
+            if s.pinned && !crate::win_style::unpin_from_desktop(s.hwnd, s.outer) {
+                self.toast = "분리 창으로 돌아오지 못했습니다. 해제 버튼을 다시 눌러 주세요".into();
+                return;
+            }
+        }
+        self.cal.standing = None;
+    }
+    fn standing_frame(&mut self, ctx: &egui::Context) {
         let Some(s) = self.cal.standing.as_mut() else {
             return;
         };
         if !s.pinned {
             // Wait until the title bar is gone, then move to the desktop.
-            if button_clicked || s.wait > 0 {
+            if s.wait > 0 {
                 s.wait = s.wait.saturating_sub(1);
+                ctx.request_repaint_after(std::time::Duration::from_millis(16));
                 return;
             }
             s.pinned = crate::win_style::pin_to_desktop(s.hwnd, s.rect);
@@ -353,13 +375,18 @@ impl App {
                 self.cal.standing = None;
                 return;
             }
-            s.click = Some(crate::win_style::DesktopClick::watch(s.button));
+            s.click = crate::win_style::DesktopClick::watch(s.hwnd, s.button, ctx.clone());
+            if s.click.is_none() {
+                self.restore_standing();
+                self.toast = "바탕화면 입력 감지를 시작하지 못해 분리 창으로 유지합니다".into();
+                ctx.request_repaint();
+            }
             return;
         }
         if s.click.as_ref().is_some_and(|c| c.take()) {
             // Back where it was, title bar included.
-            crate::win_style::unpin_from_desktop(s.hwnd, s.outer);
-            self.cal.standing = None;
+            self.restore_standing();
+            ctx.request_repaint();
         }
     }
     /// Right-click anywhere in the calendar window: month, 1-week or
@@ -531,7 +558,7 @@ impl App {
                     standing,
                 );
                 stand_rect = r.rect;
-                stand = r.clicked() && !standing;
+                stand = r.clicked();
                 if standing {
                     ui.label(
                         RichText::new("바탕화면에 고정됨 · 아이콘을 다시 누르면 해제")
@@ -704,5 +731,69 @@ impl App {
         if close_all {
             self.cal.state = DockState::Hidden;
         }
+    }
+}
+
+#[cfg(test)]
+mod standing_tests {
+    use super::*;
+
+    #[test]
+    fn standing_button_accepts_normal_click_and_shortcut_restores_pending_pin() {
+        let mut app = App::sample(chrono::NaiveDate::from_ymd_opt(2026, 11, 17).unwrap());
+        app.cal.standing = Some(Standing {
+            hwnd: 0,
+            rect: [0, 0, 860, 760],
+            outer: [0, 0, 860, 800],
+            button: [0; 4],
+            pinned: false,
+            wait: 3,
+            click: None,
+        });
+        let ctx = egui::Context::default();
+        let mut button = Rect::NOTHING;
+        let mut clicked = false;
+        let mut frame = |events: Vec<egui::Event>| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(860., 760.))),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        (clicked, button) = app.calendar_toolbar(ui, &mut false);
+                    });
+                },
+            );
+            (clicked, button)
+        };
+        let (_, rect) = frame(vec![]);
+        let pos = rect.center();
+        frame(vec![egui::Event::PointerMoved(pos)]);
+        frame(vec![egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        }]);
+        let (clicked, _) = frame(vec![egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }]);
+        assert!(clicked, "standing mode must not discard the toolbar click");
+        app.show_calendar();
+        assert!(app.cal.standing.is_none());
+        assert_eq!(app.cal.state, DockState::Window);
+    }
+
+    #[test]
+    fn button_pixels_follow_ui_scale_without_adding_stale_screen_origin() {
+        let button = Rect::from_min_max(Pos2::new(120., 14.), Pos2::new(152., 46.));
+        assert_eq!(px(button, 1.), [120, 14, 152, 46]);
+        assert_eq!(px(button, 1.5), [180, 21, 228, 69]);
+        assert_eq!(px(button, 2.), [240, 28, 304, 92]);
     }
 }

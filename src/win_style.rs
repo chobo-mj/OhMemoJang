@@ -49,13 +49,14 @@ pub fn pin_to_desktop(hwnd: isize, rect: PxRect) -> bool {
 }
 
 /// Make a pinned window an ordinary top-level window again at `rect`.
-pub fn unpin_from_desktop(hwnd: isize, rect: PxRect) {
+pub fn unpin_from_desktop(hwnd: isize, rect: PxRect) -> bool {
     #[cfg(windows)]
-    unsafe {
-        desk::unpin(hwnd, rect)
-    };
+    return unsafe { desk::unpin(hwnd, rect) };
     #[cfg(not(windows))]
-    let _ = (hwnd, rect);
+    {
+        let _ = (hwnd, rect);
+        false
+    }
 }
 
 /// Watches, on a small background thread, for a click on `rect` while the
@@ -63,21 +64,34 @@ pub fn unpin_from_desktop(hwnd: isize, rect: PxRect) {
 /// lives below the desktop icons and gets no input of its own.
 pub struct DesktopClick {
     hit: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    rect: std::sync::Arc<std::sync::Mutex<PxRect>>,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    thread: u32,
 }
 
 impl DesktopClick {
-    pub fn watch(rect: PxRect) -> Self {
-        use std::sync::{atomic::AtomicBool, Arc};
+    pub fn watch(hwnd: isize, rect: PxRect, ctx: egui::Context) -> Option<Self> {
+        use std::sync::{atomic::AtomicBool, Arc, Mutex};
         let hit = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
+        let rect = Arc::new(Mutex::new(rect));
         #[cfg(windows)]
-        desk::watch(rect, hit.clone(), stop.clone());
+        let thread = desk::watch(hwnd, rect.clone(), hit.clone(), stop.clone(), ctx)?;
         #[cfg(not(windows))]
-        let _ = rect;
-        Self { hit, stop }
+        let thread = {
+            let _ = (hwnd, ctx);
+            0
+        };
+        Some(Self {
+            hit,
+            rect,
+            stop,
+            thread,
+        })
     }
-    /// True once after a click was seen.
+    pub fn update(&self, rect: PxRect) {
+        *self.rect.lock().unwrap_or_else(|e| e.into_inner()) = rect;
+    }
     pub fn take(&self) -> bool {
         self.hit.swap(false, std::sync::atomic::Ordering::Relaxed)
     }
@@ -87,8 +101,19 @@ impl Drop for DesktopClick {
     fn drop(&mut self) {
         self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
         #[cfg(windows)]
-        desk::unwatch();
+        unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW(
+                self.thread,
+                windows_sys::Win32::UI::WindowsAndMessaging::WM_QUIT,
+                0,
+                0,
+            );
+        }
     }
+}
+
+fn contains_point(rect: PxRect, x: i32, y: i32) -> bool {
+    x >= rect[0] && x < rect[2] && y >= rect[1] && y < rect[3]
 }
 
 #[cfg(windows)]
@@ -99,14 +124,14 @@ mod desk {
         Arc, Mutex,
     };
     use windows_sys::Win32::{
-        Foundation::{BOOL, HWND, LPARAM, LRESULT, POINT, WPARAM},
-        Graphics::Gdi::ScreenToClient,
+        Foundation::{GetLastError, SetLastError, BOOL, HWND, LPARAM, LRESULT, POINT, WPARAM},
+        Graphics::Gdi::{ClientToScreen, ScreenToClient},
         System::{LibraryLoader::GetModuleHandleW, Threading::GetCurrentThreadId},
         UI::WindowsAndMessaging::{
             CallNextHookEx, EnumWindows, FindWindowExW, FindWindowW, GetClassNameW, GetMessageW,
-            PostThreadMessageW, SendMessageTimeoutW, SetParent, SetWindowPos, SetWindowsHookExW,
-            UnhookWindowsHookEx, WindowFromPoint, MSG, MSLLHOOKSTRUCT, SMTO_NORMAL, SWP_NOACTIVATE,
-            SWP_NOZORDER, SWP_SHOWWINDOW, WH_MOUSE_LL, WM_LBUTTONUP, WM_QUIT,
+            IsChild, PeekMessageW, SendMessageTimeoutW, SetParent, SetWindowPos, SetWindowsHookExW,
+            UnhookWindowsHookEx, WindowFromPoint, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, SMTO_NORMAL,
+            SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, WH_MOUSE_LL, WM_LBUTTONUP,
         },
     };
 
@@ -167,12 +192,9 @@ mod desk {
             return false;
         }
         let h = hwnd as HWND;
-        // SetParent's return is the window's previous parent on success and
-        // null on failure. Left unchecked, a failed reparent was still
-        // reported as a successful pin: decorations stayed off and the
-        // window never got its title bar back, with no way to tell it had
-        // never actually moved onto the desktop layer.
-        if SetParent(h, layer).is_null() {
+        // A null previous parent is also a successful result for top-level windows.
+        SetLastError(0);
+        if SetParent(h, layer).is_null() && GetLastError() != 0 {
             return false;
         }
         let mut p = POINT { x: r[0], y: r[1] };
@@ -189,9 +211,12 @@ mod desk {
         true
     }
 
-    pub unsafe fn unpin(hwnd: isize, r: PxRect) {
+    pub unsafe fn unpin(hwnd: isize, r: PxRect) -> bool {
         let h = hwnd as HWND;
-        SetParent(h, std::ptr::null_mut());
+        SetLastError(0);
+        if SetParent(h, std::ptr::null_mut()).is_null() && GetLastError() != 0 {
+            return false;
+        }
         SetWindowPos(
             h,
             std::ptr::null_mut(),
@@ -201,11 +226,15 @@ mod desk {
             r[3] - r[1],
             SWP_NOZORDER | SWP_SHOWWINDOW,
         );
+        true
     }
 
     /// The desktop is under `p` (not some other window).
-    unsafe fn desktop_at(p: POINT) -> bool {
+    unsafe fn desktop_at(p: POINT, calendar: HWND) -> bool {
         let top = WindowFromPoint(p);
+        if top == calendar || IsChild(calendar, top) != 0 {
+            return true;
+        }
         let mut buf = [0u16; 64];
         let n = GetClassNameW(top, buf.as_mut_ptr(), buf.len() as i32).max(0) as usize;
         let class = String::from_utf16_lossy(&buf[..n]);
@@ -215,53 +244,103 @@ mod desk {
         ) || top.is_null()
     }
 
-    type Watch = (PxRect, Arc<AtomicBool>);
-    static WATCH: Mutex<Option<Watch>> = Mutex::new(None);
-    static THREAD: Mutex<Option<u32>> = Mutex::new(None);
+    struct Watch {
+        hwnd: isize,
+        rect: Arc<Mutex<PxRect>>,
+        hit: Arc<AtomicBool>,
+        ctx: eframe::egui::Context,
+    }
+    thread_local! {
+        static WATCH: std::cell::RefCell<Option<Watch>> = const { std::cell::RefCell::new(None) };
+    }
 
     unsafe extern "system" fn hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
         if code >= 0 && w as u32 == WM_LBUTTONUP {
             let info = &*(l as *const MSLLHOOKSTRUCT);
-            let p = info.pt;
-            if let Some((r, hit)) = WATCH.lock().ok().and_then(|w| w.clone()) {
-                let inside = p.x >= r[0] && p.x < r[2] && p.y >= r[1] && p.y < r[3];
-                if inside && desktop_at(p) {
-                    hit.store(true, Ordering::Relaxed);
+            WATCH.with(|slot| {
+                let watch = slot.borrow();
+                let Some(watch) = watch.as_ref() else {
+                    return;
+                };
+                let Ok(rect) = watch.rect.try_lock().map(|r| *r) else {
+                    return;
+                };
+                let h = watch.hwnd as HWND;
+                let mut origin = POINT { x: 0, y: 0 };
+                // Resolve the native client position at the instant of the click.
+                // Reparenting, title-bar changes and monitor positions cannot stale it.
+                if ClientToScreen(h, &mut origin) != 0
+                    && super::contains_point(rect, info.pt.x - origin.x, info.pt.y - origin.y)
+                    && desktop_at(info.pt, h)
+                {
+                    watch.hit.store(true, Ordering::Relaxed);
+                    watch.ctx.request_repaint();
                 }
-            }
+            });
         }
         CallNextHookEx(std::ptr::null_mut(), code, w, l)
     }
 
-    /// A low-level mouse hook on its own thread reports clicks on `rect`
-    /// even though the desktop, not this app, receives them.
-    pub fn watch(rect: PxRect, hit: Arc<AtomicBool>, stop: Arc<AtomicBool>) {
-        unwatch();
-        if let Ok(mut w) = WATCH.lock() {
-            *w = Some((rect, hit));
-        }
-        std::thread::spawn(move || unsafe {
-            let module = GetModuleHandleW(std::ptr::null());
-            let h = SetWindowsHookExW(WH_MOUSE_LL, Some(hook), module, 0);
-            if let Ok(mut t) = THREAD.lock() {
-                *t = Some(GetCurrentThreadId());
-            }
-            let mut msg: MSG = std::mem::zeroed();
-            while !stop.load(Ordering::Relaxed)
-                && GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0
-            {}
-            if !h.is_null() {
+    pub fn watch(
+        hwnd: isize,
+        rect: Arc<Mutex<PxRect>>,
+        hit: Arc<AtomicBool>,
+        stop: Arc<AtomicBool>,
+        ctx: eframe::egui::Context,
+    ) -> Option<u32> {
+        let (ready, result) = std::sync::mpsc::sync_channel(1);
+        let cancel = stop.clone();
+        let thread_id = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let started_thread = thread_id.clone();
+        std::thread::Builder::new()
+            .name("standing-calendar-input".into())
+            .spawn(move || unsafe {
+                let mut msg: MSG = std::mem::zeroed();
+                // Create the queue before publishing the thread id, so Drop cannot
+                // lose its quit message during a rapid unpin/pin transition.
+                PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_NOREMOVE);
+                WATCH.with(|slot| {
+                    *slot.borrow_mut() = Some(Watch {
+                        hwnd,
+                        rect,
+                        hit,
+                        ctx,
+                    })
+                });
+                let module = GetModuleHandleW(std::ptr::null());
+                let h = SetWindowsHookExW(WH_MOUSE_LL, Some(hook), module, 0);
+                if h.is_null() {
+                    let _ = ready.send(None);
+                    WATCH.with(|slot| *slot.borrow_mut() = None);
+                    return;
+                }
+                started_thread.store(GetCurrentThreadId(), Ordering::SeqCst);
+                let delivered = ready.send(Some(GetCurrentThreadId())).is_ok();
+                while delivered
+                    && !stop.load(Ordering::Relaxed)
+                    && GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0
+                {}
                 UnhookWindowsHookEx(h);
+                WATCH.with(|slot| *slot.borrow_mut() = None);
+            })
+            .ok()?;
+        match result.recv_timeout(std::time::Duration::from_secs(1)) {
+            Ok(thread) => thread,
+            Err(_) => {
+                cancel.store(true, Ordering::SeqCst);
+                let id = thread_id.load(Ordering::SeqCst);
+                if id != 0 {
+                    unsafe {
+                        windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW(
+                            id,
+                            windows_sys::Win32::UI::WindowsAndMessaging::WM_QUIT,
+                            0,
+                            0,
+                        );
+                    }
+                }
+                None
             }
-        });
-    }
-
-    pub fn unwatch() {
-        if let Ok(mut w) = WATCH.lock() {
-            *w = None;
-        }
-        if let Some(t) = THREAD.lock().ok().and_then(|mut t| t.take()) {
-            unsafe { PostThreadMessageW(t, WM_QUIT, 0, 0) };
         }
     }
 }
@@ -405,5 +484,18 @@ mod imp {
         );
         // A far-off match is a different window with the same title.
         search.best.filter(|(d, _)| *d < 64).map(|(_, h)| h)
+    }
+}
+
+#[cfg(test)]
+mod desktop_click_tests {
+    #[test]
+    fn hit_test_uses_current_client_origin_including_negative_monitors() {
+        let rect = [180, 21, 228, 69];
+        for (x, y) in [(100, 200), (-1920, -500), (2560, 0)] {
+            assert!(super::contains_point(rect, (x + 190) - x, (y + 30) - y));
+            assert!(!super::contains_point(rect, (x + 228) - x, (y + 30) - y));
+            assert!(!super::contains_point(rect, (x + 179) - x, (y + 30) - y));
+        }
     }
 }
