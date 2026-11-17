@@ -142,11 +142,12 @@ mod desk {
         System::{LibraryLoader::GetModuleHandleW, Threading::GetCurrentThreadId},
         UI::WindowsAndMessaging::{
             CallNextHookEx, EnumWindows, FindWindowExW, FindWindowW, GetAncestor, GetClassNameW,
-            GetDesktopWindow, GetMessageW, GetWindow, GetWindowLongW, IsChild, PeekMessageW,
-            SendMessageTimeoutW, SetParent, SetWindowLongW, SetWindowPos, SetWindowsHookExW,
-            UnhookWindowsHookEx, WindowFromPoint, GA_PARENT, GWL_EXSTYLE, GW_HWNDNEXT, HWND_TOP,
-            MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, SMTO_NORMAL, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-            SWP_NOZORDER, SWP_SHOWWINDOW, WH_MOUSE_LL, WM_LBUTTONUP, WS_EX_TOOLWINDOW,
+            GetDesktopWindow, GetMessageW, GetWindow, GetWindowLongW, IsChild, IsWindowVisible,
+            PeekMessageW, SendMessageTimeoutW, SetParent, SetWindowLongW, SetWindowPos,
+            SetWindowsHookExW, UnhookWindowsHookEx, WindowFromPoint, GA_PARENT, GWL_EXSTYLE,
+            GW_HWNDPREV, HWND_TOP, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, SMTO_NORMAL, SWP_NOACTIVATE,
+            SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, WH_MOUSE_LL, WM_LBUTTONUP,
+            WS_EX_TOOLWINDOW,
         },
     };
 
@@ -209,7 +210,7 @@ mod desk {
         SetWindowLongW(h, GWL_EXSTYLE, (style | WS_EX_TOOLWINDOW) as i32);
         SetWindowPos(
             h,
-            progman,
+            below_visible_windows(h, progman),
             r[0],
             r[1],
             r[2] - r[0],
@@ -217,6 +218,34 @@ mod desk {
             SWP_NOACTIVATE | SWP_SHOWWINDOW,
         );
         true
+    }
+
+    /// The window to insert `h` after (that is, behind) so that `h` ends up
+    /// directly above the desktop: the lowest visible window above Progman,
+    /// or the top when none. (`SetWindowPos` places a window *behind* its
+    /// "insert after" window, so Progman itself would hide it.) Hidden
+    /// windows and the wallpaper WorkerWs in between do not count. Also tells
+    /// whether `h` is already there.
+    unsafe fn desktop_slot(h: HWND, progman: HWND) -> (HWND, bool) {
+        let mut n = GetWindow(progman, GW_HWNDPREV);
+        while !n.is_null() && n != h {
+            let mut buf = [0u16; 16];
+            let len = GetClassNameW(n, buf.as_mut_ptr(), buf.len() as i32).max(0) as usize;
+            let worker = String::from_utf16_lossy(&buf[..len]) == "WorkerW";
+            if IsWindowVisible(n) != 0 && !worker {
+                return (n, false);
+            }
+            n = GetWindow(n, GW_HWNDPREV);
+        }
+        if n == h {
+            (h, true)
+        } else {
+            (HWND_TOP, false)
+        }
+    }
+
+    unsafe fn below_visible_windows(h: HWND, progman: HWND) -> HWND {
+        desktop_slot(h, progman).0
     }
 
     fn is_top_level(h: HWND) -> bool {
@@ -232,10 +261,15 @@ mod desk {
             return false;
         }
         let progman = progman();
-        if !progman.is_null() && GetWindow(h, GW_HWNDNEXT) != progman {
+        let (after, placed) = if progman.is_null() {
+            (h, true)
+        } else {
+            desktop_slot(h, progman)
+        };
+        if !placed {
             SetWindowPos(
                 h,
-                progman,
+                after,
                 0,
                 0,
                 0,
