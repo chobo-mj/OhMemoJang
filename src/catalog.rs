@@ -67,24 +67,55 @@ pub struct Catalog {
     table_viewport_width: f32,
     table_width: f32,
     pub preview_width: f32,
-    /// User-adjusted widths for the 완료/알람/생성일/일정 columns (table
-    /// indices 1, 4, 5, 6). `0.` means "not customized, use the default".
-    pub column_widths: [f32; 4],
-    /// Whether the 완료/알람/생성일/일정 columns are hidden. Defaulting to
-    /// `false` (all visible) falls out of `#[derive(Default)]` for free.
-    pub column_hidden: [bool; 4],
+    /// User-adjusted width of every table column (by table index). `0.`
+    /// means "not customized, use the default".
+    pub column_widths: [f32; COLUMN_COUNT],
+    /// Which of the columns are shown (by table index).
+    pub column_shown: ColumnShown,
 }
 
-/// Fixed columns stay compact; title (2) and body (3) share the rest.
-const COLUMN_WIDTHS: [f32; 8] = [30., 30., 0., 0., 96., 58., 86., 30.];
+/// Whether each table column is shown. The default is the usual table; 완료일,
+/// 위키, 프로젝트 and 중요 are shown only when chosen.
+#[derive(Clone, Copy)]
+pub struct ColumnShown(pub [bool; COLUMN_COUNT]);
+
+impl Default for ColumnShown {
+    fn default() -> Self {
+        Self([
+            true, true, true, true, true, true, true, false, false, false, false, true,
+        ])
+    }
+}
+
+/// Columns of the table: 표시, 완료, 제목, 내용, 알람, 생성일, 일정, 완료일,
+/// 위키, 프로젝트, 중요, 삭제.
+pub(crate) const COLUMN_COUNT: usize = 12;
+const COLUMN_TITLE: usize = 2;
+const COLUMN_BODY: usize = 3;
+const COLUMN_DELETE: usize = COLUMN_COUNT - 1;
+/// Default widths. Title (2) and body (3) share the rest.
+const COLUMN_WIDTHS: [f32; COLUMN_COUNT] =
+    [30., 30., 0., 0., 96., 58., 86., 86., 44., 96., 44., 30.];
 /// The narrowest table: below this the list scrolls horizontally.
 const TABLE_WIDTH: f32 = 560.;
-/// Table indices of the four columns a user can resize or hide, and their
-/// labels in the same order as `Catalog::column_widths`/`column_hidden`.
-pub(crate) const ADJUSTABLE_COLUMNS: [(usize, &str); 4] =
-    [(1, "완료"), (4, "알람"), (5, "생성일"), (6, "일정")];
-const ADJUSTABLE_MIN_WIDTH: f32 = 24.;
-const ADJUSTABLE_MAX_WIDTH: f32 = 220.;
+/// Table indices of the columns a user can show or hide, with their labels.
+/// 표시, 제목 and 내용 are always shown.
+pub(crate) const TOGGLE_COLUMNS: [(usize, &str); 9] = [
+    (1, "완료"),
+    (4, "알람"),
+    (5, "생성일"),
+    (6, "일정"),
+    (7, "완료일"),
+    (8, "위키"),
+    (9, "프로젝트"),
+    (10, "중요"),
+    (COLUMN_DELETE, "삭제"),
+];
+const COLUMN_MIN_WIDTH: f32 = 24.;
+const COLUMN_MAX_WIDTH: f32 = 300.;
+const TITLE_MIN_WIDTH: f32 = 80.;
+const TITLE_MAX_WIDTH: f32 = 800.;
+const BODY_MIN_WIDTH: f32 = 60.;
 
 #[derive(Clone, Copy)]
 enum TableRow {
@@ -104,32 +135,49 @@ enum TableCommand {
     PurgeTab(usize, usize),
 }
 
-/// The effective width of one of the four user-adjustable columns: hidden
-/// collapses it to zero, a custom width (stored as non-zero) overrides the
-/// default, otherwise it keeps its original default width.
-fn adjustable_width(cat: &Catalog, slot: usize) -> f32 {
-    if cat.column_hidden[slot] {
-        0.
-    } else if cat.column_widths[slot] > 0. {
-        cat.column_widths[slot]
-    } else {
-        COLUMN_WIDTHS[ADJUSTABLE_COLUMNS[slot].0]
-    }
+fn column_shown(cat: &Catalog, column: usize) -> bool {
+    cat.column_shown.0[column]
 }
 
-/// Column rectangles. The title and body columns take all width left by the
-/// compact fixed columns, so they grow and shrink with the list pane. The
-/// 완료/알람/생성일/일정 columns additionally honor the user's resize/hide
-/// choices in `cat.column_widths`/`cat.column_hidden`.
-fn table_cells(rect: egui::Rect, cat: &Catalog) -> [egui::Rect; 8] {
-    let mut widths = COLUMN_WIDTHS;
-    for (slot, &(idx, _)) in ADJUSTABLE_COLUMNS.iter().enumerate() {
-        widths[idx] = adjustable_width(cat, slot);
+/// Widths of all columns for a table `total` wide: hidden columns are zero, a
+/// width the user set overrides the default. The body (내용) takes what the
+/// others leave, so it follows the width of the list pane; the title (제목)
+/// takes a share of it until the user sets its width. The sum is more than
+/// `total` when the columns need more room (the table then scrolls).
+fn column_widths(cat: &Catalog, total: f32) -> [f32; COLUMN_COUNT] {
+    let mut widths: [f32; COLUMN_COUNT] = std::array::from_fn(|i| {
+        if !column_shown(cat, i) {
+            0.
+        } else if cat.column_widths[i] > 0. {
+            cat.column_widths[i]
+        } else {
+            COLUMN_WIDTHS[i]
+        }
+    });
+    let title_set = cat.column_widths[COLUMN_TITLE] > 0.;
+    let mut fixed: f32 = widths.iter().sum::<f32>() - widths[COLUMN_TITLE] - widths[COLUMN_BODY];
+    if title_set {
+        fixed += widths[COLUMN_TITLE];
     }
-    let fixed: f32 = widths.iter().sum::<f32>() - widths[2] - widths[3];
-    let flex = (rect.width().max(TABLE_WIDTH) - fixed).max(0.);
-    widths[2] = (flex * 0.38).max(110.);
-    widths[3] = (flex - widths[2]).max(0.);
+    let flex = (total.max(TABLE_WIDTH) - fixed).max(0.);
+    if title_set {
+        widths[COLUMN_BODY] = flex.max(BODY_MIN_WIDTH);
+    } else {
+        widths[COLUMN_TITLE] = (flex * 0.38).max(110.);
+        widths[COLUMN_BODY] = (flex - widths[COLUMN_TITLE]).max(0.);
+    }
+    widths
+}
+
+/// The width the table needs when the list pane is `pane` wide.
+fn table_total(cat: &Catalog, pane: f32) -> f32 {
+    column_widths(cat, pane).iter().sum::<f32>().max(pane)
+}
+
+/// Column rectangles in a row (or the header) `rect` wide, which is at least
+/// as wide as `table_total`.
+fn table_cells(rect: egui::Rect, cat: &Catalog) -> [egui::Rect; COLUMN_COUNT] {
+    let widths = column_widths(cat, rect.width());
     let mut x = rect.left();
     std::array::from_fn(|i| {
         let r = egui::Rect::from_min_size(
@@ -139,6 +187,31 @@ fn table_cells(rect: egui::Rect, cat: &Catalog) -> [egui::Rect; 8] {
         x += widths[i];
         r
     })
+}
+
+/// Moves the border between column `before` and column `column` (the left
+/// edge of `column`) by `dx` and stores the new width. Columns after the body
+/// are anchored on the right (the body takes what they leave), so the one
+/// whose left edge is dragged changes; for the others the column before the
+/// border changes.
+fn drag_border(
+    cat: &mut Catalog,
+    widths: &[f32; COLUMN_COUNT],
+    before: usize,
+    column: usize,
+    dx: f32,
+) {
+    let (target, width) = if column > COLUMN_BODY {
+        (column, widths[column] - dx)
+    } else {
+        (before, widths[before] + dx)
+    };
+    let (min, max) = if target == COLUMN_TITLE {
+        (TITLE_MIN_WIDTH, TITLE_MAX_WIDTH)
+    } else {
+        (COLUMN_MIN_WIDTH, COLUMN_MAX_WIDTH)
+    };
+    cat.column_widths[target] = width.clamp(min, max);
 }
 
 fn table_cell(ui: &mut egui::Ui, rect: egui::Rect, salt: impl std::hash::Hash) -> egui::Ui {
@@ -442,11 +515,8 @@ impl App {
     /// content, and the menu of a right click on the table header.
     pub(crate) fn column_choices(&mut self, ui: &mut egui::Ui) {
         crate::ui::caption(ui, "표시할 열");
-        for (slot, &(_, label)) in ADJUSTABLE_COLUMNS.iter().enumerate() {
-            let mut visible = !self.catalog.column_hidden[slot];
-            if ui.checkbox(&mut visible, label).changed() {
-                self.catalog.column_hidden[slot] = !visible;
-            }
+        for &(column, label) in &TOGGLE_COLUMNS {
+            ui.checkbox(&mut self.catalog.column_shown.0[column], label);
         }
     }
 
@@ -695,6 +765,9 @@ impl App {
         trash: bool,
         date_groups: bool,
     ) {
+        // The list pane's width, widened when the chosen columns need more.
+        let pane = self.catalog.table_width.max(TABLE_WIDTH);
+        self.catalog.table_width = table_total(&self.catalog, pane);
         let header_width = if self.catalog.table_viewport_width > 0. {
             self.catalog.table_viewport_width.min(ui.available_width())
         } else {
@@ -732,6 +805,10 @@ impl App {
                     "알람",
                     "생성일",
                     "일정",
+                    "완료일",
+                    "위키",
+                    "프로젝트",
+                    "중요",
                     "삭제",
                 ]
                 .iter()
@@ -743,13 +820,18 @@ impl App {
                             .truncate(),
                     );
                 }
-                for (slot, &(idx, _)) in ADJUSTABLE_COLUMNS.iter().enumerate() {
-                    if self.catalog.column_hidden[slot] {
+                // A grip on the left edge of every shown column but the first.
+                let widths = column_widths(&self.catalog, rect.width());
+                let mut before = 0;
+                for idx in 1..COLUMN_COUNT {
+                    if widths[idx] <= 0. {
                         continue;
                     }
+                    let previous = before;
+                    before = idx;
                     let handle = egui::Rect::from_min_max(
-                        egui::pos2(cells[idx].right() - 3., rect.top()),
-                        egui::pos2(cells[idx].right() + 3., rect.bottom()),
+                        egui::pos2(cells[idx].left() - 3., rect.top()),
+                        egui::pos2(cells[idx].left() + 3., rect.bottom()),
                     );
                     let drag = ui
                         .interact(handle, ui.id().with(("column_resize", idx)), Sense::drag())
@@ -762,12 +844,17 @@ impl App {
                         );
                     }
                     if drag.dragged() {
-                        let current = adjustable_width(&self.catalog, slot);
-                        self.catalog.column_widths[slot] = (current + drag.drag_delta().x)
-                            .clamp(ADJUSTABLE_MIN_WIDTH, ADJUSTABLE_MAX_WIDTH);
+                        drag_border(
+                            &mut self.catalog,
+                            &widths,
+                            previous,
+                            idx,
+                            drag.drag_delta().x,
+                        );
                     }
                     if drag.double_clicked() {
-                        self.catalog.column_widths[slot] = 0.;
+                        let reset = if idx > COLUMN_BODY { idx } else { previous };
+                        self.catalog.column_widths[reset] = 0.;
                     }
                 }
             });
@@ -869,6 +956,19 @@ impl App {
         let created = n.created.format("%y%m%d").to_string();
         let schedule = day
             .map(|d| format!("{} {}", d.format("%m/%d"), n.time.format("%H:%M")))
+            .unwrap_or("—".into());
+        let completed = day
+            .and_then(|d| n.occurrence_completed.get(&d).copied())
+            .or(n.completed)
+            .filter(|_| n.done_on(day))
+            .map(|t| t.format("%m/%d %H:%M").to_string())
+            .unwrap_or("—".into());
+        let wiki = n.wiki;
+        let starred = n.starred;
+        let project = n
+            .project
+            .and_then(|p| self.data.projects.get(p))
+            .cloned()
             .unwrap_or("—".into());
         let mut done = n.done_on(day);
         let locked = n.locked;
@@ -1032,7 +1132,33 @@ impl App {
                 }
             }
             {
-                let mut c = table_cell(ui, cells[7], "delete");
+                let mut c = table_cell(ui, cells[7], "completed");
+                c.add(egui::Label::new(RichText::new(completed).size(12.).color(MUTED)).truncate());
+            }
+            {
+                let mut c = table_cell(ui, cells[8], "wiki");
+                if wiki {
+                    c.add(
+                        egui::Label::new(RichText::new("위키").size(12.).color(ACCENT)).truncate(),
+                    )
+                    .on_hover_text("위키에 보관된 메모");
+                }
+            }
+            {
+                let mut c = table_cell(ui, cells[9], "project");
+                c.add(egui::Label::new(RichText::new(project).size(12.).color(MUTED)).truncate());
+            }
+            {
+                let mut c = table_cell(ui, cells[10], "starred");
+                if starred {
+                    c.add(egui::Label::new(
+                        RichText::new("★").color(crate::studio::STAR),
+                    ))
+                    .on_hover_text("중요 메모");
+                }
+            }
+            {
+                let mut c = table_cell(ui, cells[COLUMN_DELETE], "delete");
                 if action(
                     &mut c,
                     Action::Trash,
@@ -1661,6 +1787,7 @@ impl App {
                 |ui| {
                     ui.set_min_size(rect.size());
                     ui.set_clip_rect(ui.clip_rect().intersect(rect));
+                    self.catalog.table_width = TABLE_WIDTH.max(rect.width() - 14.);
                     self.catalog_table(ui, &rows, height, false, true, false);
                 },
             );
@@ -2591,7 +2718,7 @@ mod tests {
         let last = table_cells(
             egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(TABLE_WIDTH, 48.)),
             &a.catalog,
-        )[7];
+        )[COLUMN_DELETE];
         assert!(last.center().x - a.catalog.table_offset > 0.);
         assert!(last.right() - a.catalog.table_offset <= visible + 1.);
     }
@@ -2601,18 +2728,18 @@ mod tests {
         let base = Catalog::default();
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1400., 48.));
         let default_cells = table_cells(rect, &base);
-        // 알람 (slot 1 -> column 4) starts at its default width.
+        // 알람 (column 4) starts at its default width.
         assert_eq!(default_cells[4].width(), COLUMN_WIDTHS[4]);
 
         let mut hidden = Catalog::default();
-        hidden.column_hidden[1] = true;
+        hidden.column_shown.0[4] = false;
         let cells = table_cells(rect, &hidden);
         assert_eq!(cells[4].width(), 0.);
         // The space freed by hiding 알람 goes to 내용 (column 3), not lost.
         assert!(cells[3].width() > default_cells[3].width());
 
         let mut resized = Catalog::default();
-        resized.column_widths[1] = 150.;
+        resized.column_widths[4] = 150.;
         let cells = table_cells(rect, &resized);
         assert_eq!(cells[4].width(), 150.);
 
@@ -2622,9 +2749,175 @@ mod tests {
         // than collapsing the column, so "not customized" and "hidden" stay
         // distinct states.
         let mut zeroed = Catalog::default();
-        zeroed.column_widths[1] = 0.;
+        zeroed.column_widths[4] = 0.;
         let cells = table_cells(rect, &zeroed);
         assert_eq!(cells[4].width(), COLUMN_WIDTHS[4]);
+    }
+
+    #[test]
+    fn dragging_the_left_edge_of_a_header_changes_that_column_with_the_mouse() {
+        let mut a = representative_table_app();
+        let ctx = egui::Context::default();
+        let frame = |a: &mut App, events: Vec<egui::Event>| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(1440., 760.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::SidePanel::left("table_test_sidebar")
+                        .exact_width(220.)
+                        .show(ctx, |_| {});
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        a.catalog_split_list(ui, &[(0, a.data.notes[0].date)], false, false);
+                    });
+                },
+            )
+        };
+        frame(&mut a, vec![]);
+        let out = frame(&mut a, vec![]);
+        let header = text_rect(&out, "일정", 1440.);
+        let edge = egui::pos2(header.left() - 3., header.center().y);
+        let before = column_widths(&a.catalog, a.catalog.table_width)[6];
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        frame(&mut a, vec![egui::Event::PointerMoved(edge)]);
+        frame(&mut a, vec![button(edge, true)]);
+        for step in 1..=4 {
+            let to = edge - Vec2::new(10. * step as f32, 0.);
+            frame(&mut a, vec![egui::Event::PointerMoved(to)]);
+        }
+        frame(&mut a, vec![button(edge - Vec2::new(40., 0.), false)]);
+        let after = a.catalog.column_widths[6];
+        assert!(after > before + 20., "{before} -> {after}");
+    }
+
+    #[test]
+    fn the_extra_columns_start_hidden_and_the_usual_ones_shown() {
+        let cat = Catalog::default();
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1400., 48.));
+        let cells = table_cells(rect, &cat);
+        for column in [7, 8, 9, 10] {
+            assert_eq!(cells[column].width(), 0., "column {column} starts hidden");
+        }
+        for column in [0, 1, 2, 3, 4, 5, 6, COLUMN_DELETE] {
+            assert!(cells[column].width() > 0.);
+        }
+        // Every column can be shown and hidden except 표시, 제목 and 내용.
+        let toggled: Vec<usize> = TOGGLE_COLUMNS.iter().map(|c| c.0).collect();
+        assert_eq!(toggled, vec![1, 4, 5, 6, 7, 8, 9, 10, COLUMN_DELETE]);
+        let mut all = Catalog::default();
+        all.column_shown.0 = [true; COLUMN_COUNT];
+        let cells = table_cells(rect, &all);
+        assert!(cells.iter().all(|c| c.width() > 0.));
+        // The columns still fill the table exactly.
+        assert!((cells[COLUMN_DELETE].right() - rect.right()).abs() < 1.);
+    }
+
+    #[test]
+    fn dragging_a_left_edge_resizes_columns_and_the_body_takes_the_rest() {
+        let mut cat = Catalog::default();
+        let total = 1400.;
+        let widths = column_widths(&cat, total);
+        // 일정 (6): its left edge dragged left by 40 makes it 40 wider.
+        drag_border(&mut cat, &widths, 5, 6, -40.);
+        assert_eq!(cat.column_widths[6], widths[6] + 40.);
+        // Dragging right makes it narrower, down to the minimum.
+        drag_border(&mut cat, &widths, 5, 6, 10_000.);
+        assert_eq!(cat.column_widths[6], COLUMN_MIN_WIDTH);
+        // Before the body, the column before the border changes instead: the
+        // border between 완료 and 제목 resizes 완료, the one between 제목 and
+        // 내용 resizes 제목.
+        drag_border(&mut cat, &widths, 1, 2, 20.);
+        assert_eq!(cat.column_widths[1], widths[1] + 20.);
+        drag_border(&mut cat, &widths, 2, 3, 30.);
+        assert_eq!(cat.column_widths[2], widths[2] + 30.);
+        // 표시 can be resized from the border after it.
+        drag_border(&mut cat, &widths, 0, 1, 10.);
+        assert_eq!(cat.column_widths[0], widths[0] + 10.);
+        // The body (내용) follows: it takes what the others leave.
+        let after = column_widths(&cat, total);
+        assert!(after[3] < widths[3] + 40.);
+        let right: f32 = after.iter().sum();
+        assert!((right - total).abs() < 1., "{right} vs {total}");
+    }
+
+    #[test]
+    fn many_wide_columns_widen_the_table_instead_of_squeezing_the_text() {
+        let mut cat = Catalog::default();
+        cat.column_shown.0 = [true; COLUMN_COUNT];
+        for column in [0, 1, 4, 5, 6, 7, 8, 9, 10, COLUMN_DELETE] {
+            cat.column_widths[column] = 200.;
+        }
+        cat.column_widths[COLUMN_TITLE] = 300.;
+        let needed = table_total(&cat, 900.);
+        assert!(needed > 900., "{needed}");
+        let widths = column_widths(&cat, 900.);
+        assert!(widths[COLUMN_BODY] >= BODY_MIN_WIDTH);
+        assert!((widths.iter().sum::<f32>() - needed).abs() < 1.);
+    }
+
+    #[test]
+    fn the_header_menu_lists_every_column_that_can_be_shown() {
+        let mut a = App::sample(Local::now().date_naive());
+        let ctx = egui::Context::default();
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(600., 600.),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| a.column_choices(ui));
+            },
+        );
+        let texts: Vec<String> = output
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Text(t) => Some(t.galley.job.text.clone()),
+                _ => None,
+            })
+            .collect();
+        for label in [
+            "완료",
+            "알람",
+            "생성일",
+            "일정",
+            "완료일",
+            "위키",
+            "프로젝트",
+            "중요",
+            "삭제",
+        ] {
+            assert!(texts.iter().any(|t| t == label), "missing {label}");
+        }
+    }
+
+    #[test]
+    fn chosen_extra_columns_show_the_memo_s_values() {
+        let mut a = representative_table_app();
+        let ctx = egui::Context::default();
+        a.data.notes[0].starred = true;
+        a.data.notes[0].wiki = true;
+        a.data.notes[0].project = Some(0);
+        a.catalog.column_shown.0 = [true; COLUMN_COUNT];
+        render_table_layout(&mut a, &ctx, 1800.);
+        let out = render_table_layout(&mut a, &ctx, 1800.);
+        let project = a.data.projects[0].clone();
+        for text in ["프로젝트", "완료일", "위키", "중요", "★", project.as_str()] {
+            text_rect(&out, text, 1800.);
+        }
     }
 
     #[test]
