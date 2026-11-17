@@ -544,7 +544,7 @@ impl App {
                 }
                 ui.add_space(4.);
                 let horizontal = self.cal.horizontal;
-                if icons::toggle_icon(
+                if icons::toggle_icon_sized(
                     ui,
                     icons::Icon::SplitView,
                     if horizontal {
@@ -553,13 +553,14 @@ impl App {
                         "가로 배치로 전환 · 달력과 메모를 나란히"
                     },
                     horizontal,
+                    38.,
                 )
                 .clicked()
                 {
                     self.cal.horizontal = !horizontal;
                 }
                 ui.add_space(4.);
-                let r = icons::toggle_icon(
+                let r = icons::toggle_icon_sized(
                     ui,
                     icons::Icon::Stand,
                     if standing {
@@ -568,6 +569,7 @@ impl App {
                         "스탠딩 캘린더 · 바탕화면에 고정"
                     },
                     standing,
+                    38.,
                 );
                 stand_rect = r.rect;
                 stand = r.clicked();
