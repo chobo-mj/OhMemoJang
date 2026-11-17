@@ -730,9 +730,12 @@ impl App {
             done = true;
         }
         if plain(&ui.button("메모창 설정")) {
+            // The settings are a part of the main window: bring it forward.
             self.settings = true;
-            crate::ui::raise(&ctx, "settings");
             self.desktop.settings_tab = 2;
+            self.main_open = true;
+            ctx.send_viewport_cmd_to(main_viewport(), egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd_to(main_viewport(), egui::ViewportCommand::Focus);
             done = true;
         }
         if hovered_plain {

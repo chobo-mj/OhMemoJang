@@ -106,7 +106,11 @@ struct App {
     tidied: f64,
     /// When unused picture textures were last released.
     textures_checked: f64,
+    /// Settings are shown in the main window's content area instead of a page.
     settings: bool,
+    /// The page that was current when `settings` was last seen open: choosing
+    /// another page leaves the settings.
+    settings_from: usize,
     month: NaiveDate,
     day: NaiveDate,
     project_filter: Option<usize>,
@@ -240,6 +244,7 @@ impl App {
             tidied: f64::MIN,
             textures_checked: 0.,
             settings: false,
+            settings_from: 0,
             month: today.with_day(1).unwrap(),
             day: today,
             project_filter: None,
@@ -735,7 +740,12 @@ impl App {
                 )
                 .show(ctx, |ui| self.sidebar_ui(ui));
         }
-        if self.split && self.page == 0 {
+        // Choosing another page (or search result) leaves the settings.
+        if self.settings && self.page != self.settings_from {
+            self.settings = false;
+        }
+        self.settings_from = self.page;
+        if self.split && self.page == 0 && !self.settings {
             // Side by side needs room for two panes; each layout keeps its own width.
             let side = self.prefs.cal_side_work;
             egui::SidePanel::right(if side { "split_side" } else { "split" })
@@ -762,7 +772,9 @@ impl App {
             .show(ctx, |ui| {
                 self.page_bar(ui);
                 ui.add_space(10.);
-                if self.page == 4 || (self.page == 0 && !self.split) {
+                if self.settings {
+                    self.ppt_settings(ui);
+                } else if self.page == 4 || (self.page == 0 && !self.split) {
                     if self.page == 4 {
                         self.catalog_ui(ui);
                     } else {
@@ -791,7 +803,9 @@ impl App {
     }
     /// Page title on the left and global window actions on the right.
     fn page_bar(&mut self, ui: &mut egui::Ui) {
-        let title = if self.extra.search_mode && matches!(self.page, 0 | 2 | 3) {
+        let title = if self.settings {
+            "설정"
+        } else if self.extra.search_mode && matches!(self.page, 0 | 2 | 3) {
             "검색 결과"
         } else {
             PAGES
@@ -822,6 +836,12 @@ impl App {
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if self.settings {
+                    if icons::icon_button(ui, icons::Icon::Close, "설정 닫기").clicked() {
+                        self.settings = false;
+                    }
+                    return;
+                }
                 if icons::icon_button(ui, icons::Icon::Detach, "캘린더 분리창").clicked() {
                     self.show_calendar();
                 }
@@ -892,8 +912,8 @@ impl App {
                 }
             }
             ui.add_space(12.);
-            if icons::icon_button(ui, icons::Icon::Settings, "설정").clicked() {
-                self.settings = true;
+            if icons::toggle_icon(ui, icons::Icon::Settings, "설정", self.settings).clicked() {
+                self.settings = !self.settings;
             }
         });
     }
@@ -1002,8 +1022,7 @@ impl App {
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
             if studio::nav_button(ui, "설정", false, icons::Icon::Settings, None, false).clicked()
             {
-                self.settings = true;
-                ui::raise(ui.ctx(), "settings");
+                self.settings = !self.settings;
             }
         });
     }
@@ -1048,22 +1067,6 @@ impl App {
     }
     /// Dialogs that belong to the application rather than to one window.
     fn global_dialogs(&mut self, ctx: &egui::Context) {
-        let mut open = self.settings;
-        // The settings dialog's own text grows with the user's font-size
-        // setting (it shares the app's style), so a fixed height would make
-        // the taller tabs need scrolling at larger sizes. Grow the window
-        // with it instead.
-        let settings_height = 620. * (self.desktop.font_size / 10.).clamp(1.0, 1.6);
-        ui::dialog(
-            ctx,
-            "settings",
-            "설정",
-            [860., settings_height],
-            false,
-            &mut open,
-            |ui| self.ppt_settings(ui),
-        );
-        self.settings = open;
         let mut open = self.studio.help;
         ui::dialog(
             ctx,

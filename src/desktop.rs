@@ -1356,6 +1356,41 @@ mod tests {
         assert!(second.x < 850.);
     }
     #[test]
+    fn settings_show_inside_the_main_window_and_close_when_another_page_is_chosen() {
+        let mut app = App::sample(Local::now().date_naive());
+        let ctx = egui::Context::default();
+        let texts = |app: &mut App| {
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(1400., 900.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| app.main_ui(ctx),
+            );
+            let viewports = output.viewport_output.len();
+            let text: Vec<String> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Text(t) => Some(t.galley.job.text.clone()),
+                    _ => None,
+                })
+                .collect();
+            (text, viewports)
+        };
+        app.settings = true;
+        let (text, viewports) = texts(&mut app);
+        assert!(text.iter().any(|t| t == "Windows 시작 시 자동 실행"));
+        assert_eq!(viewports, 1, "no separate window for the settings");
+        app.page = 1;
+        let (text, _) = texts(&mut app);
+        assert!(!app.settings, "choosing another page leaves the settings");
+        assert!(!text.iter().any(|t| t == "Windows 시작 시 자동 실행"));
+    }
+    #[test]
     fn first_real_line_becomes_title_without_consuming_project_directive() {
         let mut title = String::new();
         let body = "#프로젝트 \n\n첫 제목\n본문입니다".to_owned();
