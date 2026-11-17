@@ -6,13 +6,13 @@ Windows 10/11용 개인 메모·할 일·일정·위키 작업 공간입니다(R
 
 ## 내려받기
 
-최신 릴리즈는 [v0.6.2](https://github.com/chobo-mj/OhMemoJang/releases/tag/v0.6.2)입니다.
+최신 릴리즈는 [v0.6.3](https://github.com/chobo-mj/OhMemoJang/releases/tag/v0.6.3)입니다.
 
 | 파일 | 용도 |
 |---|---|
-| [Windows x64 설치파일](https://github.com/chobo-mj/OhMemoJang/releases/download/v0.6.2/OhMemoJang-0.6.2-Windows-x64-Setup.exe) | 현재 사용자에게 설치합니다(관리자 권한 불필요). 시작 메뉴 바로가기·선택적 바탕화면 바로가기·제거를 지원합니다 |
-| [Windows x64 포터블 ZIP](https://github.com/chobo-mj/OhMemoJang/releases/download/v0.6.2/OhMemoJang-0.6.2-Windows-x64-Portable.zip) | 압축을 푼 뒤 OhMemoJang.exe를 실행합니다 |
-| [SHA256SUMS.txt](https://github.com/chobo-mj/OhMemoJang/releases/download/v0.6.2/SHA256SUMS.txt) | 설치파일·ZIP 해시 대조용 |
+| [Windows x64 설치파일](https://github.com/chobo-mj/OhMemoJang/releases/download/v0.6.3/OhMemoJang-0.6.3-Windows-x64-Setup.exe) | 현재 사용자에게 설치합니다(관리자 권한 불필요). 시작 메뉴 바로가기·선택적 바탕화면 바로가기·제거를 지원합니다 |
+| [Windows x64 포터블 ZIP](https://github.com/chobo-mj/OhMemoJang/releases/download/v0.6.3/OhMemoJang-0.6.3-Windows-x64-Portable.zip) | 압축을 푼 뒤 OhMemoJang.exe를 실행합니다 |
+| [SHA256SUMS.txt](https://github.com/chobo-mj/OhMemoJang/releases/download/v0.6.3/SHA256SUMS.txt) | 설치파일·ZIP 해시 대조용 |
 
 설치 기본 위치는 `%LOCALAPPDATA%\Programs\OhMemoJang`입니다. 데이터는 `%APPDATA%\OhMemoJang`에 저장되며 프로그램을 제거해도 남습니다. 실행 PC에 Rust·C++ 빌드 도구나 Visual C++ 런타임이 필요하지 않습니다. 배포 파일은 정적 C 런타임 검사와 설치·제거 검사를 통과한 것만 게시합니다. 자세한 내용은 [설치·패키징 안내](packaging/README.md)에 있습니다.
 
