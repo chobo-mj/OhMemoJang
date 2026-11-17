@@ -29,7 +29,7 @@ Get-FileHash -Algorithm SHA256 -LiteralPath '.\OhMemoJang-{RELEASE_LABEL}-Window
 
 배포 구성은 `packaging/OhMemoJang.iss`와 `.github/workflows/release.yml`입니다. GitHub Actions의 Windows 환경에서 다음 순서로 처리합니다.
 
-1. 이미 존재하는 `vMAJOR.MINOR.PATCH` 태그와 Cargo 버전을 확인합니다. 예를 들어 태그 `v0.6.3`은 Cargo 버전 `0.6.3`과 일치해야 합니다.
+1. 이미 존재하는 `vMAJOR.MINOR.PATCH` 태그와 Cargo 버전을 확인합니다. 예를 들어 태그 `v0.6.4`은 Cargo 버전 `0.6.4`과 일치해야 합니다.
 2. 형식 검사·Clippy·테스트를 통과한 뒤 `x86_64-pc-windows-msvc`로 빌드합니다. `RUSTFLAGS=-C target-feature=+crt-static`으로 C 런타임을 정적 연결하고 `dumpbin /DEPENDENTS`로 별도 Visual C++ 런타임 DLL이 없는지 확인합니다.
 3. `dist/portable/OhMemoJang`에 `OhMemoJang.exe`, 이 문서의 사용 안내 부분을 담은 `README.txt`, 내부 `SHA256SUMS.txt`만 명시적으로 배치합니다. 소스 트리 전체나 로컬 작업 폴더를 복사하지 않습니다.
 4. Windows 환경에 있는 Inno Setup의 `ISCC.exe`를 먼저 사용합니다. 실행파일의 버전 리소스에 의존하지 않고 출력 파일을 만들지 않는 짧은 컴파일로 실제 엔진 버전을 확인합니다. 없으면 GitHub 빌드 환경에만 Chocolatey로 Inno Setup을 설치합니다. 한국어 UTF-8 스크립트와 `x64compatible` 지시문을 지원하는 Inno Setup 6.3 이상이 필요합니다.
@@ -53,7 +53,7 @@ dist/
 $stage = Join-Path $PWD 'dist\portable\OhMemoJang'
 $output = Join-Path $PWD 'dist'
 & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' `
-  '/DAppVersion=0.6.3' '/DReleaseLabel=0.6.3' `
+  '/DAppVersion=0.6.4' '/DReleaseLabel=0.6.4' `
   "/DStageDir=$stage" "/DPackageOutputDir=$output" 'packaging\OhMemoJang.iss'
 ```
 
