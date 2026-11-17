@@ -23,9 +23,12 @@ pub fn spawn(
     ctx: egui::Context,
     settings: Settings,
 ) {
+    let guard = super::ThreadGuard::new(&shared);
     let _ = std::thread::Builder::new()
         .name("clipboard-store".into())
         .spawn(move || {
+            // Declared first, so it is dropped last: after the database is closed.
+            let _guard = guard;
             let mut w = Worker::open(dir, shared, tx, ctx, settings);
             w.run(rx);
         });

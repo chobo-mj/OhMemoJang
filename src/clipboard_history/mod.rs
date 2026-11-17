@@ -15,7 +15,7 @@ mod worker;
 use eframe::egui;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, AtomicUsize, Ordering::Relaxed};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -71,6 +71,29 @@ pub struct Shared {
     pub counters: Counters,
     pub win_queue: Mutex<VecDeque<WinCmd>>,
     pub win_hwnd: AtomicIsize,
+    /// Background threads (storage worker, clipboard listener) still running.
+    pub threads: AtomicUsize,
+}
+
+/// Counts a background thread of the clipboard history while it lives; made
+/// before the thread is started and moved into it.
+pub struct ThreadGuard(Arc<Shared>);
+
+impl ThreadGuard {
+    pub fn new(shared: &Arc<Shared>) -> Self {
+        shared
+            .threads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self(shared.clone())
+    }
+}
+
+impl Drop for ThreadGuard {
+    fn drop(&mut self) {
+        self.0
+            .threads
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 impl Shared {
@@ -85,6 +108,7 @@ impl Shared {
             counters: Counters::default(),
             win_queue: Mutex::new(VecDeque::new()),
             win_hwnd: AtomicIsize::new(0),
+            threads: AtomicUsize::new(0),
         }
     }
     pub fn pending(&self) -> MutexGuard<'_, VecDeque<Raw>> {
@@ -528,6 +552,26 @@ impl ClipboardHistory {
                 }
                 Event::Notice(n) => self.notice = n,
             }
+        }
+    }
+
+    /// Stops collecting and both background threads, and waits up to `wait`
+    /// for them to finish what they are writing (the worker closes its
+    /// database as it ends). Used when the program quits.
+    pub fn shutdown(&mut self, wait: std::time::Duration) {
+        let Some(l) = self.live.take() else { return };
+        l.shared.collecting.store(false, Relaxed);
+        l.shared.generation.fetch_add(1, Relaxed);
+        win::post(&l.shared, WinCmd::Quit);
+        let shared = l.shared.clone();
+        // The worker ends when every sender is gone: this one now, the
+        // listener's when its thread ends.
+        drop(l);
+        let until = std::time::Instant::now() + wait;
+        while shared.threads.load(std::sync::atomic::Ordering::SeqCst) > 0
+            && std::time::Instant::now() < until
+        {
+            std::thread::sleep(std::time::Duration::from_millis(5));
         }
     }
 

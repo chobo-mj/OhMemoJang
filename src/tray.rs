@@ -4,6 +4,12 @@
 //! stickers on the desktop; "종료" in the tray menu really quits. Starting the
 //! program again while it runs only brings the main window back.
 
+/// Actions the tray menu reported through its own callback. The callback
+/// runs the moment an item is chosen, so a quit is taken (and its watchdog
+/// armed) even when the frame loop is blocked; the frame loop reads the rest.
+#[cfg(windows)]
+static MENU_ACTIONS: std::sync::Mutex<Vec<Action>> = std::sync::Mutex::new(Vec::new());
+
 /// What the user asked for from the tray (or a second launch).
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -22,8 +28,11 @@ pub struct Tray {
 }
 
 impl Tray {
-    /// Show the tray icon (on Windows; elsewhere nothing).
-    pub fn new() -> Self {
+    /// Show the tray icon (on Windows; elsewhere nothing). `ctx` is woken
+    /// when the menu reports something.
+    pub fn new(ctx: &eframe::egui::Context) -> Self {
+        #[cfg(not(windows))]
+        let _ = ctx;
         #[cfg(windows)]
         {
             use tray_icon::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -46,14 +55,30 @@ impl Tray {
                         .build()
                         .ok()
                 });
-            Self {
-                icon,
-                ids: vec![
-                    (open.id().clone(), Action::Open),
-                    (sticker.id().clone(), Action::NewSticker),
-                    (quit.id().clone(), Action::Quit),
-                ],
-            }
+            let ids = vec![
+                (open.id().clone(), Action::Open),
+                (sticker.id().clone(), Action::NewSticker),
+                (quit.id().clone(), Action::Quit),
+            ];
+            let (known, ctx) = (ids.clone(), ctx.clone());
+            // Replaces the menu event channel; `poll` still drains the channel
+            // in case a handler was already set.
+            tray_icon::menu::MenuEvent::set_event_handler(Some(
+                move |e: tray_icon::menu::MenuEvent| {
+                    let Some((_, action)) = known.iter().find(|(id, _)| *id == e.id) else {
+                        return;
+                    };
+                    if *action == Action::Quit {
+                        crate::quit::request();
+                    }
+                    MENU_ACTIONS
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .push(*action);
+                    ctx.request_repaint();
+                },
+            ));
+            Self { icon, ids }
         }
         #[cfg(not(windows))]
         Self::default()
@@ -91,6 +116,10 @@ impl Tray {
                 }
             }
         }
+        #[cfg(windows)]
+        out.extend(std::mem::take(
+            &mut *MENU_ACTIONS.lock().unwrap_or_else(|e| e.into_inner()),
+        ));
         if SHOW.swap(false, std::sync::atomic::Ordering::Relaxed) {
             out.push(Action::Open);
         }

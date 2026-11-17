@@ -104,10 +104,14 @@ mod imp {
         tx_ev: Sender<Event>,
         ctx: egui::Context,
     ) {
+        let guard = super::super::ThreadGuard::new(&shared);
         let _ = std::thread::Builder::new()
             .name("clipboard-listener".into())
-            // SAFETY: the thread owns everything it creates.
-            .spawn(move || unsafe { run(shared, tx_cmd, tx_ev, ctx) });
+            .spawn(move || {
+                let _guard = guard;
+                // SAFETY: the thread owns everything it creates.
+                unsafe { run(shared, tx_cmd, tx_ev, ctx) }
+            });
     }
 
     pub fn post(shared: &Shared, cmd: WinCmd) {

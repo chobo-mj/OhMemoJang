@@ -1584,6 +1584,53 @@ mod tests {
         dir
     }
 
+    /// Quitting from the tray: the wrap-up saves the last edit, lets go of
+    /// the tray icon and the clipboard threads, closes the windows by
+    /// stopping to draw them, and asks eframe to leave its loop. A loop that
+    /// is still there after two more frames is ended outright.
+    #[test]
+    fn wrap_up_saves_in_order_then_closes_and_ends_a_loop_that_stays() {
+        use crate::quit::Quit;
+        let dir = temp(line!());
+        let mut a = App::sample(NaiveDate::from_ymd_opt(2026, 11, 17).unwrap());
+        a.prefs.data_path = dir.display().to_string();
+        a.studio.open(2, None);
+        a.autosave(0., true);
+        // An edit that no timer or input has saved yet.
+        a.data.notes[1].title = "종료 직전에 고친 제목".into();
+        assert_ne!(
+            read(&dir).unwrap().unwrap().notes[1].title,
+            a.data.notes[1].title
+        );
+
+        let quit = Quit::dry();
+        assert!(quit.request());
+        let ctx = eframe::egui::Context::default();
+        let closing = |out: &eframe::egui::FullOutput| {
+            out.viewport_output[&eframe::egui::ViewportId::ROOT]
+                .commands
+                .contains(&eframe::egui::ViewportCommand::Close)
+        };
+        let first = ctx.run(Default::default(), |ctx| a.wrap_up(ctx, &quit));
+        assert!(closing(&first), "the root viewport is asked to close");
+        assert!(!a.tray.active() && a.hotkeys.is_none());
+        assert_eq!(
+            read(&dir).unwrap().unwrap().notes[1].title,
+            "종료 직전에 고친 제목",
+            "the last edit is on disk before the windows go"
+        );
+        assert!(!quit.was_terminated());
+        for _ in 0..2 {
+            let later = ctx.run(Default::default(), |ctx| a.wrap_up(ctx, &quit));
+            assert!(!closing(&later), "the wrap-up is not repeated");
+            assert!(!quit.was_terminated(), "eframe gets its frames to leave");
+        }
+        let _ = ctx.run(Default::default(), |ctx| a.wrap_up(ctx, &quit));
+        assert!(quit.was_terminated(), "a loop that stays is ended outright");
+        drop(a);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn forced_save_keeps_last_edit_without_input_or_timer() {
         let dir = temp(line!());

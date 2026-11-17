@@ -349,6 +349,11 @@ impl App {
 
         ui.allocate_rect(rect, Sense::hover());
     }
+    /// Lets go of the standing calendar's desktop click watch (its mouse
+    /// hook thread ends); the window itself goes with the program.
+    pub fn release_standing(&mut self) {
+        self.cal.standing = None;
+    }
     /// Pin, poll and unpin the standing calendar.
     fn restore_standing(&mut self) {
         if let Some(s) = self.cal.standing.as_ref() {

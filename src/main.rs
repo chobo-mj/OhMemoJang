@@ -18,6 +18,7 @@ mod media;
 mod model;
 mod native_window;
 mod prefs;
+mod quit;
 mod refinements;
 mod repeat;
 mod schedule;
@@ -190,7 +191,7 @@ impl App {
         a.cal.theme = a.prefs.cal_theme;
         a.load_or_start();
         a.prefs_saved = a.prefs.to_text();
-        a.tray = tray::Tray::new();
+        a.tray = tray::Tray::new(&cc.egui_ctx);
         // Started with Windows: stay in the tray, stickers on the desktop.
         a.main_open = !(a.tray.active() && std::env::args().any(|x| x == "--tray"));
         a.hotkeys = GlobalHotKeyManager::new().ok();
@@ -437,14 +438,14 @@ impl eframe::App for App {
                 tray::Action::NewSticker => {
                     self.new_sticker();
                 }
-                tray::Action::Quit => {
-                    // `ViewportCommand::Close` only takes effect on the root
-                    // viewport in response to a real OS close request, so it
-                    // cannot end the program by itself here: exit directly.
-                    self.autosave(0., true);
-                    std::process::exit(0);
-                }
+                // Already asked for when the menu reported it; this covers a
+                // report that came through the event channel.
+                tray::Action::Quit => quit::request(),
             }
+        }
+        if quit::QUIT.requested() {
+            self.wrap_up(ctx, &quit::QUIT);
+            return;
         }
         self.theme(ctx);
         self.finish_sticker_drag(ctx);
@@ -531,6 +532,44 @@ impl eframe::App for App {
     }
 }
 impl App {
+    /// Ends the program in order after a quit request. The first frame does
+    /// the work and draws nothing, so every window closes with it; the next
+    /// root frame then sees the close request and eframe leaves its event
+    /// loop (`on_exit`, GL teardown), after which `main` ends the process.
+    /// eframe judges the close request after the frame that carries it, so
+    /// that frame (and one more) is left alone; a loop still here after that
+    /// did not leave, and everything is saved by then, so the process is
+    /// ended outright. `quit`'s watchdog covers the case of this never being
+    /// reached at all.
+    fn wrap_up(&mut self, ctx: &egui::Context, quit: &quit::Quit) {
+        if !quit.begin_wrap_up() {
+            if quit.later_pass() > 2 {
+                quit.terminate();
+            } else {
+                ctx.request_repaint();
+            }
+            return;
+        }
+        // 1. The tray icon first, so it never outlives the program.
+        self.tray = tray::Tray::default();
+        // 2. Global shortcuts.
+        if let Some(m) = self.hotkeys.take() {
+            for h in self.registered.drain(..) {
+                let _ = m.unregister(h);
+            }
+        }
+        // 3. The standing calendar's desktop mouse watch.
+        self.release_standing();
+        // 4. The clipboard history's two threads and its database.
+        self.clipboard
+            .shutdown(std::time::Duration::from_millis(1500));
+        // 5. Settings and every changed memo.
+        self.keep_prefs();
+        self.autosave(0., true);
+        // 6. Close every window and leave the event loop.
+        ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
+        ctx.request_repaint();
+    }
     /// Shown once, the first time the main window is closed to the tray.
     fn tray_notice(&mut self, ctx: &egui::Context) {
         let Some(until) = self.tray_notice else {
@@ -1129,7 +1168,7 @@ fn main() -> eframe::Result {
     // window (main, calendar, stickers, dialogs) is an independent child, so
     // minimizing the main window leaves stickers alive on the desktop and the
     // shared GL configuration supports real per-window transparency.
-    eframe::run_native(
+    let result = eframe::run_native(
         "OhMemoJang",
         eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
@@ -1144,5 +1183,11 @@ fn main() -> eframe::Result {
             ..Default::default()
         },
         Box::new(|cc| Ok(Box::new(App::new(cc)))),
-    )
+    );
+    // After a quit everything is saved and every window is gone: end the
+    // process now instead of waiting for it to be taken down piece by piece.
+    if quit::QUIT.requested() {
+        quit::QUIT.terminate();
+    }
+    result
 }
