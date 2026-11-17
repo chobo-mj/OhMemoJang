@@ -19,6 +19,20 @@ struct FindResult {
     count: usize,
 }
 
+/// Everything `catalog_replace_targets` depends on.
+#[derive(Clone, PartialEq)]
+struct ReplaceKey {
+    changes: u64,
+    notes: usize,
+    find: String,
+    scope: usize,
+    projects: BTreeSet<usize>,
+    selected: Option<usize>,
+    active: usize,
+    project: Option<usize>,
+    filter: Option<usize>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Folder {
     pub title: String,
@@ -60,6 +74,9 @@ pub struct Catalog {
     find_index: usize,
     find_focus: bool,
     replace_message: String,
+    /// Memos the replace dialog works on, kept while nothing it depends on
+    /// changed (the dialog is drawn every frame; the search reads every memo).
+    replace_cache: Option<(ReplaceKey, Vec<usize>)>,
     purge_tab: Option<(usize, usize)>,
     /// Groups of the recycle bin that are opened.
     trash_open: std::collections::HashSet<Group>,
@@ -2087,7 +2104,7 @@ impl App {
                         });
                     });
                 });
-                target = self.catalog_replace_targets();
+                target = self.replace_targets_cached();
                 ui.label(
                     RichText::new(format!(
                         "{}개 메모에서 찾음 · 잠긴 메모와 휴지통 제외",
@@ -2447,6 +2464,30 @@ impl App {
         }
     }
 
+    /// `catalog_replace_targets`, searched again only when the find text, the
+    /// scope, the selection or any memo (input counts as a possible change)
+    /// is different from the last time.
+    fn replace_targets_cached(&mut self) -> Vec<usize> {
+        let key = ReplaceKey {
+            changes: crate::lists::CHANGES.load(std::sync::atomic::Ordering::Relaxed),
+            notes: self.data.notes.len(),
+            find: self.catalog.replace_find.clone(),
+            scope: self.catalog.replace_scope,
+            projects: self.catalog.replace_projects.clone(),
+            selected: self.catalog.selected,
+            active: self.active,
+            project: self.catalog.project,
+            filter: self.project_filter,
+        };
+        if let Some((k, targets)) = &self.catalog.replace_cache {
+            if *k == key {
+                return targets.clone();
+            }
+        }
+        let targets = self.catalog_replace_targets();
+        self.catalog.replace_cache = Some((key, targets.clone()));
+        targets
+    }
     fn catalog_replace_targets(&self) -> Vec<usize> {
         let selected = self.catalog.selected.or(Some(self.active));
         let project = self
@@ -2741,6 +2782,27 @@ mod tests {
                 None
             })
             .unwrap_or_else(|| panic!("visible table text missing: {text}"))
+    }
+
+    #[test]
+    fn replace_targets_are_kept_until_something_changes() {
+        let mut a = App::sample(Local::now().date_naive());
+        a.data.notes[0].body = "사과".into();
+        a.catalog.replace_find = "사과".into();
+        a.catalog.replace_scope = 2;
+        let first = a.replace_targets_cached();
+        assert_eq!(first, a.catalog_replace_targets());
+        // Same state (a frame with only mouse movement): the kept list.
+        assert_eq!(a.replace_targets_cached(), first);
+        // Input counts as a change: searched again.
+        a.data.notes[1].body = "사과 둘".into();
+        crate::lists::CHANGES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let second = a.replace_targets_cached();
+        assert_eq!(second, a.catalog_replace_targets());
+        assert!(second.contains(&1) && !first.contains(&1));
+        // A different find text is never answered from the kept list.
+        a.catalog.replace_find = "없는말".into();
+        assert!(a.replace_targets_cached().is_empty());
     }
 
     #[test]
