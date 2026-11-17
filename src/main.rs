@@ -17,6 +17,8 @@ mod lists;
 mod media;
 mod model;
 mod native_window;
+#[cfg(test)]
+mod perf_bench;
 mod prefs;
 mod quit;
 mod refinements;
