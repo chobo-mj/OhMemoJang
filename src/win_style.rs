@@ -48,19 +48,6 @@ pub fn pin_to_desktop(hwnd: isize, rect: PxRect) -> bool {
     }
 }
 
-/// For a window pinned without being reparented (Windows 11 24H2 and later):
-/// puts it back right above the desktop if something raised it. Returns
-/// whether the window is pinned that way, so the caller keeps calling it.
-pub fn keep_on_desktop(hwnd: isize) -> bool {
-    #[cfg(windows)]
-    return unsafe { desk::keep_on_desktop(hwnd) };
-    #[cfg(not(windows))]
-    {
-        let _ = hwnd;
-        false
-    }
-}
-
 /// Make a pinned window an ordinary top-level window again at `rect`.
 pub fn unpin_from_desktop(hwnd: isize, rect: PxRect) -> bool {
     #[cfg(windows)]
@@ -143,11 +130,12 @@ mod desk {
         UI::WindowsAndMessaging::{
             CallNextHookEx, EnumWindows, FindWindowExW, FindWindowW, GetAncestor, GetClassNameW,
             GetDesktopWindow, GetMessageW, GetWindow, GetWindowLongW, IsChild, IsWindowVisible,
-            PeekMessageW, SendMessageTimeoutW, SetLayeredWindowAttributes, SetParent,
-            SetWindowLongW, SetWindowPos, SetWindowsHookExW, UnhookWindowsHookEx, WindowFromPoint,
-            GA_PARENT, GWL_EXSTYLE, GW_HWNDPREV, HWND_TOP, LWA_ALPHA, MSG, MSLLHOOKSTRUCT,
-            PM_NOREMOVE, SMTO_NORMAL, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-            SWP_SHOWWINDOW, WH_MOUSE_LL, WM_LBUTTONUP, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
+            KillTimer, PeekMessageW, SendMessageTimeoutW, SetLayeredWindowAttributes, SetParent,
+            SetTimer, SetWindowLongW, SetWindowPos, SetWindowsHookExW, UnhookWindowsHookEx,
+            WindowFromPoint, GA_PARENT, GWL_EXSTYLE, GW_HWNDPREV, HWND_TOP, LWA_ALPHA, MSG,
+            MSLLHOOKSTRUCT, PM_NOREMOVE, SMTO_NORMAL, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE,
+            SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, WH_MOUSE_LL, WM_LBUTTONUP,
+            WM_TIMER, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
         },
     };
 
@@ -319,12 +307,14 @@ mod desk {
                     0,
                     0,
                     0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
                 );
             }
             return true;
         }
-        if !is_top_level(h) {
+        // A window already let go (no longer a tool window) is left alone:
+        // the watch thread may tick between the release and its own end.
+        if !is_top_level(h) || GetWindowLongW(h, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW == 0 {
             return false;
         }
         let (after, placed) = if progman.is_null() {
@@ -340,7 +330,7 @@ mod desk {
                 0,
                 0,
                 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
             );
         }
         true
@@ -500,10 +490,18 @@ mod desk {
                 }
                 started_thread.store(GetCurrentThreadId(), Ordering::SeqCst);
                 let delivered = ready.send(Some(GetCurrentThreadId())).is_ok();
+                // Keep the calendar in its place on the desktop from here, so
+                // the program does not have to redraw just to check it.
+                let timer = SetTimer(std::ptr::null_mut(), 0, 250, None);
                 while delivered
                     && !stop.load(Ordering::Relaxed)
                     && GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0
-                {}
+                {
+                    if msg.message == WM_TIMER && !stop.load(Ordering::Relaxed) {
+                        keep_on_desktop(hwnd);
+                    }
+                }
+                KillTimer(std::ptr::null_mut(), timer);
                 UnhookWindowsHookEx(h);
                 WATCH.with(|slot| *slot.borrow_mut() = None);
             })

@@ -417,14 +417,9 @@ impl App {
             self.restore_standing();
             self.cal.unpinned_at = Some(ctx.input(|i| i.time));
             ctx.request_repaint();
-            return;
         }
-        // Where the window could not be moved under the desktop icons it is
-        // a top-level window just above the desktop: put it back there when a
-        // click raised it.
-        if crate::win_style::keep_on_desktop(s.hwnd) {
-            ctx.request_repaint_after(std::time::Duration::from_millis(250));
-        }
+        // Its place on the desktop is kept by the watch's own thread
+        // (`win_style`), without redrawing the program.
     }
     /// Right-click anywhere in the calendar window: month, 1-week or
     /// 2-week view (the same setting as Settings › Calendar), plus
