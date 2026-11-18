@@ -48,6 +48,13 @@ pub struct Saved {
     pub tutorial: u32,
     pub tutorial_notes: Vec<usize>,
     pub my_holidays: Vec<crate::holidays::MyHoliday>,
+    /// Pinned tables / pictures of the collections (memo, tab, block id,
+    /// picture).
+    pub pinned_content: Vec<(usize, usize, u32, bool)>,
+    /// The bookmark list; none in saves made before it was kept.
+    pub bookmarks: Option<Vec<(String, String)>>,
+    /// Bookmark comments and pins: (address, comment, pinned).
+    pub bookmark_marks: Vec<(String, String, bool)>,
     pub deleted_at: Vec<(usize, NaiveDateTime)>,
     /// Salted SHA-256 of memo passwords: "salt$hex".
     pub password_hashes: Vec<(usize, String)>,
@@ -936,6 +943,15 @@ impl App {
             tutorial: self.extra.tutorial,
             tutorial_notes: self.extra.tutorial_notes.clone(),
             my_holidays: self.extra.my_holidays.clone(),
+            pinned_content: self.extra.pinned_content.iter().copied().collect(),
+            bookmarks: Some(self.extra.bookmarks.clone()),
+            bookmark_marks: self
+                .extra
+                .bookmark_marks
+                .iter()
+                .filter(|(_, (c, p))| *p || !c.trim().is_empty())
+                .map(|(u, (c, p))| (u.clone(), c.clone(), *p))
+                .collect(),
             deleted_at: self
                 .desktop
                 .deleted_at
@@ -1014,6 +1030,15 @@ impl App {
         self.extra.tutorial = s.tutorial;
         self.extra.tutorial_notes = s.tutorial_notes.clone();
         self.extra.my_holidays = s.my_holidays.clone();
+        self.extra.pinned_content = s.pinned_content.iter().copied().collect();
+        if let Some(b) = &s.bookmarks {
+            self.extra.bookmarks = b.clone();
+        }
+        self.extra.bookmark_marks = s
+            .bookmark_marks
+            .iter()
+            .map(|(u, c, p)| (u.clone(), (c.clone(), *p)))
+            .collect();
         crate::holidays::set_mine(&self.extra.my_holidays);
         self.desktop.deleted_at = s.deleted_at.iter().copied().collect();
         self.desktop.passwords = s.password_hashes.iter().cloned().collect();
@@ -1827,6 +1852,40 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn collection_pins_and_bookmark_comments_survive_a_save() {
+        let dir = std::env::temp_dir().join(format!(
+            "ohmemojang-store-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let mut a = App::sample(NaiveDate::from_ymd_opt(2026, 11, 11).unwrap());
+        a.extra.pinned_content.insert((0, 0, 3, true));
+        a.extra.bookmarks = vec![("사내".into(), "https://intra.example".into())];
+        a.extra
+            .bookmark_marks
+            .insert("https://intra.example".into(), ("매일 확인".into(), true));
+        // An empty mark is not kept.
+        a.extra
+            .bookmark_marks
+            .insert("https://x.example".into(), (String::new(), false));
+        let saved = a.snapshot(&dir);
+        let mut b = App::sample(NaiveDate::from_ymd_opt(2026, 11, 11).unwrap());
+        b.restore(&saved);
+        assert!(b.extra.pinned_content.contains(&(0, 0, 3, true)));
+        assert_eq!(b.extra.bookmarks, a.extra.bookmarks);
+        assert_eq!(
+            b.extra.bookmark_marks.get("https://intra.example"),
+            Some(&("매일 확인".to_string(), true))
+        );
+        assert!(!b.extra.bookmark_marks.contains_key("https://x.example"));
+        // Saves from before keep the sample bookmark list.
+        let mut c = App::sample(NaiveDate::from_ymd_opt(2026, 11, 11).unwrap());
+        let before = c.extra.bookmarks.clone();
+        c.restore(&Saved::default());
+        assert_eq!(c.extra.bookmarks, before);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     #[test]
     fn text_colors_and_highlights_survive_a_save() {
         let mut d = Document::default();

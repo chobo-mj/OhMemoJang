@@ -346,29 +346,91 @@ impl App {
                     "브라우저에서 내보낸 즐겨찾기 HTML을 가져오세요",
                 );
             }
-            for (k, (t, url)) in self.extra.bookmarks.iter().enumerate() {
+            // Pinned first, then those with a comment, then as imported.
+            let order = bookmark_order(&self.extra.bookmarks, &self.extra.bookmark_marks);
+            for k in order {
+                let (t, url) = self.extra.bookmarks[k].clone();
+                let (comment, pinned) = self
+                    .extra
+                    .bookmark_marks
+                    .get(&url)
+                    .cloned()
+                    .unwrap_or_default();
                 let host = url
                     .split("://")
                     .nth(1)
                     .and_then(|r| r.split('/').next())
-                    .unwrap_or(url);
-                let r = crate::ui::list_row(
-                    ui,
-                    ui.id().with(("bookmark", k)),
-                    false,
-                    Some(crate::ui::BLUE),
-                    t,
-                    host,
-                    36.,
-                )
-                .on_hover_text(url)
-                .on_hover_cursor(egui::CursorIcon::PointingHand);
-                if r.clicked() {
-                    ui.ctx().open_url(egui::OpenUrl::new_tab(url));
-                }
+                    .unwrap_or(&url)
+                    .to_owned();
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if crate::icons::toggle_icon(
+                            ui,
+                            crate::icons::Icon::Pin,
+                            if pinned {
+                                "고정 해제"
+                            } else {
+                                "맨 위에 고정"
+                            },
+                            pinned,
+                        )
+                        .clicked()
+                        {
+                            self.extra.bookmark_marks.entry(url.clone()).or_default().1 = !pinned;
+                        }
+                        // The comment is kept when the typing ends.
+                        let eid = ui.id().with(("bookmark_comment", &url));
+                        let mut text = ui
+                            .data(|d| d.get_temp::<String>(eid))
+                            .unwrap_or_else(|| comment.clone());
+                        let edit = ui.add(
+                            egui::TextEdit::singleline(&mut text)
+                                .id(eid)
+                                .hint_text("코멘트")
+                                .desired_width(180.),
+                        );
+                        if edit.has_focus() || edit.changed() {
+                            ui.data_mut(|d| d.insert_temp(eid, text.clone()));
+                        }
+                        if edit.lost_focus() {
+                            ui.data_mut(|d| d.remove::<String>(eid));
+                            self.extra.bookmark_marks.entry(url.clone()).or_default().0 =
+                                text.trim().to_owned();
+                        }
+                        let r = crate::ui::list_row(
+                            ui,
+                            ui.id().with(("bookmark", &url)),
+                            false,
+                            Some(crate::ui::BLUE),
+                            &t,
+                            &host,
+                            36.,
+                        )
+                        .on_hover_text(&url)
+                        .on_hover_cursor(egui::CursorIcon::PointingHand);
+                        if r.clicked() {
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(&url));
+                        }
+                    });
+                });
             }
         });
     }
+}
+/// Bookmarks in the order shown: pinned, then with a comment, then the rest,
+/// each group in the imported order.
+pub fn bookmark_order(
+    bookmarks: &[(String, String)],
+    marks: &std::collections::BTreeMap<String, (String, bool)>,
+) -> Vec<usize> {
+    let rank = |url: &String| match marks.get(url) {
+        Some((_, true)) => 0,
+        Some((c, false)) if !c.trim().is_empty() => 1,
+        _ => 2,
+    };
+    let mut order: Vec<usize> = (0..bookmarks.len()).collect();
+    order.sort_by_key(|&k| rank(&bookmarks[k].1));
+    order
 }
 fn read_image(path: &Path) -> Result<Vec<u8>, String> {
     let size = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
@@ -393,6 +455,18 @@ mod tests {
     #[test]
     fn bookmarks_skip_script_urls_and_deduplicate() {
         assert_eq!(parse_bookmarks("<a href='javascript:alert(1)'>x</a><a href='https://example.com'>가 &amp; 나</a><a href='https://example.com'>duplicate</a>"),vec![("가 & 나".into(),"https://example.com".into())]);
+    }
+    #[test]
+    fn pinned_bookmarks_lead_then_commented_ones() {
+        let b: Vec<(String, String)> = ["a", "b", "c", "d"]
+            .iter()
+            .map(|u| (u.to_string(), u.to_string()))
+            .collect();
+        let mut marks = std::collections::BTreeMap::new();
+        marks.insert("c".to_string(), ("메모".to_string(), false));
+        marks.insert("d".to_string(), (String::new(), true));
+        marks.insert("a".to_string(), ("  ".to_string(), false));
+        assert_eq!(bookmark_order(&b, &marks), vec![3, 2, 0, 1]);
     }
     #[test]
     fn sample_asset_is_valid_png() {

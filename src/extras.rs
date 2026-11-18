@@ -103,6 +103,11 @@ pub struct Extra {
     pub media_to: Option<NaiveDate>,
     pub table_search: String,
     pub bookmarks: Vec<(String, String)>,
+    /// Pinned tables and pictures of 표 · 이미지 모아보기: (memo, body tab,
+    /// block id, picture).
+    pub pinned_content: std::collections::BTreeSet<(usize, usize, u32, bool)>,
+    /// A bookmark's comment and pin, by its address.
+    pub bookmark_marks: std::collections::BTreeMap<String, (String, bool)>,
     pub size_applied: Option<(usize, u8)>,
     /// Custom colors for wiki tabs that have had one picked; tabs without an
     /// entry here use the default accent color.
@@ -195,6 +200,8 @@ impl Default for Extra {
             media_to: None,
             table_search: String::new(),
             bookmarks: vec![("프로젝트 참고 자료".into(), "https://example.com".into())],
+            pinned_content: Default::default(),
+            bookmark_marks: Default::default(),
             size_applied: None,
             wiki_tab_colors: HashMap::new(),
             deleted_wiki_tabs: HashSet::new(),

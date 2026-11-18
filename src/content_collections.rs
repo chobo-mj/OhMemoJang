@@ -31,6 +31,24 @@ impl App {
         sources
     }
 
+    /// How a table or picture is remembered as pinned.
+    fn content_key(&self, (i, t, b): Source) -> (usize, usize, u32, bool) {
+        match &self.data.notes[i].document.tabs[t].blocks[b] {
+            Block::Picture(p) => (i, t, p.id, true),
+            Block::Table(x) => (i, t, x.id, false),
+        }
+    }
+    /// Pinned ones first; otherwise the order stays.
+    fn pinned_first(&self, sources: &mut [Source]) {
+        sources.sort_by_key(|&s| !self.extra.pinned_content.contains(&self.content_key(s)));
+    }
+    fn toggle_content_pin(&mut self, s: Source) {
+        let key = self.content_key(s);
+        if !self.extra.pinned_content.remove(&key) {
+            self.extra.pinned_content.insert(key);
+        }
+    }
+
     fn open_content_source(&mut self, note: usize, tab: usize) {
         if tab < self.data.notes[note].document.tabs.len() {
             self.data.notes[note].document.active = tab;
@@ -40,7 +58,8 @@ impl App {
     }
 
     pub fn content_tables(&mut self, ui: &mut egui::Ui) {
-        let all = self.content_sources(false);
+        let mut all = self.content_sources(false);
+        self.pinned_first(&mut all);
         if all.is_empty() {
             if empty_with_example(
                 ui,
@@ -84,6 +103,11 @@ impl App {
             }
             found += 1;
             let source_title = format!("{} · {}", n.title, doc.title);
+            let pinned = self
+                .extra
+                .pinned_content
+                .contains(&(i, ti, table.id, false));
+            let mut pin = false;
             let mut open = false;
             let mut copy = 0;
             ui.push_id(("content_table", i, ti, bi), |ui| {
@@ -101,6 +125,17 @@ impl App {
                             if crate::ui::pill(ui, false, "원본 메모").clicked() {
                                 open = true;
                             }
+                            pin = crate::icons::toggle_icon(
+                                ui,
+                                crate::icons::Icon::Pin,
+                                if pinned {
+                                    "고정 해제"
+                                } else {
+                                    "맨 위에 고정"
+                                },
+                                pinned,
+                            )
+                            .clicked();
                         });
                     });
                     ui.add_space(8.);
@@ -157,6 +192,9 @@ impl App {
             if open {
                 self.open_content_source(i, ti);
             }
+            if pin {
+                self.toggle_content_pin((i, ti, bi));
+            }
             ui.add_space(12.);
         }
         if found == 0 {
@@ -206,7 +244,7 @@ impl App {
             }
             batch = ui.button("일괄 저장하기").clicked();
         });
-        let sources: Vec<_> = all
+        let mut sources: Vec<_> = all
             .into_iter()
             .filter(|&(i, _, _)| {
                 let date = self.data.notes[i].created.date();
@@ -214,6 +252,8 @@ impl App {
                     && self.extra.media_to.is_none_or(|d| date <= d)
             })
             .collect();
+        self.pinned_first(&mut sources);
+        let mut pin_clicked = None;
         ui.label(
             RichText::new(format!(
                 "{}개 표시 · 날짜 기준은 원본 메모 생성일입니다",
@@ -260,6 +300,10 @@ impl App {
                     let Block::Picture(picture) = &n.document.tabs[t].blocks[b] else {
                         continue;
                     };
+                    let pinned = self
+                        .extra
+                        .pinned_content
+                        .contains(&(i, t, picture.id, true));
                     let mut copy = false;
                     let mut save = false;
                     let mut open = false;
@@ -319,6 +363,20 @@ impl App {
                                         .color(MUTED),
                                     );
                                     ui.horizontal(|ui| {
+                                        if crate::icons::toggle_icon(
+                                            ui,
+                                            crate::icons::Icon::Pin,
+                                            if pinned {
+                                                "고정 해제"
+                                            } else {
+                                                "맨 위에 고정"
+                                            },
+                                            pinned,
+                                        )
+                                        .clicked()
+                                        {
+                                            pin_clicked = Some((i, t, b));
+                                        }
                                         save = save_icon(ui).clicked();
                                         open = ui
                                             .small_button("원본 메모")
@@ -362,6 +420,9 @@ impl App {
                     }
                 }
             });
+        if let Some(s) = pin_clicked {
+            self.toggle_content_pin(s);
+        }
         if sources.is_empty() {
             ui.label("선택한 날짜에 생성된 이미지가 없습니다");
         }
