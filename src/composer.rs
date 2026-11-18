@@ -64,7 +64,30 @@ pub struct Format {
     pub italic: bool,
     pub underline: bool,
     pub strike: bool,
+    /// Text color (`TEXT_COLORS`; 0: the memo's own).
+    pub color: u8,
+    /// Highlighter (`HIGHLIGHTS`; 0: none).
+    pub highlight: u8,
 }
+/// Text colors offered in the toolbar (the first: the memo's own color).
+pub const TEXT_COLORS: [(&str, Color32); 7] = [
+    ("기본", Color32::TRANSPARENT),
+    ("빨강", Color32::from_rgb(214, 48, 49)),
+    ("주황", Color32::from_rgb(225, 112, 0)),
+    ("초록", Color32::from_rgb(30, 140, 70)),
+    ("파랑", Color32::from_rgb(35, 100, 210)),
+    ("보라", Color32::from_rgb(130, 60, 190)),
+    ("회색", Color32::from_rgb(128, 128, 128)),
+];
+/// Highlighter colors (the first: none).
+pub const HIGHLIGHTS: [(&str, Color32); 6] = [
+    ("없음", Color32::TRANSPARENT),
+    ("노랑", Color32::from_rgb(255, 236, 100)),
+    ("연두", Color32::from_rgb(178, 240, 150)),
+    ("하늘", Color32::from_rgb(160, 215, 255)),
+    ("분홍", Color32::from_rgb(255, 185, 215)),
+    ("주황", Color32::from_rgb(255, 205, 140)),
+];
 #[derive(Clone, Debug, PartialEq)]
 pub struct Span {
     pub range: Range<usize>,
@@ -774,6 +797,42 @@ impl Document {
         }
         self.selection = 0..0;
         self.selected_cell = None;
+    }
+    /// Color (`highlight`: false) or highlight the selected text, keeping
+    /// each character's other formatting.
+    pub fn paint_selection(&mut self, highlight: bool, k: u8) {
+        if highlight {
+            self.format.highlight = k;
+        } else {
+            self.format.color = k;
+        }
+        if self.selected_cell.is_some() || self.selection.is_empty() {
+            return;
+        }
+        let tab = &mut self.tabs[self.active];
+        let chars = tab.body.chars().count();
+        let range = self.selection.start.min(chars)..self.selection.end.min(chars);
+        let winner = winning_spans(&tab.spans, chars);
+        let mut runs: Vec<Span> = vec![];
+        for i in range {
+            let mut f = match winner.get(i) {
+                Some(&w) if w != u32::MAX => tab.spans[w as usize].format.clone(),
+                _ => Format::default(),
+            };
+            if highlight {
+                f.highlight = k;
+            } else {
+                f.color = k;
+            }
+            match runs.last_mut() {
+                Some(r) if r.range.end == i && r.format == f => r.range.end = i + 1,
+                _ => runs.push(Span {
+                    range: i..i + 1,
+                    format: f,
+                }),
+            }
+        }
+        tab.spans.extend(runs);
     }
     pub fn toggle_format(&mut self, kind: usize) {
         match kind {
@@ -1796,6 +1855,22 @@ fn layout(
             strikethrough: if f.strike { stroke } else { Stroke::NONE },
             ..Default::default()
         };
+        if f.color > 0 {
+            if let Some(&(_, c)) = TEXT_COLORS.get(f.color as usize) {
+                format.color = c;
+                format.underline.color = c;
+                format.strikethrough.color = c;
+            }
+        }
+        if f.highlight > 0 {
+            if let Some(&(_, c)) = HIGHLIGHTS.get(f.highlight as usize) {
+                format.background = c;
+                // Readable on the highlighter, whatever the theme.
+                if f.color == 0 {
+                    format.color = Color32::from_rgb(30, 30, 30);
+                }
+            }
+        }
         let end = byte + ch.len_utf8();
         // Automatic link emphasis uses the URL's exact lexical extent.
         if ch.is_whitespace() {
@@ -1931,16 +2006,18 @@ enum Tool {
     Italic,
     Underline,
     Strike,
+    Color,
     Opacity,
 }
 // Images and tables arrive from the clipboard; zoom stays on Ctrl+wheel.
-const TOOLS: [Tool; 7] = [
+const TOOLS: [Tool; 8] = [
     Tool::Font,
     Tool::Size,
     Tool::Bold,
     Tool::Italic,
     Tool::Underline,
     Tool::Strike,
+    Tool::Color,
     Tool::Opacity,
 ];
 fn toolbar_height(width: f32, count: usize) -> f32 {
@@ -1973,6 +2050,7 @@ fn toolbar(ui: &mut egui::Ui, doc: &mut Document, id: Id, opacity: bool) -> egui
                         Tool::Italic => ("기울임 · Ctrl+I".into(), doc.format.italic),
                         Tool::Underline => ("밑줄 · Ctrl+U".into(), doc.format.underline),
                         Tool::Strike => ("취소선".into(), doc.format.strike),
+                        Tool::Color => ("글자 색 · 형광펜".into(), false),
                         Tool::Opacity => {
                             (format!("메모 투명도 · {:.0}%", doc.opacity * 100.), false)
                         }
@@ -2057,6 +2135,29 @@ fn toolbar(ui: &mut egui::Ui, doc: &mut Document, id: Id, opacity: bool) -> egui
                                                 doc.font_size = pt.round() / 0.75;
                                             }
                                         }
+                                        Tool::Color => {
+                                            for (highlight, title, colors) in [
+                                                (false, "글자 색", &TEXT_COLORS[..]),
+                                                (true, "형광펜", &HIGHLIGHTS[..]),
+                                            ] {
+                                                ui.strong(title);
+                                                ui.horizontal_wrapped(|ui| {
+                                                    for (k, &(name, c)) in colors.iter().enumerate()
+                                                    {
+                                                        if color_chip(ui, name, c, highlight)
+                                                            .clicked()
+                                                        {
+                                                            doc.paint_selection(highlight, k as u8);
+                                                            ui.memory_mut(|m| m.close_popup());
+                                                        }
+                                                    }
+                                                });
+                                            }
+                                            crate::ui::caption(
+                                                ui,
+                                                "글자를 먼저 선택한 뒤 색을 고르세요",
+                                            );
+                                        }
                                         Tool::Opacity => {
                                             crate::ui::caption(ui, "메모 투명도");
                                             let mut pct = (doc.opacity * 100.).round();
@@ -2095,6 +2196,40 @@ fn toolbar(ui: &mut egui::Ui, doc: &mut Document, id: Id, opacity: bool) -> egui
         },
     )
     .response
+}
+/// A swatch in the color popup ("없음"/"기본": a crossed box).
+fn color_chip(ui: &mut egui::Ui, name: &str, c: Color32, highlight: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(22.), egui::Sense::click());
+    let ink = ui.visuals().text_color();
+    let r = rect.shrink(2.);
+    let faint = Stroke::new(1.0_f32, ink.gamma_multiply(0.6));
+    if c == Color32::TRANSPARENT {
+        ui.painter()
+            .rect_stroke(r, 4., faint, egui::StrokeKind::Inside);
+        ui.painter()
+            .line_segment([r.left_bottom(), r.right_top()], faint);
+    } else if highlight {
+        ui.painter().rect_filled(r, 4., c);
+    } else {
+        ui.painter().text(
+            r.center(),
+            egui::Align2::CENTER_CENTER,
+            "가",
+            FontId::proportional(15.),
+            c,
+        );
+    }
+    if response.hovered() {
+        ui.painter().rect_stroke(
+            rect,
+            5.,
+            Stroke::new(1.5_f32, ink),
+            egui::StrokeKind::Inside,
+        );
+    }
+    response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(name)
 }
 fn tool_button(
     ui: &mut egui::Ui,
@@ -2220,6 +2355,15 @@ fn paint_tool(painter: &egui::Painter, rect: egui::Rect, tool: Tool, color: Colo
                 (6., 19.),
             ]);
             line((3., 12.), (21., 12.));
+        }
+        Tool::Color => {
+            // A pen tip over a color bar.
+            path(&[(6., 16.), (14., 4.), (18., 7.), (10., 19.), (6., 16.)]);
+            painter.rect_filled(
+                egui::Rect::from_min_max(p(3., 20.), p(21., 23.)),
+                1.,
+                Color32::from_rgb(230, 190, 40),
+            );
         }
         Tool::Opacity => {
             painter.circle_stroke(p(12., 12.), 8. * unit, stroke);
@@ -4822,6 +4966,39 @@ fn shortcut_substitution(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn coloring_a_selection_keeps_its_bold_and_paints_the_layout() {
+        let mut d = Document::default();
+        d.tabs[0].body = "abcdef".into();
+        d.tabs[0].spans.push(Span {
+            range: 0..3,
+            format: Format {
+                bold: true,
+                ..Default::default()
+            },
+        });
+        d.selection = 1..5;
+        d.paint_selection(false, 1);
+        d.paint_selection(true, 2);
+        let w = winning_spans(&d.tabs[0].spans, 6);
+        let f = |i: usize| d.tabs[0].spans[w[i] as usize].format.clone();
+        assert!(f(1).bold && f(1).color == 1 && f(1).highlight == 2);
+        assert!(!f(3).bold && f(4).color == 1);
+        assert_eq!(w[5], u32::MAX, "outside the selection: untouched");
+        assert_eq!(w[0], 0);
+        let font = FontId::proportional(14.);
+        let job = layout(
+            "abcdef",
+            &d.tabs[0].spans,
+            &Format::default(),
+            font.clone(),
+            font,
+            Color32::BLACK,
+        );
+        assert_eq!(job.sections[2].format.color, TEXT_COLORS[1].1);
+        assert_eq!(job.sections[2].format.background, HIGHLIGHTS[2].1);
+        assert_eq!(job.sections[5].format.background, Color32::TRANSPARENT);
+    }
     thread_local! {
         /// Stands in for the keyboard state `chord_down` reads.
         pub(super) static CHORD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -6890,6 +7067,7 @@ mod layout_tests {
                         italic: bits & 2 != 0,
                         underline: bits & 4 != 0,
                         strike: bits & 8 != 0,
+                        ..Default::default()
                     },
                 }
             })

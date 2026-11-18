@@ -136,6 +136,9 @@ pub struct TabRec {
     pub hidden: bool,
     /// (start, end, bold, italic, underline, strike)
     pub spans: Vec<(usize, usize, [bool; 4])>,
+    /// (text color, highlighter) of each span, in `spans` order; empty in
+    /// saves from before colors.
+    pub span_colors: Vec<(u8, u8)>,
     pub blocks: Vec<BlockRec>,
 }
 
@@ -389,6 +392,7 @@ fn bits_format(b: [bool; 4]) -> Format {
         italic: b[1],
         underline: b[2],
         strike: b[3],
+        ..Default::default()
     }
 }
 
@@ -563,6 +567,18 @@ fn tab_rec(t: &Tab) -> TabRec {
             .iter()
             .map(|s| (s.range.start, s.range.end, format_bits(&s.format)))
             .collect(),
+        span_colors: if t
+            .spans
+            .iter()
+            .any(|s| s.format.color > 0 || s.format.highlight > 0)
+        {
+            t.spans
+                .iter()
+                .map(|s| (s.format.color, s.format.highlight))
+                .collect()
+        } else {
+            vec![]
+        },
         blocks: t
             .blocks
             .iter()
@@ -614,9 +630,17 @@ fn tab_from(r: &TabRec) -> Tab {
         spans: r
             .spans
             .iter()
-            .map(|&(a, b, f)| Span {
-                range: a..b,
-                format: bits_format(f),
+            .enumerate()
+            .map(|(k, &(a, b, f))| {
+                let mut format = bits_format(f);
+                if let Some(&(c, h)) = r.span_colors.get(k) {
+                    format.color = c.min(crate::composer::TEXT_COLORS.len() as u8 - 1);
+                    format.highlight = h.min(crate::composer::HIGHLIGHTS.len() as u8 - 1);
+                }
+                Span {
+                    range: a..b,
+                    format,
+                }
             })
             .collect(),
         blocks: r
@@ -1803,6 +1827,23 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn text_colors_and_highlights_survive_a_save() {
+        let mut d = Document::default();
+        d.tabs[0].body = "abcdef".into();
+        d.tabs[0].spans.push(crate::composer::Span {
+            range: 1..3,
+            format: Format {
+                highlight: 1,
+                color: 4,
+                ..Default::default()
+            },
+        });
+        let back = doc_from(&doc_rec(&d));
+        assert_eq!(back.tabs[0].spans, d.tabs[0].spans);
+        // Old saves (no colors) read as before, and plain memos write none.
+        assert!(tab_rec(&Document::default().tabs[0]).span_colors.is_empty());
+    }
     #[test]
     fn table_round_trips_merges_and_legacy_data_migrates() {
         let mut table = Table::new(2, 2);

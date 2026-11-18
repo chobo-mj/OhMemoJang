@@ -573,6 +573,7 @@ fn cell_look(
         italic: get("font-style").is_some_and(|v| v.contains("italic") || v.contains("oblique")),
         underline: deco.contains("underline"),
         strike: deco.contains("line-through"),
+        ..Default::default()
     };
     (fill, color, align, format)
 }
