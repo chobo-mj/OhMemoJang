@@ -63,6 +63,14 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 ; The notification identity the program registers for its alarms.
 Root: HKCU; Subkey: "Software\Classes\AppUserModelId\OhMemoJang.App"; ValueType: none; Flags: dontcreatekey uninsdeletekey
 
+; Files the program makes for its own use (not user data): the icon its
+; notifications show, and the folders left empty. Memos (%APPDATA%) and the
+; clipboard history stay.
+[UninstallDelete]
+Type: files; Name: "{localappdata}\OhMemoJang\notification_icon.png"
+Type: dirifempty; Name: "{localappdata}\OhMemoJang"
+Type: dirifempty; Name: "{userprograms}\OhMemoJang"
+
 ; The program keeps running in the tray: stop it before its files are removed.
 ; Memos are saved within two seconds of every change, so nothing is lost.
 [UninstallRun]

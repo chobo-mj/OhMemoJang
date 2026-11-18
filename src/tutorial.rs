@@ -640,6 +640,12 @@ impl App {
                 ui,
                 "연습용 메모 몇 개를 만들어요. 언제든 건너뛸 수 있고, 끝나면 지울지 고를 수 있어요.",
             );
+            ui.add_space(6.);
+            // Why a Start menu shortcut appears: alarms are Windows notifications.
+            crate::ui::hint(
+                ui,
+                "🔔 메모 알람은 Windows 알림으로 알려 드려요. Windows는 시작 메뉴 바로가기가 있는 앱의 알림만 보여 줘요. 그래서 OhMemoJang이 시작 메뉴에 바로가기를 만들어 둬요.",
+            );
             ui.add_space(14.);
             ui.horizontal(|ui| {
                 if crate::ui::primary(ui, "튜토리얼 시작").clicked() {
