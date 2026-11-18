@@ -785,6 +785,7 @@ impl App {
                 if a != b {
                     let (start, end) = (a.min(b), a.max(b));
                     let i = self.new_sticker();
+                    self.drafts.push(i);
                     let n = &mut self.data.notes[i];
                     n.date = Some(start);
                     n.duration = ((end - start).num_days() + 1).min(u16::MAX as i64) as u16;

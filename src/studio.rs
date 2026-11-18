@@ -1257,7 +1257,37 @@ impl App {
         self.studio.windows.insert(i, w);
         i
     }
+    /// Whether memo `i` holds nothing: no title, no text, no picture or
+    /// table in any body tab.
+    pub fn is_blank(&self, i: usize) -> bool {
+        let n = &self.data.notes[i];
+        n.title.trim().is_empty()
+            && n.body.trim().is_empty()
+            && !n.has_image
+            && n.document
+                .tabs
+                .iter()
+                .all(|t| t.body.trim().is_empty() && t.blocks.is_empty())
+    }
+    /// A memo made by dragging over calendar days whose sticker was closed
+    /// while still blank is erased for good (it never reaches the trash).
+    pub fn drop_blank_drafts(&mut self) {
+        let drafts = std::mem::take(&mut self.drafts);
+        for i in drafts {
+            if i >= self.data.notes.len() {
+                continue;
+            }
+            if self.studio.windows.get(&i).is_some_and(|w| w.open) {
+                self.drafts.push(i);
+            } else if self.is_blank(i) && !self.data.notes[i].purged {
+                self.studio.windows.remove(&i);
+                self.purge_note(i);
+                self.toast = "내용 없이 닫은 일정 메모를 지웠어요".into();
+            }
+        }
+    }
     pub fn render_note_windows(&mut self, root: &egui::Context) {
+        self.drop_blank_drafts();
         let ids: Vec<_> = self
             .studio
             .windows
@@ -2401,6 +2431,60 @@ mod tests {
         a.shortcuts[2] = a.shortcuts[1].clone();
         a.apply_shortcuts();
         assert!(a.hotkey_status.contains("서로 다른"));
+    }
+    #[test]
+    fn ctrl_f_in_the_main_window_puts_the_cursor_in_the_search_box() {
+        let mut a = App::sample(Local::now().date_naive());
+        // Any page, settings open, sidebar folded to its icons.
+        a.page = 5;
+        a.settings = true;
+        a.sidebar = false;
+        a.sidebar_width = 64.;
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::F,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::CTRL,
+            }],
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| a.main_shortcuts(ctx));
+        assert!(a.focus_search && a.sidebar && !a.settings);
+        assert!(a.sidebar_width >= 160., "the search box is shown");
+        assert_eq!(a.page, 5, "the page stays");
+        // There is no global search shortcut any more.
+        assert_eq!(a.shortcuts.len(), 3);
+    }
+    #[test]
+    fn a_calendar_drag_memo_closed_blank_is_erased_and_a_written_one_stays() {
+        let mut a = App::sample(Local::now().date_naive());
+        let blank = a.new_sticker();
+        let written = a.new_sticker();
+        let plain = a.new_sticker();
+        a.drafts = vec![blank, written];
+        // Still open: nothing happens.
+        a.drop_blank_drafts();
+        assert_eq!(a.drafts, vec![blank, written]);
+        a.data.notes[written].title = "회의".into();
+        for i in [blank, written, plain] {
+            a.studio.windows.get_mut(&i).unwrap().open = false;
+        }
+        a.drop_blank_drafts();
+        assert!(a.data.notes[blank].purged && a.data.notes[blank].deleted);
+        assert!(!a.studio.windows.contains_key(&blank));
+        assert!(!a.data.notes[written].deleted, "a memo with a title stays");
+        assert!(!a.data.notes[plain].deleted, "only calendar drag memos");
+        assert!(a.drafts.is_empty());
+        // Body text alone also keeps it.
+        let body = a.new_sticker();
+        a.drafts = vec![body];
+        a.data.notes[body].body = "내용".into();
+        a.studio.windows.get_mut(&body).unwrap().open = false;
+        a.drop_blank_drafts();
+        assert!(!a.data.notes[body].deleted);
     }
     #[test]
     fn unchecked_single_note_cannot_expose_stale_completion_time() {

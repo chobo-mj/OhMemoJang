@@ -549,12 +549,6 @@ impl App {
     fn catalog_find_bar(&mut self, ui: &mut egui::Ui, ids: &[usize]) {
         if ui
             .ctx()
-            .input(|i| i.modifiers.command && i.key_pressed(egui::Key::F))
-        {
-            self.catalog.find_focus = true;
-        }
-        if ui
-            .ctx()
             .input(|i| i.modifiers.command && !i.modifiers.shift && i.key_pressed(egui::Key::H))
         {
             self.catalog.replace_open = true;
@@ -568,7 +562,7 @@ impl App {
                 ui,
                 &mut self.catalog.query,
                 "catalog_find",
-                "목록에서 찾기  Ctrl+F",
+                "목록에서 찾기",
                 240.,
             );
             if self.catalog.find_focus {

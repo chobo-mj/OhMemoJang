@@ -91,6 +91,9 @@ struct App {
     pending_date_drop: Option<(usize, NaiveDate)>,
     /// Days being dragged over in the calendar: (first, current).
     range_drag: Option<(NaiveDate, NaiveDate)>,
+    /// Memos made by dragging over calendar days, until their sticker is
+    /// closed: closed with no title and no content, they are erased.
+    drafts: Vec<usize>,
     day_cells: std::collections::HashMap<egui::ViewportId, (f64, egui::Rect, NaiveDate)>,
     schedule_origins: std::collections::HashMap<egui::ViewportId, egui::Pos2>,
     cal_cells: std::collections::HashMap<egui::ViewportId, (f64, Vec<(egui::Rect, NaiveDate)>)>,
@@ -142,7 +145,7 @@ struct App {
     edit_error: String,
     hotkeys: Option<GlobalHotKeyManager>,
     registered: Vec<HotKey>,
-    shortcuts: [String; 4],
+    shortcuts: [String; 3],
     /// The search box takes the keyboard on the next frame (search shortcut).
     focus_search: bool,
     hotkey_status: String,
@@ -256,6 +259,7 @@ impl App {
             schedule_drop_serial: 0,
             pending_date_drop: None,
             range_drag: None,
+            drafts: vec![],
             day_cells: Default::default(),
             schedule_origins: Default::default(),
             cal_cells: Default::default(),
@@ -298,7 +302,6 @@ impl App {
                 "Ctrl+Alt+N".into(),
                 "Ctrl+Alt+C".into(),
                 "Ctrl+Alt+S".into(),
-                "Ctrl+Alt+F".into(),
             ],
             focus_search: false,
             hotkey_status: String::new(),
@@ -499,13 +502,6 @@ impl eframe::App for App {
                 || self.registered.get(2).is_some_and(|h| h.id() == id)
             {
                 self.new_sticker();
-            } else if self.registered.get(3).is_some_and(|h| h.id() == id) {
-                // Search from anywhere: the main window, its search box.
-                self.main_open = true;
-                self.settings = false;
-                self.focus_search = true;
-                ctx.send_viewport_cmd_to(main_viewport(), egui::ViewportCommand::Minimized(false));
-                ctx.send_viewport_cmd_to(main_viewport(), egui::ViewportCommand::Focus);
             } else if self.registered.get(1).is_some_and(|h| h.id() == id) {
                 self.show_calendar();
                 ctx.send_viewport_cmd_to(
@@ -736,12 +732,26 @@ impl App {
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::P)) {
             self.desktop.project_popup = true;
         }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::F)) {
+            self.search_shortcut();
+        }
         if ctx.input_mut(|i| {
             i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::T)
         }) {
             let i = self.catalog.selected.unwrap_or(self.active);
             self.data.notes[i].topmost = !self.data.notes[i].topmost;
         }
+    }
+    /// Ctrl+F in the main window, whatever page is open: the cursor goes to
+    /// the search box of the sidebar, which is opened (and widened from its
+    /// icon-only width) when needed.
+    fn search_shortcut(&mut self) {
+        self.settings = false;
+        self.sidebar = true;
+        if self.sidebar_width < 160. {
+            self.sidebar_width = 200.;
+        }
+        self.focus_search = true;
     }
     fn main_ui(&mut self, ctx: &egui::Context) {
         let tone = ui::tone(self.dark);

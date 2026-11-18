@@ -75,3 +75,11 @@
 - 제목이 원문자(⑮)로 시작하므로 다음 버전에서도 사용법 갱신 때 함께 바뀐다. `GUIDE_VERSION`을 6으로 올려, 2.0.0 사용자도 업데이트 후 처음 켤 때 새 페이지를 받는다.
 - 테스트 `the_guide_has_a_page_about_the_new_features` 추가.
 - 버전 2.0.1, 릴리즈 노트 `docs/releases/2.0.1.md`.
+
+## v2.0.1 이후: 검색 단축키, 빈 일정 메모
+
+- 전역 단축키 Ctrl+Alt+F(검색)를 없앴다. 설정 › 단축키의 전역 단축키는 빠른 메모·캘린더 분리창·새 스티커 세 개만 남는다(`shortcuts: [String; 3]`; 예전 설정 파일의 네 번째 값은 읽지 않는다).
+- 메인 창에서는 어느 화면이든 Ctrl+F를 누르면 왼쪽 검색창으로 커서가 간다(`main_shortcuts` → `search_shortcut`). 설정 화면은 닫히고, 사이드바가 접혀 있으면 열고, 아이콘만 보이는 좁은 폭이면 200으로 넓혀 검색창이 보이게 한다. 보던 화면은 그대로다.
+- 전체메모의 ‘목록에서 찾기’는 더 이상 Ctrl+F를 쓰지 않는다(입력칸을 눌러 쓴다). 찾아 바꾸기는 Ctrl+H 그대로. 스티커 안의 Ctrl+F는 예전대로 전체메모 찾기로 간다.
+- 캘린더에서 날짜를 끌어 만든 메모를 제목·본문·그림·표 없이 닫으면 영구 삭제한다(`drafts`, `drop_blank_drafts`, 휴지통을 거치지 않음). 무엇이든 쓴 메모, 다른 방법으로 만든 빈 메모는 그대로다.
+- 테스트: `ctrl_f_in_the_main_window_puts_the_cursor_in_the_search_box`, `a_calendar_drag_memo_closed_blank_is_erased_and_a_written_one_stays`. GUIDE_VERSION 7.

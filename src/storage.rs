@@ -1026,7 +1026,7 @@ impl App {
         let st = &s.settings;
         st.write_desktop(&mut self.desktop);
         self.dark = st.dark;
-        for (k, v) in st.shortcuts.iter().enumerate().take(4) {
+        for (k, v) in st.shortcuts.iter().enumerate().take(3) {
             if !v.trim().is_empty() {
                 self.shortcuts[k] = v.clone();
             }
