@@ -492,7 +492,7 @@ mod desk {
                 let delivered = ready.send(Some(GetCurrentThreadId())).is_ok();
                 // Keep the calendar in its place on the desktop from here, so
                 // the program does not have to redraw just to check it.
-                let timer = SetTimer(std::ptr::null_mut(), 0, 250, None);
+                let timer = SetTimer(std::ptr::null_mut(), 0, 1000, None);
                 while delivered
                     && !stop.load(Ordering::Relaxed)
                     && GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0

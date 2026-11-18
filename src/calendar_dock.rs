@@ -109,6 +109,8 @@ pub struct Dock {
     /// click can reach both the desktop watch and the window, and must not
     /// pin it again.
     unpinned_at: Option<f64>,
+    /// Whether the calendar window last drew itself pinned to the desktop.
+    drew_pinned: bool,
     /// True: the detached window shows the grid and the day's memos side by
     /// side instead of stacked.
     pub horizontal: bool,
@@ -146,6 +148,7 @@ impl Default for Dock {
             painting: false,
             standing: None,
             unpinned_at: None,
+            drew_pinned: false,
             horizontal: false,
             split_frac: 1. / 3.,
         }
@@ -217,6 +220,25 @@ impl App {
             |ctx, _| {
                 let theme = self.cal.theme.checked_sub(1).and_then(|t| THEMES.get(t));
                 self.theme_with(ctx, theme.map_or(self.dark, |t| t.dark));
+                // Pinned under the desktop icons, a repaint of this big
+                // window makes Windows redraw the whole desktop (a stutter
+                // of the mouse): it is painted only when it looks different,
+                // without the periodic refresh, and once right after it was
+                // pinned or let go (`vendor/eframe`).
+                let pinned = self.cal.standing_pinned();
+                let me = ctx.viewport_id();
+                ctx.data_mut(|d| {
+                    let keep = egui::Id::new("eframe_keep_frame").with(me);
+                    if pinned {
+                        d.insert_temp(keep, true);
+                    } else {
+                        d.remove::<bool>(keep);
+                    }
+                    if pinned != self.cal.drew_pinned {
+                        d.insert_temp(egui::Id::new("eframe_paint_once").with(me), true);
+                    }
+                });
+                self.cal.drew_pinned = pinned;
                 self.drag_input(ctx);
                 if ctx.input(|i| i.viewport().close_requested()) {
                     // The window's close button closes the calendar; only
@@ -405,6 +427,8 @@ impl App {
                 return;
             }
             s.click = crate::win_style::DesktopClick::watch(s.hwnd, s.button, ctx.clone());
+            // Paint it once more where it now stands.
+            ctx.request_repaint();
             if s.click.is_none() {
                 self.restore_standing();
                 self.toast = "바탕화면 입력 감지를 시작하지 못해 분리 창으로 유지합니다".into();

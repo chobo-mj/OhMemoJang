@@ -1579,12 +1579,24 @@ fn render_immediate_viewport(
     let screen_size_in_pixels: [u32; 2] = window.inner_size().into();
 
     let signature = frame_signature(&clipped_primitives, pixels_per_point, screen_size_in_pixels);
-    if textures_delta.set.is_empty()
+    // The app can ask for a window to be painted now (`eframe_paint_once`),
+    // or to keep showing its last frame without the periodic refresh
+    // (`eframe_keep_frame`), for a window whose repaint is costly to others.
+    let (paint_once, keep_frame) = egui_ctx.data_mut(|d| {
+        (
+            d.remove_temp::<bool>(egui::Id::new("eframe_paint_once").with(viewport_id))
+                .unwrap_or(false),
+            d.get_temp::<bool>(egui::Id::new("eframe_keep_frame").with(viewport_id))
+                .unwrap_or(false),
+        )
+    });
+    if !paint_once
+        && textures_delta.set.is_empty()
         && textures_delta.free.is_empty()
         && signature.is_some()
-        && viewport
-            .painted
-            .is_some_and(|(s, at)| Some(s) == signature && at.elapsed() < REPAINT_AFTER)
+        && viewport.painted.is_some_and(|(s, at)| {
+            Some(s) == signature && (keep_frame || at.elapsed() < REPAINT_AFTER)
+        })
     {
         // Looks the same as what the window shows: nothing to draw or swap.
         egui_winit.handle_platform_output(window, platform_output);
