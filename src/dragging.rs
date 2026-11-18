@@ -140,9 +140,26 @@ impl App {
                 .find(|(rect, _)| rect.contains(point))
                 .map(|(_, date)| (*id, *date, true))
         });
+        let found: Vec<_> = days.chain(calendars).collect();
+        // Only a calendar that is really seen under the pointer takes the
+        // memo: not a minimized main window or one hidden behind another
+        // program or the desktop, whose grid may still be drawn.
+        #[cfg(not(test))]
+        if !found.is_empty() {
+            let origins: Vec<_> = found
+                .iter()
+                .map(|(id, _, _)| self.schedule_origins.get(id).map(|o| (o.x, o.y)))
+                .collect();
+            match crate::system::window_seen_under_pointer(&origins) {
+                None => return None,
+                Some(Some(k)) => return Some((found[k].1, found[k].2)),
+                Some(None) => {}
+            }
+        }
         // Only on release: resolve overlapping calendars by native window order.
         // HashMap iteration order must never decide which date receives a memo.
-        days.chain(calendars)
+        found
+            .into_iter()
             .min_by_key(|(id, _, _)| {
                 self.schedule_origins
                     .get(id)

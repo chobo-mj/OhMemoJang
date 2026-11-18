@@ -36,6 +36,76 @@ pub fn window_rank_at_origin(x: f32, y: f32) -> Option<usize> {
     None
 }
 
+/// Which of this program's windows (given by their client origins, physical
+/// pixels) is really seen under the mouse pointer: windows are walked from
+/// the top; our own other windows (the sticker being carried, menus) are
+/// looked through, and anything else there (another program, the desktop)
+/// hides what is below. `None` when no listed window shows there; `Some(None)`
+/// when it cannot be told (not Windows).
+#[cfg_attr(test, allow(dead_code))]
+pub fn window_seen_under_pointer(origins: &[Option<(f32, f32)>]) -> Option<Option<usize>> {
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::Foundation::{POINT, RECT};
+        use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+        use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            GetCursorPos, GetTopWindow, GetWindow, GetWindowLongW, GetWindowRect,
+            GetWindowThreadProcessId, IsIconic, IsWindowVisible, GWL_EXSTYLE, GW_HWNDNEXT,
+            WS_EX_TRANSPARENT,
+        };
+        let mut p = POINT { x: 0, y: 0 };
+        if GetCursorPos(&mut p) == 0 {
+            return Some(None);
+        }
+        let mut window = GetTopWindow(std::ptr::null_mut());
+        while !window.is_null() {
+            let mut r: RECT = std::mem::zeroed();
+            let mut cloaked = 0u32;
+            DwmGetWindowAttribute(
+                window,
+                DWMWA_CLOAKED as u32,
+                &mut cloaked as *mut u32 as *mut _,
+                4,
+            );
+            let seen = IsWindowVisible(window) != 0
+                && IsIconic(window) == 0
+                && cloaked == 0
+                && GetWindowLongW(window, GWL_EXSTYLE) as u32 & WS_EX_TRANSPARENT == 0
+                && GetWindowRect(window, &mut r) != 0
+                && p.x >= r.left
+                && p.x < r.right
+                && p.y >= r.top
+                && p.y < r.bottom;
+            if seen {
+                let mut process = 0;
+                GetWindowThreadProcessId(window, &mut process);
+                if process != std::process::id() {
+                    return None;
+                }
+                let mut origin = POINT { x: 0, y: 0 };
+                if ClientToScreen(window, &mut origin) != 0 {
+                    let hit = origins.iter().position(|o| {
+                        o.is_some_and(|(x, y)| {
+                            (origin.x as f32 - x).abs() < 2. && (origin.y as f32 - y).abs() < 2.
+                        })
+                    });
+                    if hit.is_some() {
+                        return Some(hit);
+                    }
+                }
+            }
+            window = GetWindow(window, GW_HWNDNEXT);
+        }
+        None
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = origins;
+        Some(None)
+    }
+}
+
 /// The program was called OmniMemoJang before: its data folders move to the
 /// new name once, so nothing saved is lost. Does nothing when the new folder
 /// exists already or there is no old one.
