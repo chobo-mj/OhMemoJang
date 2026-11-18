@@ -731,6 +731,19 @@ impl App {
                 egui::CentralPanel::default().show(ctx, |_| {});
                 return;
             }
+            // Pointer moves inside a sticker in front of it: like a quiet
+            // sticker, it keeps its last picture for a moment.
+            let now = ctx.input(|i| i.time);
+            let changes = lists::CHANGES.load(std::sync::atomic::Ordering::Relaxed);
+            if studio::may_rest(self.main_quiet(ctx, changes, now)) {
+                let rest = egui::Id::new("eframe_rest").with(ctx.viewport_id());
+                ctx.data_mut(|d| d.insert_temp(rest, true));
+                root.request_repaint_after(std::time::Duration::from_secs_f64(
+                    studio::REST_MAX + 0.05,
+                ));
+                return;
+            }
+            self.studio.main_drawn = Some((now, changes));
             self.main_shortcuts(ctx);
             self.main_ui(ctx);
             self.picker_window(ctx);

@@ -58,6 +58,10 @@ pub struct Window {
 /// A window resting (see [`may_rest`]) is built in full again at least this
 /// often, and once more this long after the last rest.
 pub(crate) const REST_MAX: f64 = 0.25;
+/// The main window behind a memo window rests only while the pointer is at
+/// least this far (points) inside that memo window: leaving it, the pointer
+/// meets a main window that was built for it.
+const MAIN_REST_INSET: f32 = 24.;
 /// The pointer this close to a window (points) keeps it built every frame:
 /// a window it enters has its widgets laid out, so the first click counts.
 const REST_NEAR: f32 = 160.;
@@ -256,6 +260,8 @@ pub struct Studio {
     pub windows: BTreeMap<usize, Window>,
     pub help: bool,
     pub drag: Option<StickerDrag>,
+    /// When the main window was last built in full, and `lists::CHANGES` then.
+    pub(crate) main_drawn: Option<(f64, u64)>,
 }
 impl Studio {
     pub fn open(&mut self, i: usize, occurrence: Option<NaiveDate>) {
@@ -2075,6 +2081,62 @@ impl App {
             .any(|w| w.open && w.mode == Mode::Editor);
         self.sticky = self.studio.windows.values().any(|w| w.open);
     }
+    /// Input, a menu or a drag in the window `ctx` draws: nothing it shows
+    /// may be skipped this frame.
+    fn window_busy(&self, ctx: &egui::Context) -> bool {
+        let here = ctx.viewport_id();
+        ctx.input(|v| {
+            !v.events.is_empty()
+                || !v.raw.dropped_files.is_empty()
+                || !v.raw.hovered_files.is_empty()
+                || v.pointer.hover_pos().is_some()
+                || v.pointer.any_down()
+                || v.viewport().close_requested()
+        }) || crate::tutorial::active()
+            || ctx.memory(|m| m.focused().is_some() || m.any_popup_open())
+            || crate::float::shown_in(ctx)
+            // A floating area (the picture toolbar, a toast) left out of one
+            // frame fades in again: it keeps its window built.
+            || floating_area_shown(ctx)
+            || self.drag.is_some()
+            || self.studio.drag.is_some()
+            || self.extra.picker.as_ref().is_some_and(|p| p.owner == here)
+            || (self.extra.scope_owner == here && self.extra.completion_scope.is_some())
+    }
+    /// The pointer is well inside an open memo window (so it is in front
+    /// of the main window there; the main window had the pointer otherwise).
+    fn pointer_inside_a_memo(&self, ctx: &egui::Context) -> bool {
+        let Some((x, y)) = crate::system::cursor_pos() else {
+            return false;
+        };
+        let p = Pos2::new(x as f32, y as f32);
+        ctx.input(|v| {
+            self.studio
+                .windows
+                .iter()
+                .filter(|(_, w)| w.open)
+                .any(|(&i, _)| {
+                    v.raw.viewports.get(&viewport(i)).is_some_and(|info| {
+                        match (info.outer_rect, info.native_pixels_per_point) {
+                            (Some(r), Some(ppp)) => Rect::from_min_max(r.min * ppp, r.max * ppp)
+                                .shrink(MAIN_REST_INSET * ppp)
+                                .contains(p),
+                            _ => false,
+                        }
+                    })
+                })
+        })
+    }
+    /// The facts [`may_rest`] decides on, for the main window this frame.
+    pub(crate) fn main_quiet(&self, ctx: &egui::Context, changes: u64, now: f64) -> Quiet {
+        let (drawn_at, drawn_changes) = self.studio.main_drawn.unwrap_or((f64::NEG_INFINITY, 0));
+        Quiet {
+            busy: self.window_busy(ctx),
+            pointer_near: !self.pointer_inside_a_memo(ctx),
+            changed: changes != drawn_changes,
+            since_drawn: now - drawn_at,
+        }
+    }
     /// The facts [`may_rest`] decides on, for memo window `i` this frame.
     fn quiet(
         &self,
@@ -2085,24 +2147,9 @@ impl App {
         changes: u64,
         now: f64,
     ) -> Quiet {
-        let here = ctx.viewport_id();
-        let own_input = ctx.input(|v| {
-            !v.events.is_empty()
-                || !v.raw.dropped_files.is_empty()
-                || !v.raw.hovered_files.is_empty()
-                || v.pointer.hover_pos().is_some()
-                || v.pointer.any_down()
-                || v.viewport().focused == Some(true)
-                || v.viewport().close_requested()
-        });
         let doc = &self.data.notes[i].document;
-        let busy = own_input
-            || crate::tutorial::active()
-            || ctx.memory(|m| m.focused().is_some() || m.any_popup_open())
-            || crate::float::shown_in(ctx)
-            // A floating area (the picture toolbar) left out of one frame
-            // fades in again: it keeps its window built.
-            || floating_area_shown(ctx)
+        let busy = self.window_busy(ctx)
+            || ctx.input(|v| v.viewport().focused == Some(true))
             || w.menu.is_some()
             || w.help
             || w.focus
@@ -2113,11 +2160,7 @@ impl App {
             || w.applied != Some(key)
             || !w.native.idle()
             || doc.requested_selection.is_some()
-            || doc.requested_tab.is_some()
-            || self.drag.is_some()
-            || self.studio.drag.is_some()
-            || self.extra.picker.as_ref().is_some_and(|p| p.owner == here)
-            || (self.extra.scope_owner == here && self.extra.completion_scope.is_some());
+            || doc.requested_tab.is_some();
         let pointer_near = match (
             crate::system::cursor_pos(),
             ctx.input(|v| v.viewport().outer_rect),
@@ -2597,6 +2640,35 @@ mod tests {
         run(false);
         run(false);
         assert!(!floating_area_shown(&ctx), "toolbar gone");
+    }
+    #[test]
+    fn input_keeps_a_window_built() {
+        let a = App::sample(Local::now().date_naive());
+        let ctx = egui::Context::default();
+        let busy = |events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                events,
+                ..Default::default()
+            };
+            let mut busy = false;
+            let _ = ctx.run(input, |ctx| busy = a.window_busy(ctx));
+            busy
+        };
+        busy(vec![]);
+        assert!(!busy(vec![]), "nothing happening");
+        assert!(
+            busy(vec![egui::Event::PointerMoved(egui::pos2(5., 5.))]),
+            "the pointer moves in it"
+        );
+        assert!(
+            busy(vec![egui::Event::PointerGone]),
+            "the pointer leaves it"
+        );
+        assert!(!busy(vec![]));
+        assert!(
+            busy(vec![egui::Event::Text("가".into())]),
+            "typing reaches it"
+        );
     }
     #[test]
     fn a_window_rests_only_when_nothing_concerns_it() {
