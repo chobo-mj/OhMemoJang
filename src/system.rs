@@ -106,6 +106,29 @@ pub fn window_seen_under_pointer(origins: &[Option<(f32, f32)>]) -> Option<Optio
     }
 }
 
+/// The NVIDIA Optimus switch read when the OpenGL driver is chosen.
+const GPU_SWITCH: &str = "SHIM_MCCOMPAT";
+/// Asks for the integrated GPU on laptops with two (NVIDIA Optimus). The
+/// screen is driven by the integrated one: drawing on the discrete GPU kept
+/// it awake and copied every frame across, about 16 driver threads and 50 MB
+/// per window (measured: 4 windows, 408 MB private and 99 threads on NVIDIA,
+/// 69 MB and 17 threads on the integrated GPU). Call before the first
+/// window; a choice the user made with the same variable is kept.
+pub fn prefer_integrated_gpu() {
+    if std::env::var_os(GPU_SWITCH).is_none() {
+        std::env::set_var(GPU_SWITCH, "0x800000000");
+        GPU_ASKED.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+static GPU_ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Once the drawing context exists: programs this one starts (a browser for
+/// a link, Explorer) must not inherit the choice.
+pub fn forget_gpu_choice() {
+    if GPU_ASKED.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        std::env::remove_var(GPU_SWITCH);
+    }
+}
+
 /// The program was called OmniMemoJang before: its data folders move to the
 /// new name once, so nothing saved is lost. Does nothing when the new folder
 /// exists already or there is no old one.
@@ -277,6 +300,26 @@ pub fn windows_build() -> u32 {
 
 #[cfg(test)]
 mod standing_tests {
+    #[test]
+    fn the_gpu_choice_is_made_once_and_not_passed_on() {
+        // A choice already made (by the user) is left alone.
+        std::env::set_var(super::GPU_SWITCH, "0x800000001");
+        super::prefer_integrated_gpu();
+        super::forget_gpu_choice();
+        assert_eq!(
+            std::env::var(super::GPU_SWITCH).as_deref(),
+            Ok("0x800000001")
+        );
+        // Otherwise it is asked for, then gone for programs started later.
+        std::env::remove_var(super::GPU_SWITCH);
+        super::prefer_integrated_gpu();
+        assert_eq!(
+            std::env::var(super::GPU_SWITCH).as_deref(),
+            Ok("0x800000000")
+        );
+        super::forget_gpu_choice();
+        assert!(std::env::var_os(super::GPU_SWITCH).is_none());
+    }
     #[test]
     fn only_windows_11_24h2_lacks_the_standing_calendar() {
         use super::standing_unsupported_on as no;

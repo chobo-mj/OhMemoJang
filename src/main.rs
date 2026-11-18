@@ -166,6 +166,8 @@ struct App {
 const COMPACT_ICON: f32 = 38.;
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        // The drawing context exists now.
+        system::forget_gpu_choice();
         let mut fonts = egui::FontDefinitions::default();
         // Font files are mapped, not read: each file is shared by the faces
         // that come from it and only the parts in use occupy memory.
@@ -1360,6 +1362,7 @@ fn main() -> eframe::Result {
         return Ok(());
     }
     system::migrate_old_data_dirs();
+    system::prefer_integrated_gpu();
     // The root window is an invisible, never-minimized host. Every visible
     // window (main, calendar, stickers, dialogs) is an independent child, so
     // minimizing the main window leaves stickers alive on the desktop and the
