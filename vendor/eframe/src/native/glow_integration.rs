@@ -119,10 +119,20 @@ struct Viewport {
     window: Option<Arc<Window>>,
     egui_winit: Option<egui_winit::State>,
 
-    /// What the window last showed (signature of the painted frame, and when it
-    /// was painted). A frame that would look the same is not painted and
-    /// swapped again: that costs the graphics driver far more than the frame.
-    painted: Option<(u64, Instant)>,
+    /// What the window last showed (signature of the painted frame). A frame
+    /// that would look the same is not painted and swapped again: that costs
+    /// the graphics driver far more than the frame.
+    painted: Option<u64>,
+
+    /// Minimized, maximized and focused as of the last frame: when one of
+    /// them changes, the window is painted even if its frame looks the same.
+    shown: Option<ShownState>,
+}
+
+type ShownState = (Option<bool>, Option<bool>, Option<bool>);
+
+fn shown_state(info: &egui::ViewportInfo) -> ShownState {
+    (info.minimized, info.maximized, info.focused)
 }
 
 /// A fingerprint of everything a frame draws.
@@ -175,8 +185,6 @@ fn frame_signature(
     Some(h)
 }
 
-/// A window shown again after this long is painted even if nothing changed.
-const REPAINT_AFTER: std::time::Duration = std::time::Duration::from_secs(3);
 
 // ----------------------------------------------------------------------------
 
@@ -718,13 +726,18 @@ impl GlowWinitRunning<'_> {
         let screen_size_in_pixels: [u32; 2] = window.inner_size().into();
 
         let signature = frame_signature(&clipped_primitives, pixels_per_point, screen_size_in_pixels);
+        // A window minimized and restored, maximized or focused again may
+        // have lost what it showed: it is painted then. Otherwise a frame
+        // that looks the same is not, however long ago the last one was (a
+        // timed refresh of every window at once made the screen stutter).
+        let state = shown_state(&viewport.info);
+        let shown_changed = viewport.shown.replace(state) != Some(state);
         let unchanged = textures_delta.set.is_empty()
             && textures_delta.free.is_empty()
             && viewport.actions_requested.is_empty()
+            && !shown_changed
             && signature.is_some()
-            && viewport
-                .painted
-                .is_some_and(|(s, at)| Some(s) == signature && at.elapsed() < REPAINT_AFTER);
+            && viewport.painted == signature;
 
         if !unchanged {
             if !clear_before_update {
@@ -788,7 +801,7 @@ impl GlowWinitRunning<'_> {
 
             if !unchanged {
                 gl_surface.swap_buffers(context)?;
-                viewport.painted = signature.map(|s| (s, Instant::now()));
+                viewport.painted = signature;
             }
             frame_timer.resume();
         }
@@ -1125,6 +1138,7 @@ impl GlutinWindowContext {
                 window: window.map(Arc::new),
                 egui_winit: None,
                 painted: None,
+                shown: None,
             },
         );
 
@@ -1441,6 +1455,7 @@ fn initialize_or_update_viewport(
                 egui_winit: None,
                 gl_surface: None,
                 painted: None,
+                shown: None,
             })
         }
 
@@ -1579,24 +1594,19 @@ fn render_immediate_viewport(
     let screen_size_in_pixels: [u32; 2] = window.inner_size().into();
 
     let signature = frame_signature(&clipped_primitives, pixels_per_point, screen_size_in_pixels);
-    // The app can ask for a window to be painted now (`eframe_paint_once`),
-    // or to keep showing its last frame without the periodic refresh
-    // (`eframe_keep_frame`), for a window whose repaint is costly to others.
-    let (paint_once, keep_frame) = egui_ctx.data_mut(|d| {
-        (
-            d.remove_temp::<bool>(egui::Id::new("eframe_paint_once").with(viewport_id))
-                .unwrap_or(false),
-            d.get_temp::<bool>(egui::Id::new("eframe_keep_frame").with(viewport_id))
-                .unwrap_or(false),
-        )
+    // The app can ask for a window to be painted now (`eframe_paint_once`).
+    let paint_once = egui_ctx.data_mut(|d| {
+        d.remove_temp::<bool>(egui::Id::new("eframe_paint_once").with(viewport_id))
+            .unwrap_or(false)
     });
+    let state = shown_state(&viewport.info);
+    let shown_changed = viewport.shown.replace(state) != Some(state);
     if !paint_once
+        && !shown_changed
         && textures_delta.set.is_empty()
         && textures_delta.free.is_empty()
         && signature.is_some()
-        && viewport.painted.is_some_and(|(s, at)| {
-            Some(s) == signature && (keep_frame || at.elapsed() < REPAINT_AFTER)
-        })
+        && viewport.painted == signature
     {
         // Looks the same as what the window shows: nothing to draw or swap.
         egui_winit.handle_platform_output(window, platform_output);
@@ -1637,7 +1647,7 @@ fn render_immediate_viewport(
             log::error!("swap_buffers failed: {err}");
         }
     }
-    viewport.painted = signature.map(|s| (s, Instant::now()));
+    viewport.painted = signature;
 
     egui_winit.handle_platform_output(window, platform_output);
 
@@ -1672,3 +1682,4 @@ fn save_screenshot_and_exit(
     #[allow(clippy::exit)]
     std::process::exit(0);
 }
+

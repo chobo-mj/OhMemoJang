@@ -220,24 +220,16 @@ impl App {
             |ctx, _| {
                 let theme = self.cal.theme.checked_sub(1).and_then(|t| THEMES.get(t));
                 self.theme_with(ctx, theme.map_or(self.dark, |t| t.dark));
-                // Pinned under the desktop icons, a repaint of this big
-                // window makes Windows redraw the whole desktop (a stutter
-                // of the mouse): it is painted only when it looks different,
-                // without the periodic refresh, and once right after it was
-                // pinned or let go (`vendor/eframe`).
+                // Painted once right after it was pinned under the desktop
+                // icons or let go, even though it looks the same: it moved
+                // to another layer (`vendor/eframe` skips same-looking frames).
                 let pinned = self.cal.standing_pinned();
                 let me = ctx.viewport_id();
-                ctx.data_mut(|d| {
-                    let keep = egui::Id::new("eframe_keep_frame").with(me);
-                    if pinned {
-                        d.insert_temp(keep, true);
-                    } else {
-                        d.remove::<bool>(keep);
-                    }
-                    if pinned != self.cal.drew_pinned {
-                        d.insert_temp(egui::Id::new("eframe_paint_once").with(me), true);
-                    }
-                });
+                if pinned != self.cal.drew_pinned {
+                    ctx.data_mut(|d| {
+                        d.insert_temp(egui::Id::new("eframe_paint_once").with(me), true)
+                    });
+                }
                 self.cal.drew_pinned = pinned;
                 self.drag_input(ctx);
                 if ctx.input(|i| i.viewport().close_requested()) {

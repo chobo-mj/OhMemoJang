@@ -723,6 +723,13 @@ impl App {
                     root.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
                 }
             }
+            // Minimized, it shows nothing: its pages are not laid out again
+            // each time the mouse moves over a sticker (every window's frame
+            // runs together). Restored, it is drawn and painted at once.
+            if ctx.input(|i| i.viewport().minimized == Some(true)) {
+                egui::CentralPanel::default().show(ctx, |_| {});
+                return;
+            }
             self.main_shortcuts(ctx);
             self.main_ui(ctx);
             self.picker_window(ctx);
