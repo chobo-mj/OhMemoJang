@@ -1282,6 +1282,10 @@ impl App {
             } else if self.is_blank(i) && !self.data.notes[i].purged {
                 self.studio.windows.remove(&i);
                 self.purge_note(i);
+                // No input comes with this, so the cached lists (calendar,
+                // 내 작업실, …) are told to look again; else the erased memo
+                // would linger there as '삭제된 메모'.
+                crate::lists::CHANGES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 self.toast = "내용 없이 닫은 일정 메모를 지웠어요".into();
             }
         }
@@ -2472,8 +2476,13 @@ mod tests {
         for i in [blank, written, plain] {
             a.studio.windows.get_mut(&i).unwrap().open = false;
         }
+        let before = crate::lists::CHANGES.load(std::sync::atomic::Ordering::Relaxed);
         a.drop_blank_drafts();
         assert!(a.data.notes[blank].purged && a.data.notes[blank].deleted);
+        assert!(
+            crate::lists::CHANGES.load(std::sync::atomic::Ordering::Relaxed) > before,
+            "cached lists drop the erased memo at once"
+        );
         assert!(!a.studio.windows.contains_key(&blank));
         assert!(!a.data.notes[written].deleted, "a memo with a title stays");
         assert!(!a.data.notes[plain].deleted, "only calendar drag memos");
