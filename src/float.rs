@@ -48,6 +48,27 @@ fn open(ctx: &egui::Context, id: Id, anchor: Rect, above: bool, width: f32) {
     });
 }
 
+/// Marks that the window `ctx` is drawing has one of these menus open.
+fn note_open(ctx: &egui::Context) {
+    let key = open_in_key(ctx);
+    ctx.data_mut(|d| d.insert_temp(key, true));
+}
+/// Read before taking the context's data: asking for the viewport inside
+/// `data_mut` would wait on the lock it holds.
+fn open_in_key(ctx: &egui::Context) -> Id {
+    Id::new("float_open_in").with(ctx.viewport_id())
+}
+
+/// Whether the window `ctx` is drawing showed one of these menus in its
+/// previous frame (and forget it). A menu is a window of its own: while the
+/// pointer is on it, the window it belongs to must still show the toolbar the
+/// menu hangs from, or the menu goes with it and comes back, again and again.
+pub fn was_open_in(ctx: &egui::Context) -> bool {
+    let key = open_in_key(ctx);
+    ctx.data_mut(|d| d.remove_temp::<bool>(key))
+        .unwrap_or(false)
+}
+
 pub fn close(ctx: &egui::Context, id: Id) {
     ctx.data_mut(|d| d.remove::<Open>(state(id)));
 }
@@ -80,6 +101,7 @@ fn show(
     let Some(mut o) = ctx.data(|d| d.get_temp::<Open>(state(id))) else {
         return;
     };
+    note_open(ctx);
     if !std::mem::take(&mut o.fresh) {
         let press = ctx.input(|v| {
             v.pointer.any_pressed()
@@ -205,5 +227,30 @@ mod tests {
         assert!(is_open(&ctx, id));
         close(&ctx, id);
         assert!(!is_open(&ctx, id));
+    }
+    #[test]
+    fn the_window_of_an_open_menu_hears_of_it_once() {
+        let ctx = egui::Context::default();
+        let id = Id::new("m");
+        let mut seen = Vec::new();
+        for frame in 0..3 {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                seen.push(was_open_in(ctx));
+                if frame == 0 {
+                    open_at(ctx, id, Pos2::new(10., 10.), 200.);
+                }
+                if frame < 2 {
+                    menu(ctx, id, |ui| {
+                        ui.label("x");
+                    });
+                }
+                if frame == 1 {
+                    close(ctx, id);
+                }
+            });
+        }
+        // Shown in frames 0 and 1; not shown (closed) in frame 2.
+        assert_eq!(seen, [false, true, true]);
+        assert!(!was_open_in(&ctx));
     }
 }

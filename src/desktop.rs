@@ -1217,9 +1217,12 @@ impl App {
                     ui.horizontal(|ui| {
                         ui.label("너비");
                         ui.add(
-                            egui::Slider::new(&mut self.desktop.sticker_size.x, 340.0..=900.0)
-                                .step_by(10.)
-                                .suffix(" px"),
+                            egui::Slider::new(
+                                &mut self.desktop.sticker_size.x,
+                                crate::studio::STICKER_MIN.x..=900.0,
+                            )
+                            .step_by(10.)
+                            .suffix(" px"),
                         );
                         ui.add_space(12.);
                         ui.label("높이");

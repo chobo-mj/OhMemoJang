@@ -368,7 +368,7 @@ impl SettingsRec {
         d.calendar_basis = self.calendar_basis.min(2);
         d.always_sticker = self.always_sticker;
         d.sticker_size = Vec2::new(
-            self.sticker_size[0].clamp(340., 900.),
+            self.sticker_size[0].clamp(crate::studio::STICKER_MIN.x, 900.),
             self.sticker_size[1].clamp(220., 900.),
         );
         d.daily_today = self.daily_today;

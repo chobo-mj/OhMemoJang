@@ -2053,6 +2053,10 @@ const TOOLS: [Tool; 8] = [
     Tool::Color,
     Tool::Opacity,
 ];
+/// Height of a memo footer's format buttons at `width`.
+pub fn footer_tools_height(width: f32) -> f32 {
+    toolbar_height(width, TOOLS.len())
+}
 fn toolbar_height(width: f32, count: usize) -> f32 {
     let columns = (((width.max(28.) + 2.) / 30.).floor() as usize).clamp(1, count);
     let rows = count.div_ceil(columns);
@@ -2111,15 +2115,25 @@ fn toolbar(ui: &mut egui::Ui, doc: &mut Document, id: Id, opacity: bool) -> egui
                                 ui,
                                 popup_id,
                                 &response,
-                                if tool == Tool::Color { 250. } else { 190. },
+                                match tool {
+                                    Tool::Color => 250.,
+                                    // The slider with its value, and four presets.
+                                    Tool::Opacity => 250.,
+                                    _ => 190.,
+                                },
                                 |ui| {
                                     ui.set_min_width(170.);
                                     match tool {
                                         Tool::Font => {
                                             ui.strong("글꼴");
-                                            egui::ScrollArea::vertical().max_height(220.).show(
-                                                ui,
-                                                |ui| {
+                                            // Its window grows to fit what it
+                                            // shows: without a minimum the list
+                                            // kept the first, small window's
+                                            // height (three fonts).
+                                            egui::ScrollArea::vertical()
+                                                .max_height(220.)
+                                                .min_scrolled_height(220.)
+                                                .show(ui, |ui| {
                                                     for name in font_choices() {
                                                         if ui
                                                             .selectable_label(
@@ -2132,8 +2146,7 @@ fn toolbar(ui: &mut egui::Ui, doc: &mut Document, id: Id, opacity: bool) -> egui
                                                             ui.memory_mut(|m| m.close_popup());
                                                         }
                                                     }
-                                                },
-                                            );
+                                                });
                                         }
                                         Tool::Size => {
                                             ui.strong("글자 크기");

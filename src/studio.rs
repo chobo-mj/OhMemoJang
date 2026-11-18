@@ -5,6 +5,10 @@ use std::collections::BTreeMap;
 
 /// The color of the "중요 메모" star shown before titles.
 pub const STAR: Color32 = Color32::from_rgb(236, 168, 32);
+/// The smallest sticker: both of its toolbars still show whole (the top bar's
+/// buttons with a little blank space to drag it by, the format buttons on
+/// one row).
+pub const STICKER_MIN: Vec2 = Vec2::new(290., 220.);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     Editor,
@@ -113,7 +117,7 @@ impl Window {
         if let Some(s) = size(r.full_size, Vec2::new(480., 480.)) {
             w.full_size = s;
         }
-        if let Some(s) = size(r.sticker_size, Vec2::new(340., 220.)) {
+        if let Some(s) = size(r.sticker_size, STICKER_MIN) {
             w.sticker_size = s;
         }
         if r.title_width > 0. {
@@ -300,7 +304,7 @@ impl App {
         let builder = egui::ViewportBuilder::default()
             .with_title("새 스티커 메모 크기 설정")
             .with_inner_size(start)
-            .with_min_inner_size([340., 220.])
+            .with_min_inner_size(STICKER_MIN)
             .with_max_inner_size([900., 900.])
             .with_taskbar(false)
             .with_window_level(egui::WindowLevel::AlwaysOnTop);
@@ -357,7 +361,10 @@ impl App {
         if closed {
             self.desktop.size_probe = false;
             if let Some(s) = self.desktop.size_probe_last.take() {
-                let size = Vec2::new(s.x.round().clamp(340., 900.), s.y.round().clamp(220., 900.));
+                let size = Vec2::new(
+                    s.x.round().clamp(STICKER_MIN.x, 900.),
+                    s.y.round().clamp(220., 900.),
+                );
                 self.desktop.sticker_size = size;
                 self.toast = format!("새 스티커 메모 크기를 {} × {}로 정했습니다", size.x, size.y);
             }
@@ -1344,7 +1351,7 @@ impl App {
             } else {
                 match mode {
                     Mode::Editor => Vec2::new(480., 480.),
-                    Mode::Sticker => Vec2::new(340., 220.),
+                    Mode::Sticker => STICKER_MIN,
                     Mode::Title => Vec2::new(160., 40.),
                     Mode::Swatch => Vec2::splat(16.),
                 }
@@ -1536,16 +1543,9 @@ impl App {
                                 || ui.rect_contains_pointer(ui.max_rect());
                             let button = 28. + ui.spacing().item_spacing.x;
                             ui.horizontal(|ui| {
-                                // The buttons' space is always reserved so the title
-                                // does not move when they appear on hover.
-                                if hover {
-                                    if icon_button(ui, Icon::Edit, "메모 상세 편집").clicked()
-                                    {
-                                        w.edit();
-                                    }
-                                } else {
-                                    ui.add_space(button);
-                                }
+                                // Done at the left end; the space of the right
+                                // end's buttons is always kept, so neither they
+                                // nor the title move when they appear on hover.
                                 let mut done = self.data.notes[i].done_on(w.occurrence);
                                 if crate::ui::round_check(ui, &mut done, None).changed() {
                                     self.done_at(i, w.occurrence, done);
@@ -1647,9 +1647,13 @@ impl App {
                         });
                 } else {
                     let focused = ctx.input(|v| v.viewport().focused.unwrap_or(false));
+                    // A footer popup (font, size, color, opacity) is a window of
+                    // its own: the toolbar stays while one is open.
+                    let menu_open = crate::float::was_open_in(ctx);
                     let engaged = mode == Mode::Editor
                         || !self.desktop.auto_toolbar
                         || focused
+                        || menu_open
                         || ctx.input(|v| v.pointer.hover_pos().is_some());
                     egui::TopBottomPanel::top(egui::Id::new(("memo_header", i)))
                         .exact_height(38.)
@@ -1735,12 +1739,10 @@ impl App {
                         let small_font = egui::TextStyle::Small.resolve(&ctx.style());
                         ctx.fonts(|f| f.row_height(&small_font)) + 4.
                     };
+                    // The tab row (40) and, when shown, the format buttons in
+                    // as many rows as the width needs.
                     let footer_height = (if engaged {
-                        if width >= 300. {
-                            72.
-                        } else {
-                            102.
-                        }
+                        44. + crate::composer::footer_tools_height(width - 18.)
                     } else {
                         40.
                     }) + status_height;
@@ -2022,14 +2024,7 @@ impl App {
                     w.sticker();
                 }
             }
-            let controls = if mode == Mode::Editor {
-                7.
-            } else if engaged {
-                8.
-            } else {
-                4.
-            };
-            let gap = (ui.available_width() - controls * 32.).max(0.);
+            let gap = (ui.available_width() - header_controls(mode, engaged) as f32 * 32.).max(0.);
             let response = ui.add_sized(
                 [gap, 28.],
                 egui::Label::new(
@@ -2171,6 +2166,21 @@ impl App {
                 w.open = false;
             }
         });
+    }
+}
+/// How many 28 px buttons (each with 4 px spacing before it) follow the gap
+/// of a memo window's top bar, so they end exactly at its right edge. Keep in
+/// step with [`App::memo_header`].
+fn header_controls(mode: Mode, engaged: bool) -> usize {
+    match (mode, engaged) {
+        // More, schedule, always on top, done, fold, close.
+        (Mode::Sticker, true) => 6,
+        // Always on top, done, fold, close.
+        (Mode::Sticker, false) => 4,
+        // More, opacity, schedule, always on top, maximize, close.
+        (_, true) => 6,
+        // Opacity, always on top.
+        (_, false) => 2,
     }
 }
 /// The project / linked-memo buttons on a sticker's tab row, and the space
@@ -2692,6 +2702,57 @@ mod arrangement_tests {
             .shapes
             .iter()
             .any(|shape| matches!(&shape.shape, egui::Shape::Text(t) if t.galley.job.text == text))
+    }
+    #[test]
+    fn the_top_bar_buttons_end_at_the_right_edge_down_to_the_smallest_sticker() {
+        let mut a = App::sample(Local::now().date_naive());
+        let ctx = egui::Context::default();
+        // The editor window is at least 480 wide.
+        for (width, mode, engaged) in [STICKER_MIN.x, 360., 600.]
+            .into_iter()
+            .flat_map(|x| [(x, Mode::Sticker, true), (x, Mode::Sticker, false)])
+            .chain(
+                [480., 700.]
+                    .into_iter()
+                    .flat_map(|x| [(x, Mode::Editor, true), (x, Mode::Editor, false)]),
+            )
+        {
+            {
+                let mut w = Window::new(mode);
+                let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 300.));
+                let mut ends = (0., 0.);
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(screen),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        // The sticker's top bar: 10 px margins.
+                        egui::CentralPanel::default()
+                            .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(10, 4)))
+                            .show(ctx, |ui| {
+                                let right = ui.max_rect().right();
+                                let bar = ui
+                                    .scope(|ui| a.memo_header(ui, 0, &mut w, mode, engaged, false))
+                                    .response
+                                    .rect;
+                                ends = (bar.right(), right);
+                            });
+                    },
+                );
+                assert!(
+                    (ends.0 - ends.1).abs() < 1.,
+                    "{width} {mode:?} engaged {engaged}: {ends:?}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn the_smallest_sticker_keeps_its_format_buttons_on_one_row() {
+        assert_eq!(
+            crate::composer::footer_tools_height(STICKER_MIN.x - 18.),
+            28.
+        );
     }
     #[test]
     fn arrange_submenu_omits_the_close_actions_the_context_menu_still_has() {
