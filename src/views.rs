@@ -1169,6 +1169,8 @@ impl App {
         if viewport != ui.ctx().viewport_id() {
             return;
         }
+        // An end is being moved, not the memo.
+        self.drag = None;
         if !ui.input(|v| v.pointer.primary_down()) {
             self.band_resize = None;
             let n = &self.data.notes[i];
@@ -1287,13 +1289,17 @@ impl App {
             })
             .unwrap_or(days[0]);
         response.dnd_set_drag_payload(NoteDrag);
-        self.band_edges(ui, i, rect, open_left, open_right);
+        let grips = self.band_edges(ui, i, rect, open_left, open_right);
         let occurrence = if self.desktop.calendar_basis == 1 {
             Some(day)
         } else {
             None
         };
         self.drag_source_on(ui, &response, i, occurrence);
+        if let Some(s) = self.sources.last_mut() {
+            // The grips at the ends resize; only the middle carries the memo.
+            s.rect = grips.intersect(ui.clip_rect());
+        }
         if response.clicked() {
             self.open_sticker(i, occurrence);
         }
@@ -1308,15 +1314,22 @@ impl App {
         rect: Rect,
         open_left: bool,
         open_right: bool,
-    ) {
+    ) -> Rect {
         let n = &self.data.notes[i];
         if self.desktop.calendar_basis != 1 || !n.repeat.is_none() {
-            return;
+            return rect;
         }
         let Some((start, end)) = n.span() else {
-            return;
+            return rect;
         };
         let grip = 7_f32.min(rect.width() / 3.);
+        let mut middle = rect;
+        if open_left {
+            middle.min.x += grip;
+        }
+        if open_right {
+            middle.max.x -= grip;
+        }
         for (open, left) in [(open_left, true), (open_right, false)] {
             if !open {
                 continue;
@@ -1348,6 +1361,7 @@ impl App {
                 self.band_resize = Some((ui.ctx().viewport_id(), i, anchor, Some((start, end))));
             }
         }
+        middle
     }
     /// Colors of the month grid: the app's own, or the calendar window's
     /// theme. Returns the tone and the Sunday, Saturday and today marks.
