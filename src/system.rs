@@ -106,26 +106,47 @@ pub fn window_seen_under_pointer(origins: &[Option<(f32, f32)>]) -> Option<Optio
     }
 }
 
-/// The NVIDIA Optimus switch read when the OpenGL driver is chosen.
+/// The NVIDIA Optimus switch, read when a window's drawing context is made.
 const GPU_SWITCH: &str = "SHIM_MCCOMPAT";
-/// Asks for the integrated GPU on laptops with two (NVIDIA Optimus). The
-/// screen is driven by the integrated one: drawing on the discrete GPU kept
-/// it awake and copied every frame across, about 16 driver threads and 50 MB
-/// per window (measured: 4 windows, 408 MB private and 99 threads on NVIDIA,
-/// 69 MB and 17 threads on the integrated GPU). Call before the first
-/// window; a choice the user made with the same variable is kept.
-pub fn prefer_integrated_gpu() {
-    if std::env::var_os(GPU_SWITCH).is_none() {
-        std::env::set_var(GPU_SWITCH, "0x800000000");
-        GPU_ASKED.store(true, std::sync::atomic::Ordering::Relaxed);
-    }
+const INTEGRATED: &str = "0x800000000";
+/// The values a person sets by hand (integrated, NVIDIA). Others are
+/// inherited: a program running on the NVIDIA GPU passes `0x810000001` to
+/// the programs it starts (seen from a terminal opened by such a program).
+fn chosen_by_hand(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|v| v == INTEGRATED || v == "0x800000001")
 }
+/// The switch as it was before [`prefer_integrated_gpu`], to put back.
+static GPU_BEFORE: std::sync::Mutex<Option<Option<std::ffi::OsString>>> =
+    std::sync::Mutex::new(None);
 static GPU_ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-/// Once the drawing context exists: programs this one starts (a browser for
-/// a link, Explorer) must not inherit the choice.
+
+/// On laptops with two GPUs (NVIDIA Optimus) the program draws on the
+/// integrated one, which drives the screen. Drawing on the NVIDIA GPU kept it
+/// awake and copied every frame across; its driver also took about 16
+/// threads and 50 MB per window (measured with 17 stickers and the main
+/// window: 1036 MB private and 323 threads, against 72 MB and 17 threads).
+/// Call before the first window. A value set by hand is kept.
+pub fn prefer_integrated_gpu() {
+    let before = std::env::var_os(GPU_SWITCH);
+    if chosen_by_hand(before.as_deref()) {
+        return;
+    }
+    std::env::set_var(GPU_SWITCH, INTEGRATED);
+    if let Ok(mut b) = GPU_BEFORE.lock() {
+        *b = Some(before);
+    }
+    GPU_ASKED.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+/// Once the first windows have their drawing contexts: programs this one
+/// starts (a browser for a link) get the switch as it was.
 pub fn forget_gpu_choice() {
-    if GPU_ASKED.swap(false, std::sync::atomic::Ordering::Relaxed) {
-        std::env::remove_var(GPU_SWITCH);
+    if !GPU_ASKED.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    let before = GPU_BEFORE.lock().ok().and_then(|mut b| b.take());
+    match before.flatten() {
+        Some(v) => std::env::set_var(GPU_SWITCH, v),
+        None => std::env::remove_var(GPU_SWITCH),
     }
 }
 
@@ -301,24 +322,32 @@ pub fn windows_build() -> u32 {
 #[cfg(test)]
 mod standing_tests {
     #[test]
-    fn the_gpu_choice_is_made_once_and_not_passed_on() {
-        // A choice already made (by the user) is left alone.
-        std::env::set_var(super::GPU_SWITCH, "0x800000001");
-        super::prefer_integrated_gpu();
-        super::forget_gpu_choice();
-        assert_eq!(
-            std::env::var(super::GPU_SWITCH).as_deref(),
-            Ok("0x800000001")
-        );
-        // Otherwise it is asked for, then gone for programs started later.
-        std::env::remove_var(super::GPU_SWITCH);
-        super::prefer_integrated_gpu();
-        assert_eq!(
-            std::env::var(super::GPU_SWITCH).as_deref(),
-            Ok("0x800000000")
-        );
-        super::forget_gpu_choice();
-        assert!(std::env::var_os(super::GPU_SWITCH).is_none());
+    fn the_integrated_gpu_is_asked_for_unless_chosen_by_hand_and_then_put_back() {
+        use super::{forget_gpu_choice, prefer_integrated_gpu, GPU_SWITCH};
+        let now = || std::env::var(GPU_SWITCH).ok();
+        // Set by hand: left alone.
+        for hand in ["0x800000001", "0x800000000"] {
+            std::env::set_var(GPU_SWITCH, hand);
+            prefer_integrated_gpu();
+            assert_eq!(now().as_deref(), Some(hand));
+            forget_gpu_choice();
+            assert_eq!(now().as_deref(), Some(hand));
+        }
+        // Inherited from a program on the NVIDIA GPU: asked for, then put back.
+        std::env::set_var(GPU_SWITCH, "0x810000001");
+        prefer_integrated_gpu();
+        assert_eq!(now().as_deref(), Some("0x800000000"));
+        forget_gpu_choice();
+        assert_eq!(now().as_deref(), Some("0x810000001"));
+        // Not set: asked for, then gone again.
+        std::env::remove_var(GPU_SWITCH);
+        prefer_integrated_gpu();
+        assert_eq!(now().as_deref(), Some("0x800000000"));
+        forget_gpu_choice();
+        assert_eq!(now(), None);
+        // Only once.
+        forget_gpu_choice();
+        assert_eq!(now(), None);
     }
     #[test]
     fn only_windows_11_24h2_lacks_the_standing_calendar() {

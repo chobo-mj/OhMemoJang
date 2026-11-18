@@ -1,15 +1,20 @@
 //! The app's own icon (designed in `icon/`, bundled here as `.ico` files),
-//! decoded once per use: a larger frame for window/taskbar icons and a
-//! 32×32 frame for the system tray.
+//! decoded once: a larger frame for window/taskbar icons and a 32×32 frame
+//! for the system tray.
 
 use eframe::egui;
 
 const TASKBAR_ICO: &[u8] = include_bytes!("../icon/memo_taskbar_yellow.ico");
 const TRAY_ICO: &[u8] = include_bytes!("../icon/memo_tray_yellow.ico");
 
-/// A window/taskbar icon, picked close to 128×128.
-pub fn window() -> egui::IconData {
-    decode(TASKBAR_ICO, 128)
+/// A window/taskbar icon, picked close to 128×128. Every window asks for
+/// it every frame (in its builder), and eframe compares each window's icon
+/// with the one it has, for every window, every frame: decoded once and
+/// shared, that comparison is a pointer check instead of 64 KB.
+pub fn window() -> std::sync::Arc<egui::IconData> {
+    static ICON: std::sync::OnceLock<std::sync::Arc<egui::IconData>> = std::sync::OnceLock::new();
+    ICON.get_or_init(|| std::sync::Arc::new(decode(TASKBAR_ICO, 128)))
+        .clone()
 }
 
 /// The icon as a PNG file, the frame closest to `size` pixels (used for the
@@ -55,6 +60,8 @@ mod tests {
         assert_eq!(icon.width, icon.height);
         assert!((100..=256).contains(&icon.width), "{}", icon.width);
         assert_eq!(icon.rgba.len() as u32, icon.width * icon.height * 4);
+        // The same icon every time, not a fresh copy.
+        assert!(std::sync::Arc::ptr_eq(&icon, &super::window()));
     }
 
     #[test]

@@ -166,8 +166,6 @@ struct App {
 const COMPACT_ICON: f32 = 38.;
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // The drawing context exists now.
-        system::forget_gpu_choice();
         let mut fonts = egui::FontDefinitions::default();
         // Font files are mapped, not read: each file is shared by the faces
         // that come from it and only the parts in use occupy memory.
@@ -582,6 +580,8 @@ impl eframe::App for App {
         self.auto_relock();
         self.apply_autostart();
         self.autosave(ctx.input(|i| i.time), false);
+        // The windows of the first frame have their drawing contexts now.
+        system::forget_gpu_choice();
         // Sleep until something is due: an alarm, an automatic lock, a
         // pending save, the next housekeeping. Input wakes the program anyway.
         ctx.request_repaint_after(self.next_wake(ctx.input(|i| i.time)));
