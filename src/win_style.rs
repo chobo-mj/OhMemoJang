@@ -143,11 +143,11 @@ mod desk {
         UI::WindowsAndMessaging::{
             CallNextHookEx, EnumWindows, FindWindowExW, FindWindowW, GetAncestor, GetClassNameW,
             GetDesktopWindow, GetMessageW, GetWindow, GetWindowLongW, IsChild, IsWindowVisible,
-            PeekMessageW, SendMessageTimeoutW, SetParent, SetWindowLongW, SetWindowPos,
-            SetWindowsHookExW, UnhookWindowsHookEx, WindowFromPoint, GA_PARENT, GWL_EXSTYLE,
-            GW_HWNDPREV, HWND_TOP, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, SMTO_NORMAL, SWP_NOACTIVATE,
-            SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, WH_MOUSE_LL, WM_LBUTTONUP,
-            WS_EX_TOOLWINDOW,
+            PeekMessageW, SendMessageTimeoutW, SetLayeredWindowAttributes, SetParent,
+            SetWindowLongW, SetWindowPos, SetWindowsHookExW, UnhookWindowsHookEx, WindowFromPoint,
+            GA_PARENT, GWL_EXSTYLE, GW_HWNDPREV, HWND_TOP, LWA_ALPHA, MSG, MSLLHOOKSTRUCT,
+            PM_NOREMOVE, SMTO_NORMAL, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+            SWP_SHOWWINDOW, WH_MOUSE_LL, WM_LBUTTONUP, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
         },
     };
 
@@ -195,6 +195,55 @@ mod desk {
         }
         EnumWindows(Some(visit), &mut worker as *mut HWND as LPARAM);
         worker
+    }
+
+    /// The icon layer inside Progman on the newer desktop layout (Windows 11
+    /// 24H2 and later: Progman holds the icons, `SHELLDLL_DefView`, and the
+    /// wallpaper, a `WorkerW`, as its own children). Null on the classic one.
+    unsafe fn icon_layer(progman: HWND) -> HWND {
+        FindWindowExW(
+            progman,
+            std::ptr::null_mut(),
+            wide("SHELLDLL_DefView").as_ptr(),
+            std::ptr::null(),
+        )
+    }
+
+    /// Newer layout: the window becomes a child of Progman placed right
+    /// below the icon layer and above the wallpaper, as wallpaper apps do,
+    /// so icons can sit on top of it and clicks go to the desktop. Progman
+    /// draws without a surface of its own, so a plain child window would not
+    /// show: it is made a (fully opaque) layered window.
+    unsafe fn pin_under_icons(h: HWND, r: PxRect) -> bool {
+        let progman = progman();
+        if progman.is_null() {
+            return false;
+        }
+        let icons = icon_layer(progman);
+        if icons.is_null() {
+            return false;
+        }
+        let style = GetWindowLongW(h, GWL_EXSTYLE) as u32;
+        SetWindowLongW(h, GWL_EXSTYLE, (style | WS_EX_LAYERED) as i32);
+        SetLayeredWindowAttributes(h, 0, 255, LWA_ALPHA);
+        SetLastError(0);
+        if SetParent(h, progman).is_null() && GetLastError() != 0 {
+            SetWindowLongW(h, GWL_EXSTYLE, style as i32);
+            return false;
+        }
+        let mut p = POINT { x: r[0], y: r[1] };
+        ScreenToClient(progman, &mut p);
+        // "Insert after" the icon layer: directly behind it.
+        SetWindowPos(
+            h,
+            icons,
+            p.x,
+            p.y,
+            r[2] - r[0],
+            r[3] - r[1],
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+        true
     }
 
     /// Without the classic layout the window stays a top-level window, just
@@ -257,10 +306,27 @@ mod desk {
     /// Returns whether it is pinned that way (and so needs this called again).
     pub unsafe fn keep_on_desktop(hwnd: isize) -> bool {
         let h = hwnd as HWND;
+        let progman = progman();
+        if !progman.is_null() && GetAncestor(h, GA_PARENT) == progman {
+            // Under the icons: keep it right behind them if Explorer
+            // reordered its children (after Win+D, for instance).
+            let icons = icon_layer(progman);
+            if !icons.is_null() && GetWindow(h, GW_HWNDPREV) != icons {
+                SetWindowPos(
+                    h,
+                    icons,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                );
+            }
+            return true;
+        }
         if !is_top_level(h) {
             return false;
         }
-        let progman = progman();
         let (after, placed) = if progman.is_null() {
             (h, true)
         } else {
@@ -284,6 +350,11 @@ mod desk {
         let layer = wallpaper_layer();
         let h = hwnd as HWND;
         if layer.is_null() {
+            // Windows 11 24H2 itself does not show a window placed under
+            // the icons: there it stays a top-level window above the desktop.
+            if !crate::system::standing_unsupported() && pin_under_icons(h, r) {
+                return true;
+            }
             return pin_above_desktop(h, r);
         }
         // A null previous parent is also a successful result for top-level windows.
@@ -324,6 +395,11 @@ mod desk {
         SetLastError(0);
         if SetParent(h, std::ptr::null_mut()).is_null() && GetLastError() != 0 {
             return false;
+        }
+        // Layered only while under the icons.
+        let style = GetWindowLongW(h, GWL_EXSTYLE) as u32;
+        if style & WS_EX_LAYERED != 0 {
+            SetWindowLongW(h, GWL_EXSTYLE, (style & !WS_EX_LAYERED) as i32);
         }
         SetWindowPos(
             h,

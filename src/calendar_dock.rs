@@ -105,6 +105,10 @@ pub struct Dock {
     /// True while the calendar grid is drawn inside the calendar window.
     pub painting: bool,
     standing: Option<Standing>,
+    /// When the standing calendar last went back to a window: the same
+    /// click can reach both the desktop watch and the window, and must not
+    /// pin it again.
+    unpinned_at: Option<f64>,
     /// True: the detached window shows the grid and the day's memos side by
     /// side instead of stacked.
     pub horizontal: bool,
@@ -118,6 +122,10 @@ impl Dock {
     /// The calendar stands on the desktop.
     pub fn standing_pinned(&self) -> bool {
         self.standing.as_ref().is_some_and(|s| s.pinned)
+    }
+    /// The calendar is standing on the desktop (or about to).
+    pub fn standing_active(&self) -> bool {
+        self.standing.is_some()
     }
 }
 
@@ -137,6 +145,7 @@ impl Default for Dock {
             theme: 0,
             painting: false,
             standing: None,
+            unpinned_at: None,
             horizontal: false,
             split_frac: 1. / 3.,
         }
@@ -238,7 +247,12 @@ impl App {
                         let (pressed, button) = self.calendar_toolbar(ui, &mut minimize);
                         crate::tutorial::mark(ui.ctx(), crate::tutorial::Spot::Stand, button);
                         stand_rect = button;
-                        if pressed {
+                        let now = ui.input(|i| i.time);
+                        let just_unpinned = self
+                            .cal
+                            .unpinned_at
+                            .is_some_and(|t| (0. ..0.6).contains(&(now - t)));
+                        if pressed && !just_unpinned {
                             stand = true;
                         }
                         ui.add_space(6.);
@@ -282,6 +296,7 @@ impl App {
         );
         if standing && stand {
             self.restore_standing();
+            self.cal.unpinned_at = Some(ctx.input(|i| i.time));
             ctx.request_repaint();
         } else {
             self.standing_frame(ctx);
@@ -400,6 +415,7 @@ impl App {
         if s.click.as_ref().is_some_and(|c| c.take()) {
             // Back where it was, title bar included.
             self.restore_standing();
+            self.cal.unpinned_at = Some(ctx.input(|i| i.time));
             ctx.request_repaint();
             return;
         }
@@ -787,6 +803,32 @@ mod standing_tests {
         app.show_calendar();
         assert!(app.cal.standing.is_none());
         assert_eq!(app.cal.state, DockState::Window);
+    }
+
+    #[test]
+    fn nothing_dropped_on_a_standing_calendar_becomes_a_schedule() {
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 11, 17).unwrap();
+        let mut app = App::sample(day);
+        let cell = Rect::from_min_max(Pos2::new(200., 10.), Pos2::new(300., 100.));
+        app.cal_cells.insert(
+            egui::ViewportId::from_hash_of("calendar"),
+            (0., vec![(cell, day)]),
+        );
+        assert_eq!(
+            app.schedule_target_at(cell.center(), 0.2),
+            Some((day, true)),
+            "the detached calendar takes drops"
+        );
+        app.cal.standing = Some(Standing {
+            hwnd: 0,
+            rect: [0, 0, 860, 760],
+            outer: [0, 0, 860, 800],
+            button: [0; 4],
+            pinned: true,
+            wait: 0,
+            click: None,
+        });
+        assert_eq!(app.schedule_target_at(cell.center(), 0.2), None);
     }
 
     #[test]

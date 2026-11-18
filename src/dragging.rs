@@ -124,8 +124,15 @@ impl App {
             .filter_map(|(id, (time, rect, date))| {
                 (now - time < 1. && rect.contains(point)).then_some((*id, *date, false))
             });
+        // A calendar standing on the desktop is wallpaper: nothing dropped
+        // over it becomes a schedule.
+        let standing = self
+            .cal
+            .standing_active()
+            .then(|| ViewportId::from_hash_of("calendar"));
+        let days = days.filter(|(id, _, _)| Some(*id) != standing);
         let calendars = self.cal_cells.iter().filter_map(|(id, (time, cells))| {
-            if now - time >= 1. {
+            if now - time >= 1. || Some(*id) == standing {
                 return None;
             }
             cells
