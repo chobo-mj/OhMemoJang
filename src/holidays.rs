@@ -256,6 +256,26 @@ pub fn lunar_to_solar(year: i32, month: u32, day: u32) -> Option<NaiveDate> {
         .map(|m| m.0 + Duration::days(day as i64 - 1))
 }
 
+/// (first day, month number, leap) of the months of a lunar year.
+type Months = Vec<(NaiveDate, u32, bool)>;
+static MONTH_STARTS: Mutex<Option<HashMap<i32, Months>>> = Mutex::new(None);
+
+/// When `date` is the first day of a lunar month: (month, leap). Worked out
+/// once per year.
+pub fn lunar_month_start(date: NaiveDate) -> Option<(u32, bool)> {
+    let mut cache = MONTH_STARTS.lock().unwrap_or_else(|e| e.into_inner());
+    let cache = cache.get_or_insert_with(HashMap::new);
+    // A date's month is listed either in its own year's run (11th month of
+    // the year before up to the 11th month) or, in December, in the next.
+    for year in [date.year(), date.year() + 1] {
+        let months = cache.entry(year).or_insert_with(|| lunar_months(year));
+        if let Some(m) = months.iter().find(|m| m.0 == date) {
+            return Some((m.1, m.2));
+        }
+    }
+    None
+}
+
 // ---------------------------------------------------------------------------
 // Holidays
 
@@ -548,6 +568,20 @@ mod tests {
                 "부처님오신날 {s}"
             );
         }
+    }
+
+    #[test]
+    fn first_days_of_lunar_months_are_found() {
+        assert_eq!(lunar_month_start(d("2026-02-17")), Some((1, false)));
+        assert_eq!(lunar_month_start(d("2026-09-11")), Some((8, false)));
+        assert_eq!(lunar_month_start(d("2026-09-12")), None);
+        // 2025 had a leap 6th month (윤6월) from July 25.
+        assert_eq!(lunar_month_start(d("2025-07-25")), Some((6, true)));
+        // A December new moon belongs to the next year's run.
+        let dec: Vec<_> = (1..=31)
+            .filter_map(|n| lunar_month_start(d(&format!("2026-12-{n:02}"))))
+            .collect();
+        assert_eq!(dec.len(), 1);
     }
 
     #[test]

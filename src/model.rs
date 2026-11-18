@@ -646,3 +646,26 @@ mod notes_tests {
         assert_eq!(notes.take_touched(), None);
     }
 }
+
+/// Checked and all checkboxes (☑ and ☐) in a memo's text, if it has any.
+pub fn check_progress(body: &str) -> Option<(usize, usize)> {
+    let done = body.chars().filter(|c| *c == '☑').count();
+    let all = done + body.chars().filter(|c| *c == '☐').count();
+    (all > 0).then_some((done, all))
+}
+
+#[cfg(test)]
+mod check_progress_tests {
+    #[test]
+    fn counts_checked_and_all_boxes() {
+        assert_eq!(
+            super::check_progress(
+                "☑ a
+☐ b
+☑ c"
+            ),
+            Some((2, 3))
+        );
+        assert_eq!(super::check_progress("없음"), None);
+    }
+}

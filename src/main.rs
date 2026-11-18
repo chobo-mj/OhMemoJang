@@ -140,7 +140,9 @@ struct App {
     edit_error: String,
     hotkeys: Option<GlobalHotKeyManager>,
     registered: Vec<HotKey>,
-    shortcuts: [String; 3],
+    shortcuts: [String; 4],
+    /// The search box takes the keyboard on the next frame (search shortcut).
+    focus_search: bool,
     hotkey_status: String,
 }
 /// Side of an icon button in the icon-only sidebar.
@@ -293,7 +295,9 @@ impl App {
                 "Ctrl+Alt+N".into(),
                 "Ctrl+Alt+C".into(),
                 "Ctrl+Alt+S".into(),
+                "Ctrl+Alt+F".into(),
             ],
+            focus_search: false,
             hotkey_status: String::new(),
         }
     }
@@ -492,6 +496,13 @@ impl eframe::App for App {
                 || self.registered.get(2).is_some_and(|h| h.id() == id)
             {
                 self.new_sticker();
+            } else if self.registered.get(3).is_some_and(|h| h.id() == id) {
+                // Search from anywhere: the main window, its search box.
+                self.main_open = true;
+                self.settings = false;
+                self.focus_search = true;
+                ctx.send_viewport_cmd_to(main_viewport(), egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd_to(main_viewport(), egui::ViewportCommand::Focus);
             } else if self.registered.get(1).is_some_and(|h| h.id() == id) {
                 self.show_calendar();
                 ctx.send_viewport_cmd_to(
@@ -1040,6 +1051,11 @@ impl App {
         ui.add_space(10.);
         ui.horizontal(|ui| {
             let width = ui.available_width() - 28. - ui.spacing().item_spacing.x;
+            if std::mem::take(&mut self.focus_search) {
+                ui.memory_mut(|m| {
+                    m.request_focus(egui::Id::new(("search_field", "global_search")))
+                });
+            }
             let r = ui::search_field(ui, &mut self.search, "global_search", "검색", width);
             if r.changed() {
                 self.extra.search_mode = !self.search.is_empty();
@@ -1213,7 +1229,9 @@ impl App {
                 ui.add_space(10.);
                 ui::divider(ui);
                 ui.add_space(10.);
-                for (i, name) in ["빠른 메모", "분리 캘린더", "새 스티커"].iter().enumerate()
+                for (i, name) in ["빠른 메모", "분리 캘린더", "새 스티커", "검색"]
+                    .iter()
+                    .enumerate()
                 {
                     ui::field(ui, name, |ui| {
                         ui.monospace(self.shortcut_label(i));

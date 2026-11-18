@@ -646,6 +646,14 @@ impl App {
                 ui,
                 "🔔 메모 알람은 Windows 알림으로 알려 드려요. Windows는 시작 메뉴 바로가기가 있는 앱의 알림만 보여 줘요. 그래서 OhMemoJang이 시작 메뉴에 바로가기를 만들어 둬요.",
             );
+            ui.add_space(6.);
+            crate::ui::hint(
+                ui,
+                format!(
+                    "💾 메모는 이 PC의 {} 에 저장돼요. 다른 곳(예: 클라우드 폴더)으로 옮기려면 설정 › 백업 / 복원의 ‘데이터 위치’에서 바꿀 수 있어요.",
+                    crate::storage::data_dir(&self.prefs.data_path).display()
+                ),
+            );
             ui.add_space(14.);
             ui.horizontal(|ui| {
                 if crate::ui::primary(ui, "튜토리얼 시작").clicked() {

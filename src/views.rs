@@ -132,6 +132,11 @@ impl App {
             } else {
                 title
             };
+            // Checklist progress: ☑ done/all.
+            let title = match crate::model::check_progress(&n.body) {
+                Some((done, all)) => format!("{title}   ☑ {done}/{all}"),
+                None => title,
+            };
             let text_left = rect.left() + 48. + lead;
             let actions = if hovered || n.starred { 64. } else { 0. };
             let title_font = egui::TextStyle::Body.resolve(ui.style());
@@ -716,9 +721,27 @@ impl App {
                 )
                 .on_hover_text(name.as_str());
             }
+            // The first day of each lunar month, faint, in the top right.
+            if let Some((month, leap)) = crate::holidays::lunar_month_start(day) {
+                ui.painter().text(
+                    rect.right_top() + Vec2::new(-8., 9.),
+                    egui::Align2::RIGHT_TOP,
+                    format!("{} {month}.1", if leap { "윤" } else { "음" }),
+                    egui::FontId::proportional(10.),
+                    tone.faint.gamma_multiply(0.75),
+                );
+            }
             if ui.rect_contains_pointer(rect) {
                 let plus =
                     Rect::from_min_size(rect.right_top() + Vec2::new(-26., 5.), Vec2::splat(22.));
+                // Solid under the + so it stands out over the lunar date.
+                ui.painter().rect(
+                    plus,
+                    6.,
+                    tone.bg,
+                    Stroke::new(1.2_f32, ACCENT),
+                    egui::StrokeKind::Inside,
+                );
                 overlay(ui, plus, slot + 25000, |ui| {
                     if icons::small_icon(ui, icons::Icon::Plus, "이 날짜에 새 스티커").clicked()
                     {
@@ -1133,6 +1156,10 @@ impl App {
             format!("🚩 {label}")
         } else {
             label
+        };
+        let label = match crate::model::check_progress(&n.body) {
+            Some((done, all)) => format!("{label} {done}/{all}"),
+            None => label,
         };
         let mut job = egui::text::LayoutJob::single_section(
             label,

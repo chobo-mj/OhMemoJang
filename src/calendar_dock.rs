@@ -585,6 +585,14 @@ impl App {
                 );
                 stand_rect = r.rect;
                 stand = r.clicked();
+                // Windows 11 24H2 moved the desktop's windows: standing does
+                // not work there (the button stays, to try anyway).
+                if !standing && crate::system::windows_build() >= 26100 {
+                    ui.label(RichText::new("지원 안 됨").color(tone.muted).size(10.5))
+                        .on_hover_text(
+                            "Windows 11 24H2 이후에서는 스탠딩 캘린더가 동작하지 않아요",
+                        );
+                }
                 if standing {
                     ui.label(
                         RichText::new("바탕화면에 고정됨 · 아이콘을 다시 누르면 해제")

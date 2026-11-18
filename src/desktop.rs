@@ -1274,7 +1274,7 @@ impl App {
                 settings_group(ui, "전역 단축키", |ui| {
                     hint(ui, "다른 프로그램을 쓰는 중에도 동작합니다");
                     ui.add_space(4.);
-                    for (i, name) in ["빠른 메모", "캘린더 분리창", "새 스티커 메모"]
+                    for (i, name) in ["빠른 메모", "캘린더 분리창", "새 스티커 메모", "검색"]
                         .iter()
                         .enumerate()
                     {

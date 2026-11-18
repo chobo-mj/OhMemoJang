@@ -315,6 +315,17 @@ pub struct Tab {
     pub spans: Vec<Span>,
     pub blocks: Vec<Block>,
 }
+/// Set (temporarily) by a host that adds its own entries to the text's
+/// right-click menu; the entry picked is left under `HOST_ACTION`.
+pub const HOST_MENU: &str = "composer_host_menu";
+pub const HOST_ACTION: &str = "composer_host_action";
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum HostAction {
+    Schedule,
+    Alarm,
+    StickerMenu,
+}
+
 pub const PICTURE_BASE: u32 = 0xE000;
 pub fn placeholder(id: u32) -> char {
     char::from_u32(PICTURE_BASE + id.min(0x18FF)).unwrap_or('\u{E000}')
@@ -1461,6 +1472,23 @@ fn content_impl(
             let pos = doc.selection.end;
             replace_chars(&mut doc.tabs[doc.active].body, pos..pos, "☐ ");
             ui.close_menu();
+        }
+        // In a sticker, the memo's own actions too (the host acts on them).
+        if ui
+            .data(|d| d.get_temp::<bool>(egui::Id::new(HOST_MENU)))
+            .unwrap_or(false)
+        {
+            ui.separator();
+            for (label, action) in [
+                ("일정 설정…", HostAction::Schedule),
+                ("알람 설정…", HostAction::Alarm),
+                ("스티커 정렬 · 메뉴…", HostAction::StickerMenu),
+            ] {
+                if ui.button(label).clicked() {
+                    ui.data_mut(|d| d.insert_temp(egui::Id::new(HOST_ACTION), action));
+                    ui.close_menu();
+                }
+            }
         }
     });
     if hover {

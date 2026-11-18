@@ -1772,12 +1772,33 @@ impl App {
                             paper_style(ui, paper);
                             if mode == Mode::Sticker {
                                 let n = &mut self.data.notes[i];
+                                let host = egui::Id::new(crate::composer::HOST_MENU);
+                                ui.data_mut(|d| d.insert_temp(host, true));
                                 crate::composer::content(
                                     ui,
                                     &mut n.body,
                                     &mut n.document,
                                     ("memo_document", i),
                                 );
+                                ui.data_mut(|d| d.remove::<bool>(host));
+                                let action = egui::Id::new(crate::composer::HOST_ACTION);
+                                let picked = ui.data_mut(|d| {
+                                    let p = d.get_temp::<crate::composer::HostAction>(action);
+                                    d.remove::<crate::composer::HostAction>(action);
+                                    p
+                                });
+                                match picked {
+                                    Some(crate::composer::HostAction::Schedule) => {
+                                        self.open_schedule(i)
+                                    }
+                                    Some(crate::composer::HostAction::Alarm) => {
+                                        self.open_reminder(i)
+                                    }
+                                    Some(crate::composer::HostAction::StickerMenu) => {
+                                        open_menu(ctx, &mut w)
+                                    }
+                                    None => {}
+                                }
                             } else {
                                 egui::Frame::NONE
                                     .fill(Color32::from_white_alpha(70))
@@ -1973,6 +1994,15 @@ impl App {
                 )
                 .sense(Sense::click_and_drag()),
             );
+            if response.drag_started()
+                && mode == Mode::Sticker
+                && self.studio.raw_date_drop != Some((i, ctx.input(|v| v.time)))
+            {
+                // Carried by its top bar over a calendar date, the sticker
+                // takes that date (and goes back to its place); dropped
+                // anywhere else it just stays where it was moved.
+                self.begin_sticker_drag(ctx, i, Mode::Sticker, false);
+            }
             if response.drag_started() || response.drag_stopped() {
                 w.native.start_drag(ctx);
             }

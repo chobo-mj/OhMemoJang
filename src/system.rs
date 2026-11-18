@@ -160,3 +160,38 @@ pub fn shift_down() -> bool {
         false
     }
 }
+
+/// Windows build number (26100 and up: Windows 11 24H2 or later); 0 when it
+/// cannot be read.
+pub fn windows_build() -> u32 {
+    static BUILD: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *BUILD.get_or_init(|| {
+        #[cfg(windows)]
+        // SAFETY: reading one string value into a buffer of the given size.
+        unsafe {
+            use windows_sys::Win32::System::Registry::{
+                RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ,
+            };
+            let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+            let mut buf = [0u16; 32];
+            let mut len = (buf.len() * 2) as u32;
+            if RegGetValueW(
+                HKEY_LOCAL_MACHINE,
+                wide(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion").as_ptr(),
+                wide("CurrentBuild").as_ptr(),
+                RRF_RT_REG_SZ,
+                std::ptr::null_mut(),
+                buf.as_mut_ptr() as *mut _,
+                &mut len,
+            ) == 0
+            {
+                let n = buf.iter().position(|c| *c == 0).unwrap_or(buf.len());
+                return String::from_utf16_lossy(&buf[..n])
+                    .trim()
+                    .parse()
+                    .unwrap_or(0);
+            }
+        }
+        0
+    })
+}
