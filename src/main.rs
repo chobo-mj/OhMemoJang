@@ -89,6 +89,8 @@ struct App {
     completed_stickers: Vec<usize>,
     schedule_drop_serial: u64,
     pending_date_drop: Option<(usize, NaiveDate)>,
+    /// Days being dragged over in the calendar: (first, current).
+    range_drag: Option<(NaiveDate, NaiveDate)>,
     day_cells: std::collections::HashMap<egui::ViewportId, (f64, egui::Rect, NaiveDate)>,
     schedule_origins: std::collections::HashMap<egui::ViewportId, egui::Pos2>,
     cal_cells: std::collections::HashMap<egui::ViewportId, (f64, Vec<(egui::Rect, NaiveDate)>)>,
@@ -253,6 +255,7 @@ impl App {
             completed_stickers: Vec::new(),
             schedule_drop_serial: 0,
             pending_date_drop: None,
+            range_drag: None,
             day_cells: Default::default(),
             schedule_origins: Default::default(),
             cal_cells: Default::default(),

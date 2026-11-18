@@ -655,9 +655,27 @@ impl App {
                 rect: rect.intersect(ui.clip_rect()),
                 kind: dragging::Destination::Date(day),
             });
-            let r = ui.interact(rect, ui.id().with(("day", day)), Sense::click());
+            let r = ui.interact(rect, ui.id().with(("day", day)), Sense::click_and_drag());
             if r.clicked() {
                 self.day = day;
+            }
+            // Dragging over days marks a stretch for a several-day schedule.
+            if r.drag_started() {
+                self.range_drag = Some((day, day));
+            }
+            if let Some((from, _)) = self.range_drag {
+                if ui
+                    .input(|i| i.pointer.interact_pos())
+                    .is_some_and(|p| rect.contains(p))
+                {
+                    self.range_drag = Some((from, day));
+                }
+            }
+            if let Some((a, b)) = self.range_drag {
+                if a != b && (a.min(b)..=a.max(b)).contains(&day) {
+                    ui.painter()
+                        .rect_filled(rect.shrink(2.), 4., ACCENT.gamma_multiply(0.18));
+                }
             }
             if r.dnd_hover_payload::<NoteDrag>().is_some() {
                 ui.painter().rect_stroke(
@@ -753,6 +771,25 @@ impl App {
             }
         }
         self.calendar_bands(ui, all, first, rows, col, height);
+        // Let go after dragging over several days: a new sticker for them.
+        if let Some((a, b)) = self.range_drag {
+            if !ui.input(|i| i.pointer.primary_down()) {
+                self.range_drag = None;
+                if a != b {
+                    let (start, end) = (a.min(b), a.max(b));
+                    let i = self.new_sticker();
+                    let n = &mut self.data.notes[i];
+                    n.date = Some(start);
+                    n.duration = ((end - start).num_days() + 1).min(u16::MAX as i64) as u16;
+                    self.day = start;
+                    self.toast = format!(
+                        "{} ~ {} 일정을 만들었어요",
+                        start.format("%-m월 %-d일"),
+                        end.format("%-m월 %-d일")
+                    );
+                }
+            }
+        }
         if side.is_some() {
             // The main window's grid: a drop target the tutorial points at.
             crate::tutorial::mark(
