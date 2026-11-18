@@ -123,6 +123,48 @@ impl Note {
             })
             .flatten()
     }
+    /// The days the memo's calendar band covers: a 이날까지 업무 shows on its
+    /// last day only.
+    pub fn span(&self) -> Option<(NaiveDate, NaiveDate)> {
+        if let Some(end) = self.deadline_date() {
+            return Some((end, end));
+        }
+        let start = self.date?;
+        Some((
+            start,
+            start + Duration::days(i64::from(self.duration.max(1)) - 1),
+        ))
+    }
+    /// Make the memo a schedule from `start` to `end` (one day: a 당일 일정).
+    /// A 이날까지 업무 stops being one, so its band and its due date cannot
+    /// disagree. A memo that was done stays done on every day.
+    pub fn set_days(&mut self, start: NaiveDate, end: NaiveDate) {
+        let (start, end) = (start.min(end), start.max(end));
+        let len = ((end - start).num_days() + 1).clamp(1, i64::from(u16::MAX)) as u16;
+        let was_multi = self.duration > 1 && !self.deadline && self.date.is_some();
+        if self.done && len > 1 {
+            let at = self
+                .completed
+                .unwrap_or_else(|| chrono::Local::now().naive_local());
+            for k in 0..i64::from(len) {
+                self.occurrence_completed
+                    .entry(start + Duration::days(k))
+                    .or_insert(at);
+            }
+        }
+        self.deadline = false;
+        self.date = Some(start);
+        self.duration = len;
+        if was_multi && len == 1 {
+            // One day left: done when that day was.
+            let left = self.occurrence_completed.get(&start).copied();
+            self.occurrence_completed.clear();
+            self.done = left.is_some();
+            self.completed = left;
+            return;
+        }
+        self.refresh_done();
+    }
     pub fn dday(&self, today: NaiveDate) -> String {
         match self.deadline_date().map(|d| (d - today).num_days()) {
             Some(0) => "D-day".into(),
@@ -406,6 +448,53 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn dragging_a_band_end_makes_a_stretch_and_back_a_single_day() {
+        let d = |n: u32| NaiveDate::from_ymd_opt(2026, 11, n).unwrap();
+        let mut n = Note::new("회의", Some(d(10)), 0);
+        assert_eq!(n.span(), Some((d(10), d(10))));
+        // Right end to the 13th: 10 ~ 13.
+        n.set_days(d(10), d(13));
+        assert_eq!((n.date, n.duration), (Some(d(10)), 4));
+        assert!(n.occurs(d(12)) && !n.occurs(d(14)));
+        // Left end past the other end: the days swap round.
+        n.set_days(d(13), d(11));
+        assert_eq!(n.span(), Some((d(11), d(13))));
+        // Back to one day: a 당일 일정.
+        n.set_days(d(11), d(11));
+        assert_eq!((n.date, n.duration, n.deadline), (Some(d(11)), 1, false));
+    }
+    #[test]
+    fn stretching_a_deadline_memo_makes_it_a_plain_schedule() {
+        let d = |n: u32| NaiveDate::from_ymd_opt(2026, 11, n).unwrap();
+        let mut n = Note::new("보고서", Some(d(1)), 0);
+        n.deadline = true;
+        n.duration = 5; // due on the 5th, shown there only
+        assert_eq!(n.span(), Some((d(5), d(5))));
+        n.set_days(d(5), d(8));
+        assert!(!n.deadline, "no longer 이날까지 업무");
+        assert!(n.deadline_date().is_none() && n.dday(d(1)).is_empty());
+        assert_eq!(n.span(), Some((d(5), d(8))));
+        assert!(n.occurs(d(6)) && !n.occurs(d(1)));
+        n.set_days(d(5), d(5));
+        assert_eq!(n.span(), Some((d(5), d(5))));
+        assert!(!n.deadline);
+    }
+    #[test]
+    fn a_done_memo_stays_done_when_its_days_change() {
+        let d = |n: u32| NaiveDate::from_ymd_opt(2026, 11, n).unwrap();
+        let mut n = Note::new("끝난 일", Some(d(3)), 0);
+        n.done = true;
+        n.completed = Some(d(3).and_hms_opt(9, 0, 0).unwrap());
+        n.set_days(d(3), d(5));
+        assert!(n.done && (3..=5).all(|k| n.done_on(Some(d(k)))));
+        n.set_days(d(3), d(3));
+        assert!(n.done && n.done_on(Some(d(3))));
+        // Not done: stays not done.
+        let mut m = Note::new("할 일", Some(d(3)), 0);
+        m.set_days(d(3), d(6));
+        assert!(!m.done && !m.done_on(Some(d(4))));
+    }
     #[test]
     fn a_repeating_note_occurs_on_each_repetition() {
         let start = NaiveDate::from_ymd_opt(2026, 11, 11).unwrap();

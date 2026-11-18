@@ -347,6 +347,8 @@ pub enum HostAction {
     Schedule,
     Alarm,
     StickerMenu,
+    Trash,
+    Purge,
 }
 
 pub const PICTURE_BASE: u32 = 0xE000;
@@ -1561,6 +1563,19 @@ fn content_impl(
                 ("일정 설정…", HostAction::Schedule),
                 ("알람 설정…", HostAction::Alarm),
                 ("스티커 정렬 · 메뉴…", HostAction::StickerMenu),
+            ] {
+                if ui.button(label).clicked() {
+                    ui.data_mut(|d| d.insert_temp(egui::Id::new(HOST_ACTION), action));
+                    ui.close_menu();
+                }
+            }
+            ui.separator();
+            for (label, action) in [
+                (RichText::new("스티커 휴지통으로"), HostAction::Trash),
+                (
+                    RichText::new("스티커 영구삭제…").color(crate::ACCENT),
+                    HostAction::Purge,
+                ),
             ] {
                 if ui.button(label).clicked() {
                     ui.data_mut(|d| d.insert_temp(egui::Id::new(HOST_ACTION), action));

@@ -1150,6 +1150,51 @@ impl App {
                 }
             }
         }
+        self.band_resize_step(ui, all, first, rows, col, height);
+    }
+    /// A band's end held and moved: the memo covers the days from the end
+    /// that stays put to the day under the pointer, shown as it moves.
+    fn band_resize_step(
+        &mut self,
+        ui: &egui::Ui,
+        all: Rect,
+        first: NaiveDate,
+        rows: usize,
+        col: f32,
+        height: f32,
+    ) {
+        let Some((viewport, i, anchor, before)) = self.band_resize else {
+            return;
+        };
+        if viewport != ui.ctx().viewport_id() {
+            return;
+        }
+        if !ui.input(|v| v.pointer.primary_down()) {
+            self.band_resize = None;
+            let n = &self.data.notes[i];
+            if let Some((a, b)) = n.span().filter(|&s| Some(s) != before) {
+                self.toast = if a == b {
+                    format!("{} 당일 일정으로 바꿨어요", a.format("%-m월 %-d일"))
+                } else {
+                    format!(
+                        "{} ~ {} 기간 일정으로 바꿨어요",
+                        a.format("%-m월 %-d일"),
+                        b.format("%-m월 %-d일")
+                    )
+                };
+            }
+            return;
+        }
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        let Some(p) = ui.input(|v| v.pointer.interact_pos()) else {
+            return;
+        };
+        let day = grid_day(p, all, first, rows, col, height);
+        if self.data.notes[i].span() != Some((anchor.min(day), anchor.max(day))) {
+            self.data.notes[i].set_days(anchor, day);
+            // Pointer moves are not counted as input: have the lists redrawn.
+            crate::lists::CHANGES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
     }
     #[allow(clippy::too_many_arguments)]
     fn calendar_band(
@@ -1242,6 +1287,7 @@ impl App {
             })
             .unwrap_or(days[0]);
         response.dnd_set_drag_payload(NoteDrag);
+        self.band_edges(ui, i, rect, open_left, open_right);
         let occurrence = if self.desktop.calendar_basis == 1 {
             Some(day)
         } else {
@@ -1250,6 +1296,57 @@ impl App {
         self.drag_source_on(ui, &response, i, occurrence);
         if response.clicked() {
             self.open_sticker(i, occurrence);
+        }
+    }
+    /// The two ends of a band (where the memo's days start and stop): the
+    /// pointer turns into a left-right arrow there, and dragging one moves
+    /// that end to another day. Only for schedules that do not repeat.
+    fn band_edges(
+        &mut self,
+        ui: &mut egui::Ui,
+        i: usize,
+        rect: Rect,
+        open_left: bool,
+        open_right: bool,
+    ) {
+        let n = &self.data.notes[i];
+        if self.desktop.calendar_basis != 1 || !n.repeat.is_none() {
+            return;
+        }
+        let Some((start, end)) = n.span() else {
+            return;
+        };
+        let grip = 7_f32.min(rect.width() / 3.);
+        for (open, left) in [(open_left, true), (open_right, false)] {
+            if !open {
+                continue;
+            }
+            let edge = if left {
+                Rect::from_min_max(rect.min, egui::pos2(rect.left() + grip, rect.bottom()))
+            } else {
+                Rect::from_min_max(egui::pos2(rect.right() - grip, rect.top()), rect.max)
+            };
+            let r = ui
+                .interact(edge, ui.id().with(("band_edge", i, left)), Sense::drag())
+                .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+            if r.hovered() || r.dragged() {
+                let x = if left {
+                    edge.left() + 2.
+                } else {
+                    edge.right() - 2.
+                };
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(x, rect.top() + 3.),
+                        egui::pos2(x, rect.bottom() - 3.),
+                    ],
+                    Stroke::new(2_f32, INK.gamma_multiply(0.45)),
+                );
+            }
+            if r.drag_started() {
+                let anchor = if left { end } else { start };
+                self.band_resize = Some((ui.ctx().viewport_id(), i, anchor, Some((start, end))));
+            }
         }
     }
     /// Colors of the month grid: the app's own, or the calendar window's
@@ -1889,6 +1986,22 @@ pub struct BandSegment {
     pub ends_here: bool,
 }
 /// Runs of consecutive `days` (one week row) on which each memo shows.
+/// The day of the month grid under `p` (held inside the grid).
+pub fn grid_day(
+    p: egui::Pos2,
+    all: Rect,
+    first: NaiveDate,
+    rows: usize,
+    col: f32,
+    height: f32,
+) -> NaiveDate {
+    let c = ((p.x - all.left()) / col).floor().clamp(0., 6.) as i64;
+    let r = ((p.y - all.top()) / height)
+        .floor()
+        .clamp(0., rows.saturating_sub(1) as f32) as i64;
+    first + Duration::days(r * 7 + c)
+}
+
 pub fn band_segments(
     notes: &[Note],
     visible: impl Fn(usize) -> bool,
@@ -2119,6 +2232,17 @@ mod calendar_side_tests {
 #[cfg(test)]
 mod sticker_drop_tests {
     use super::*;
+    #[test]
+    fn the_pointer_picks_the_grid_day_and_stays_inside_the_grid() {
+        let first = NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+        let all = Rect::from_min_size(egui::pos2(10., 20.), Vec2::new(700., 500.));
+        let day = |x: f32, y: f32| grid_day(egui::pos2(x, y), all, first, 5, 100., 100.);
+        assert_eq!(day(15., 25.), first);
+        assert_eq!(day(355., 125.), first + Duration::days(10));
+        // Outside: the nearest day of the grid.
+        assert_eq!(day(-50., -50.), first);
+        assert_eq!(day(900., 900.), first + Duration::days(34));
+    }
     use crate::studio::{Mode, StickerDrag, Window};
 
     #[test]

@@ -1831,6 +1831,13 @@ impl App {
                                     Some(crate::composer::HostAction::StickerMenu) => {
                                         open_menu(ctx, &mut w)
                                     }
+                                    Some(crate::composer::HostAction::Trash) => {
+                                        self.trash_note(i);
+                                        w.open = false;
+                                    }
+                                    Some(crate::composer::HostAction::Purge) => {
+                                        self.request_purge(i)
+                                    }
                                     None => {}
                                 }
                             } else {

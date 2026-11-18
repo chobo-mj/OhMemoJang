@@ -62,6 +62,14 @@ const ACCENT: Color32 = ui::ACCENT;
 pub use ui::main_viewport;
 #[derive(Clone)]
 struct NoteDrag;
+/// A calendar band's end being dragged: the window, the memo, the day that
+/// stays put, and the memo's days before the drag.
+type BandResize = (
+    egui::ViewportId,
+    usize,
+    NaiveDate,
+    Option<(NaiveDate, NaiveDate)>,
+);
 struct App {
     desktop: desktop::Desktop,
     catalog: catalog::Catalog,
@@ -94,6 +102,9 @@ struct App {
     /// Memos made by dragging over calendar days, until their sticker is
     /// closed: closed with no title and no content, they are erased.
     drafts: Vec<usize>,
+    /// A calendar band's end being dragged: the window, the memo, the day
+    /// that stays put, and the memo's days before the drag.
+    band_resize: Option<BandResize>,
     day_cells: std::collections::HashMap<egui::ViewportId, (f64, egui::Rect, NaiveDate)>,
     schedule_origins: std::collections::HashMap<egui::ViewportId, egui::Pos2>,
     cal_cells: std::collections::HashMap<egui::ViewportId, (f64, Vec<(egui::Rect, NaiveDate)>)>,
@@ -260,6 +271,7 @@ impl App {
             pending_date_drop: None,
             range_drag: None,
             drafts: vec![],
+            band_resize: None,
             day_cells: Default::default(),
             schedule_origins: Default::default(),
             cal_cells: Default::default(),

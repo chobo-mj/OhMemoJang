@@ -90,3 +90,12 @@
 - 수정: 메뉴(넓은 사이드바·아이콘 사이드바)의 페이지 버튼은 `open_page`로 페이지를 정하고 설정을 닫는다. 설정이 열려 있는 동안에는 뒤의 페이지 버튼을 선택 표시하지 않는다.
 - 테스트 `choosing_the_page_behind_the_settings_leaves_the_settings`.
 - 고침: 빈 일정 메모를 지운 뒤에도 캘린더·목록에 ‘삭제된 메모’ 줄이 남던 것. 목록은 입력이 있어야 다시 계산하는데, 지우기는 닫은 다음 프레임에 입력 없이 일어나서 예전 목록(제목만 ‘삭제된 메모’로 바뀐)이 그대로 보였다. 지울 때 `lists::CHANGES`를 올려 바로 다시 계산하게 했다.
+
+## 일정 막대 양끝 끌어 기간 바꾸기, 본문 우클릭 삭제
+
+- 캘린더 일정 막대의 실제 시작·끝 칸(주가 넘어가며 잘린 끝은 제외)에 7px 손잡이를 두었다(`band_edges`). 마우스를 올리면 ↔ 커서와 얇은 선이 보인다. 메인 캘린더와 캘린더 분리창이 같은 `calendar_bands`를 쓰므로 두 곳 모두 동작한다.
+- 끄는 동안(`band_resize`, 창별)에는 반대쪽 끝을 고정하고 포인터 아래 날짜(`grid_day`)까지를 바로 메모 기간으로 바꾼다(`Note::set_days`). 포인터 이동은 입력으로 세지 않으므로 바꿀 때 `lists::CHANGES`를 올려 막대를 다시 그린다. 놓으면 "A ~ B 기간 일정으로 바꿨어요" / "A 당일 일정으로 바꿨어요" 안내.
+- `set_days`: 이날까지 업무를 풀고(마감일과 막대가 어긋나지 않게), 시작일·일수를 정한다. 하루가 되면 당일 일정. 완료된 메모는 늘려도 모든 날이 완료로 남고, 하루로 줄이면 그날의 완료 여부를 따른다.
+- 반복 일정과 ‘일정’ 기준이 아닌 캘린더(작성일·알람 기준)에서는 손잡이를 두지 않는다.
+- 스티커 본문 우클릭 메뉴에 ‘스티커 휴지통으로’, ‘스티커 영구삭제…’를 더했다. … 더보기의 같은 동작(`trash_note`, 확인 창이 있는 `request_purge`)을 부른다.
+- 테스트: `dragging_a_band_end_makes_a_stretch_and_back_a_single_day`, `stretching_a_deadline_memo_makes_it_a_plain_schedule`, `a_done_memo_stays_done_when_its_days_change`, `the_pointer_picks_the_grid_day_and_stays_inside_the_grid`. GUIDE_VERSION 8.
