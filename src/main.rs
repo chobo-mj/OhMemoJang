@@ -100,8 +100,9 @@ struct App {
     pending_date_drop: Option<(usize, NaiveDate)>,
     /// Days being dragged over in the calendar: (first, current).
     range_drag: Option<(NaiveDate, NaiveDate)>,
-    /// Memos made by dragging over calendar days, until their sticker is
-    /// closed: closed with no title and no content, they are erased.
+    /// New memos made from the calendar (a day's +, '+ 이 날짜에 스티커', a
+    /// drag over days) or '+ 새 일정', until their window is closed: closed
+    /// with no title and no content, they are erased for good.
     drafts: Vec<usize>,
     /// A calendar band's end being dragged: the window, the memo, the day
     /// that stays put, and the memo's days before the drag.
@@ -440,7 +441,7 @@ impl App {
             .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
             .unwrap_or_default();
     }
-    fn add_note(&mut self, date: Option<NaiveDate>) {
+    fn add_note(&mut self, date: Option<NaiveDate>) -> usize {
         let i = self.data.notes.len();
         // Start blank: the title field's own hint text ("제목") and the
         // body's hint text already tell the user what goes there, so no
@@ -455,6 +456,14 @@ impl App {
         if let Some(w) = self.studio.windows.get_mut(&i) {
             w.edit();
         }
+        i
+    }
+    /// '+ 새 일정': a new memo for `date`. Closed while still blank, it is
+    /// erased for good ([`Self::drop_blank_drafts`]).
+    fn new_schedule(&mut self, date: NaiveDate) -> usize {
+        let i = self.add_note(Some(date));
+        self.drafts.push(i);
+        i
     }
     fn done(&mut self, i: usize, value: bool) {
         self.done_at(i, None, value);
@@ -635,7 +644,8 @@ impl App {
         // 4. The clipboard history's two threads and its database.
         self.clipboard
             .shutdown(std::time::Duration::from_millis(1500));
-        // 5. Settings and every changed memo.
+        // 5. Settings and every changed memo; a new memo left blank goes.
+        self.close_blank_drafts();
         self.keep_prefs();
         self.autosave(0., true);
         // 6. Close every window and leave the event loop.

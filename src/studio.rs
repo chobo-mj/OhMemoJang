@@ -1405,8 +1405,31 @@ impl App {
                 .iter()
                 .all(|t| t.body.trim().is_empty() && t.blocks.is_empty())
     }
-    /// A memo made by dragging over calendar days whose sticker was closed
-    /// while still blank is erased for good (it never reaches the trash).
+    /// A new sticker for calendar day `day` (the day's +, '+ 이 날짜에
+    /// 스티커', a drag over days). Closed while still blank, it is erased for
+    /// good ([`Self::drop_blank_drafts`]).
+    pub fn new_sticker_on(&mut self, day: NaiveDate) -> usize {
+        let i = self.new_sticker();
+        self.data.notes[i].date = Some(day);
+        self.drafts.push(i);
+        i
+    }
+    /// Quitting closes a new memo that is still blank like its close button
+    /// would: after a restart it would come back as an empty memo that no
+    /// close erases any more.
+    pub fn close_blank_drafts(&mut self) {
+        for i in self.drafts.clone() {
+            if i < self.data.notes.len() && self.is_blank(i) {
+                if let Some(w) = self.studio.windows.get_mut(&i) {
+                    w.open = false;
+                }
+            }
+        }
+        self.drop_blank_drafts();
+    }
+    /// A memo made from a calendar day or '+ 새 일정' ([`Self::drafts`])
+    /// whose window was closed while still blank is erased for good (it
+    /// never reaches the trash).
     pub fn drop_blank_drafts(&mut self) {
         let drafts = std::mem::take(&mut self.drafts);
         for i in drafts {
@@ -2863,6 +2886,55 @@ mod tests {
         a.studio.windows.get_mut(&body).unwrap().open = false;
         a.drop_blank_drafts();
         assert!(!a.data.notes[body].deleted);
+    }
+    #[test]
+    fn a_new_memo_for_a_day_closed_blank_is_gone_from_every_list() {
+        let today = Local::now().date_naive();
+        let mut a = App::sample(today);
+        // '+ 이 날짜에 스티커' (or the day's +) and '+ 새 일정'.
+        let sticker = a.new_sticker_on(today);
+        let schedule = a.new_schedule(today);
+        assert_eq!(a.data.notes[sticker].date, Some(today));
+        assert_eq!(a.data.notes[schedule].date, Some(today));
+        assert_eq!(a.studio.windows[&schedule].mode, Mode::Editor);
+        assert!(a.calendar_matches(&a.data.notes[sticker], today));
+        for i in [sticker, schedule] {
+            a.studio.windows.get_mut(&i).unwrap().open = false;
+        }
+        a.drop_blank_drafts();
+        for i in [sticker, schedule] {
+            let n = &a.data.notes[i];
+            assert!(n.purged && n.deleted, "erased for good");
+            assert!(!a.visible(i), "out of the calendar and the memo lists");
+            assert!(!a.studio.windows.contains_key(&i));
+        }
+        assert!(
+            !a.data.notes.iter().any(|n| n.deleted && !n.purged),
+            "nothing goes to the trash"
+        );
+        assert!(a.drafts.is_empty());
+        // Written in, then closed: it stays, and later closes keep it.
+        let kept = a.new_schedule(today);
+        a.data.notes[kept].title = "회의".into();
+        a.studio.windows.get_mut(&kept).unwrap().open = false;
+        a.drop_blank_drafts();
+        assert!(!a.data.notes[kept].deleted && a.drafts.is_empty());
+    }
+    #[test]
+    fn quitting_erases_a_new_memo_left_blank_and_keeps_its_written_neighbour() {
+        let today = Local::now().date_naive();
+        let mut a = App::sample(today);
+        let blank = a.new_sticker_on(today);
+        let written = a.new_sticker_on(today);
+        a.data.notes[written].body = "내용".into();
+        a.close_blank_drafts();
+        assert!(a.data.notes[blank].purged);
+        assert!(!a.data.notes[written].deleted);
+        assert!(
+            a.studio.windows[&written].open,
+            "a written sticker still reopens after a restart"
+        );
+        assert_eq!(a.drafts, vec![written]);
     }
     #[test]
     fn choosing_the_page_behind_the_settings_leaves_the_settings() {

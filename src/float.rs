@@ -180,9 +180,24 @@ pub fn context_menu(response: &egui::Response, width: f32, add: impl FnOnce(&mut
     if response.secondary_clicked() {
         if let Some(p) = ctx.input(|v| v.pointer.interact_pos()) {
             open_at(ctx, id, screen_origin(ctx) + p.to_vec2(), width);
+            let key = claimed_key(ctx);
+            let pass = ctx.cumulative_pass_nr();
+            ctx.data_mut(|d| d.insert_temp(key, pass));
         }
     }
     show(ctx, id, true, None, None, add);
+}
+
+fn claimed_key(ctx: &egui::Context) -> Id {
+    Id::new("float_right_click_claimed").with(ctx.viewport_id())
+}
+
+/// Whether a widget's own menu ([`context_menu`]) took this frame's right
+/// click in the window `ctx` draws: a menu for the whole window stays shut.
+pub fn right_click_claimed(ctx: &egui::Context) -> bool {
+    let key = claimed_key(ctx);
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data(|d| d.get_temp::<u64>(key)) == Some(pass)
 }
 
 /// A menu opened with [`open_at`] (a right click the caller noticed).
@@ -258,5 +273,40 @@ mod tests {
         // Shown in frames 0 and 1; not shown (closed) in frame 2.
         assert_eq!(seen, [false, true, true]);
         assert!(!was_open_in(&ctx));
+    }
+    #[test]
+    fn a_widget_menu_claims_its_right_click_for_that_frame_only() {
+        let ctx = egui::Context::default();
+        let p = Pos2::new(20., 20.);
+        let press = |pressed| egui::Event::PointerButton {
+            pos: p,
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        let mut claimed = Vec::new();
+        for events in [
+            vec![egui::Event::PointerMoved(p)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![],
+        ] {
+            let input = egui::RawInput {
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let rect = Rect::from_min_size(Pos2::ZERO, Vec2::splat(60.));
+                    let r = ui.allocate_rect(rect, egui::Sense::click());
+                    context_menu(&r, 100., |ui| {
+                        ui.label("x");
+                    });
+                });
+                claimed.push(right_click_claimed(ctx));
+            });
+        }
+        // The release completes the right click; the next frame is free.
+        assert_eq!(claimed, [false, false, true, false]);
     }
 }

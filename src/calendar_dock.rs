@@ -446,7 +446,8 @@ impl App {
         let id = egui::Id::new("calendar_view_menu");
         let (secondary, pointer) =
             ctx.input(|i| (i.pointer.secondary_clicked(), i.pointer.interact_pos()));
-        if secondary {
+        // A memo (band or row) has its own menu for that click.
+        if secondary && !crate::float::right_click_claimed(ctx) {
             if let Some(p) = pointer {
                 // Its own window: it may reach past the calendar window.
                 crate::float::open_at(

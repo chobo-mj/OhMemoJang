@@ -45,11 +45,11 @@ impl App {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui::primary(ui, "+ 새 일정").clicked() {
-                    self.add_note(Some(match self.page {
+                    self.new_schedule(match self.page {
                         2 => Local::now().date_naive(),
                         3 => Local::now().date_naive() + Duration::days(1),
                         _ => self.day,
-                    }));
+                    });
                 }
             });
         });
@@ -770,8 +770,7 @@ impl App {
                 overlay(ui, plus, slot + 25000, |ui| {
                     if icons::small_icon(ui, icons::Icon::Plus, "이 날짜에 새 스티커").clicked()
                     {
-                        let i = self.new_sticker();
-                        self.data.notes[i].date = Some(day);
+                        self.new_sticker_on(day);
                         self.day = day;
                     }
                 });
@@ -784,10 +783,8 @@ impl App {
                 self.range_drag = None;
                 if a != b {
                     let (start, end) = (a.min(b), a.max(b));
-                    let i = self.new_sticker();
-                    self.drafts.push(i);
+                    let i = self.new_sticker_on(start);
                     let n = &mut self.data.notes[i];
-                    n.date = Some(start);
                     n.duration = ((end - start).num_days() + 1).min(u16::MAX as i64) as u16;
                     self.day = start;
                     self.toast = format!(
@@ -934,8 +931,7 @@ impl App {
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("+ 이 날짜에 스티커").clicked() {
-                    let i = self.new_sticker();
-                    self.data.notes[i].date = Some(self.day);
+                    self.new_sticker_on(self.day);
                 }
             });
         });
@@ -1303,6 +1299,41 @@ impl App {
         if response.clicked() {
             self.open_sticker(i, occurrence);
         }
+        self.band_menu(&response, i, occurrence);
+    }
+    /// '일정 제외': the memo stays (with its content and alarm), only its
+    /// schedule goes, so it leaves the calendar's schedule view.
+    pub(crate) fn unschedule(&mut self, i: usize) {
+        self.data.notes[i].clear_schedule();
+        if let Some(w) = self.studio.windows.get_mut(&i) {
+            w.schedule_start = None;
+            w.occurrence = None;
+        }
+        self.toast = "메모는 두고 일정만 뺐습니다".into();
+    }
+    /// Right click on a memo in the calendar grid.
+    fn band_menu(&mut self, response: &egui::Response, i: usize, occurrence: Option<NaiveDate>) {
+        crate::float::context_menu(response, 180., |ui| {
+            if ui.button("스티커로 열기").clicked() {
+                self.open_sticker(i, occurrence);
+                ui.close_menu();
+            }
+            if ui.button("편집창 열기").clicked() {
+                self.open_editor_on(i, occurrence);
+                ui.close_menu();
+            }
+            // Only a memo with a schedule (not one shown by its creation
+            // or alarm date) has one to take out.
+            if self.data.notes[i].date.is_some() && ui.button("일정 제외").clicked() {
+                self.unschedule(i);
+                ui.close_menu();
+            }
+            ui.separator();
+            if ui.button("메모 삭제 · 휴지통").clicked() {
+                self.trash_note(i);
+                ui.close_menu();
+            }
+        });
     }
     /// The two ends of a band (where the memo's days start and stop): the
     /// pointer turns into a left-right arrow there, and dragging one moves
@@ -1379,7 +1410,7 @@ impl App {
             None => (tone, ACCENT, ui::BLUE, ACCENT),
         }
     }
-    fn calendar_matches(&self, n: &Note, day: NaiveDate) -> bool {
+    pub(crate) fn calendar_matches(&self, n: &Note, day: NaiveDate) -> bool {
         match self.desktop.calendar_basis {
             0 => n.created.date() == day,
             2 => n.reminder.is_some_and(|t| t.date() == day),
@@ -2173,6 +2204,25 @@ mod schedule_button_tests {
         // delete by hand) - the title/body fields' own hint text is enough.
         assert_eq!(a.data.notes[i].title, "");
         assert_eq!(a.data.notes[i].body, "");
+    }
+    #[test]
+    fn taking_a_memo_out_of_the_schedule_keeps_the_memo() {
+        let today = Local::now().date_naive();
+        let mut a = App::sample(today);
+        let i = a.new_sticker_on(today);
+        let n = &mut a.data.notes[i];
+        n.title = "회의".into();
+        n.body = "안건".into();
+        n.duration = 3;
+        a.desktop.calendar_basis = 1;
+        assert!(a.calendar_matches(&a.data.notes[i], today));
+        a.unschedule(i);
+        let n = &a.data.notes[i];
+        assert_eq!((n.date, n.duration), (None, 1));
+        assert!(!n.deleted, "the memo itself stays");
+        assert_eq!((n.title.as_str(), n.body.as_str()), ("회의", "안건"));
+        assert!(!a.calendar_matches(n, today), "off the schedule calendar");
+        assert_eq!(a.studio.windows[&i].schedule_start, None);
     }
 }
 
