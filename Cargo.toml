@@ -36,3 +36,5 @@ strip = true
 
 [patch.crates-io]
 eframe = { path = "vendor/eframe" }
+# Emoji typed with Win+. come as two key presses; see vendor/winit keyboard.rs.
+winit = { path = "vendor/winit" }

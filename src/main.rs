@@ -192,6 +192,8 @@ impl App {
                 }
             }
         }
+        // Emoji modifiers (skin tones, variation selectors) draw as nothing.
+        composer::add_invisible_font(&mut fonts);
         // After the fallbacks above: this family must hold nothing else.
         composer::add_spacer_font(&mut fonts);
         cc.egui_ctx.set_fonts(fonts);

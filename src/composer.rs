@@ -2554,6 +2554,59 @@ pub fn spacer_font() -> Vec<u8> {
     for x in [0x3000, 0xFFFF, 0, 0x3000, 0xFFFF, delta, 1, 0, 0] {
         be16(&mut cmap, x);
     }
+    one_glyph_font(cmap, 1000)
+}
+/// Characters that only change how the emoji before them looks (variation
+/// selectors, the zero-width joiner, skin tones, tag characters). Drawn with
+/// no width, so an emoji from Win+. does not show stray boxes after it.
+const INVISIBLE: [(u32, u32); 5] = [
+    (0x200D, 0x200D),
+    (0xFE00, 0xFE0F),
+    (0x1F3FB, 0x1F3FF),
+    (0xE0020, 0xE007F),
+    (0xE0100, 0xE01EF),
+];
+pub const INVISIBLE_FONT: &str = "invisible_marks";
+/// A font whose one glyph, empty and without width, stands for `INVISIBLE`.
+pub fn invisible_font() -> Vec<u8> {
+    let mut cmap = vec![];
+    cmap.extend_from_slice(&0u16.to_be_bytes());
+    cmap.extend_from_slice(&1u16.to_be_bytes());
+    cmap.extend_from_slice(&3u16.to_be_bytes()); // Windows
+    cmap.extend_from_slice(&10u16.to_be_bytes()); // full Unicode
+    cmap.extend_from_slice(&12u32.to_be_bytes());
+    // Format 12: groups of (first, last, glyph).
+    cmap.extend_from_slice(&12u16.to_be_bytes());
+    cmap.extend_from_slice(&0u16.to_be_bytes());
+    cmap.extend_from_slice(&(16 + 12 * INVISIBLE.len() as u32).to_be_bytes());
+    cmap.extend_from_slice(&0u32.to_be_bytes());
+    cmap.extend_from_slice(&(INVISIBLE.len() as u32).to_be_bytes());
+    for (first, last) in INVISIBLE {
+        for x in [first, last, 1] {
+            cmap.extend_from_slice(&x.to_be_bytes());
+        }
+    }
+    one_glyph_font(cmap, 0)
+}
+/// Every family falls back to the invisible marks last.
+pub fn add_invisible_font(fonts: &mut egui::FontDefinitions) {
+    fonts.font_data.insert(
+        INVISIBLE_FONT.into(),
+        egui::FontData::from_owned(invisible_font()).into(),
+    );
+    for entries in fonts.families.values_mut() {
+        entries.push(INVISIBLE_FONT.into());
+    }
+}
+/// A minimal font: glyph 0 (.notdef) and glyph 1, both empty, glyph 1
+/// `advance` wide (of 1000), mapped by `cmap`.
+fn one_glyph_font(cmap: Vec<u8>, advance: u16) -> Vec<u8> {
+    fn be16(v: &mut Vec<u8>, x: u16) {
+        v.extend_from_slice(&x.to_be_bytes());
+    }
+    fn be32(v: &mut Vec<u8>, x: u32) {
+        v.extend_from_slice(&x.to_be_bytes());
+    }
     let mut head = vec![];
     for x in [0x0001_0000, 0x0001_0000, 0, 0x5F0F_3CF5] {
         be32(&mut head, x);
@@ -2572,8 +2625,8 @@ pub fn spacer_font() -> Vec<u8> {
         be16(&mut hhea, x);
     }
     let mut hmtx = vec![];
-    for x in [0, 0, 1000, 0] {
-        be16(&mut hmtx, x); // (advance, left bearing) of .notdef and of U+3000
+    for x in [0, 0, advance, 0] {
+        be16(&mut hmtx, x); // (advance, left bearing) of .notdef and of glyph 1
     }
     let mut maxp = vec![];
     be32(&mut maxp, 0x0000_5000);
@@ -5032,6 +5085,28 @@ mod tests {
         let alphabet = "  h) 여덟\n  i) 아홉";
         assert_eq!(continuation(alphabet, alphabet.chars().count()), "\n  j) ");
         assert_eq!(continuation("  i) 항목\n일반 문장", 17), "\n");
+    }
+    #[test]
+    fn emoji_modifiers_take_no_room() {
+        let ctx = egui::Context::default();
+        let mut fonts = egui::FontDefinitions::default();
+        add_invisible_font(&mut fonts);
+        ctx.set_fonts(fonts);
+        let _ = ctx.run(Default::default(), |_| {});
+        let width = |c: &egui::Context, s: &str| {
+            c.fonts(|f| {
+                f.layout_no_wrap(s.into(), FontId::proportional(14.), Color32::BLACK)
+                    .size()
+                    .x
+            })
+        };
+        assert!((width(&ctx, "A\u{2764}\u{FE0F}B") - width(&ctx, "A\u{2764}B")).abs() < 0.5);
+        assert!((width(&ctx, "\u{1F44D}\u{1F3FB}") - width(&ctx, "\u{1F44D}")).abs() < 0.5);
+        assert!((width(&ctx, "A\u{200D}B") - width(&ctx, "AB")).abs() < 0.5);
+        // Without it, a box is drawn for each.
+        let plain = egui::Context::default();
+        let _ = plain.run(Default::default(), |_| {});
+        assert!(width(&plain, "A\u{FE0F}B") > width(&plain, "AB") + 1.);
     }
     #[test]
     fn unicode_shortcuts_do_not_split_korean_chars() {
