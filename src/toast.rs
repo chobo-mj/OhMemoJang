@@ -20,12 +20,65 @@ pub enum Answer {
 
 static ANSWERS: Mutex<Vec<Answer>> = Mutex::new(Vec::new());
 
+/// Buttons open `ohmemojang:<what>:<memo>` links: Windows starts the program
+/// with the link, whether or not it is running, so a press is never lost.
+pub const SCHEME: &str = "ohmemojang:";
+
+/// The notification press this launch was started for, if any.
+pub fn launch_answer() -> Option<String> {
+    std::env::args().find(|a| a.starts_with(SCHEME))
+}
+
+/// Presses handed over by a later launch, waiting for the running copy.
+fn queue_file() -> Option<std::path::PathBuf> {
+    std::env::var_os("LOCALAPPDATA").map(|d| {
+        std::path::PathBuf::from(d)
+            .join("OhMemoJang")
+            .join("notification_answers.txt")
+    })
+}
+
+/// A second launch (started for a press) leaves it for the running copy.
+pub fn queue_for_running(arguments: &str) {
+    use std::io::Write;
+    if let Some(path) = queue_file() {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = writeln!(f, "{arguments}");
+        }
+    }
+}
+
+/// Take the presses other launches left; true when there were any.
+pub fn take_queued() -> bool {
+    let Some(path) = queue_file() else {
+        return false;
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return false;
+    };
+    let _ = std::fs::remove_file(&path);
+    let mut any = false;
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        answer(line.trim());
+        any = true;
+    }
+    any
+}
+
 /// Presses since the last call.
 pub fn take_answers() -> Vec<Answer> {
     std::mem::take(&mut *ANSWERS.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
-fn answer(arguments: &str) {
+pub fn answer(arguments: &str) {
+    let arguments = arguments.strip_prefix(SCHEME).unwrap_or(arguments);
     let parsed = arguments.split_once(':').and_then(|(what, note)| {
         let note: usize = note.parse().ok()?;
         Some(match what {
@@ -62,7 +115,7 @@ pub fn xml(note: usize, title: &str, when: &str, sound: bool) -> String {
         r#"<audio silent="true"/>"#
     };
     format!(
-        r#"<toast launch="open:{note}" scenario="reminder"><visual><binding template="ToastGeneric"><text>{}</text><text>{} · OhMemoJang 알람</text></binding></visual><actions><action content="열기" arguments="open:{note}" activationType="foreground"/><action content="5분 뒤" arguments="snooze:{note}" activationType="foreground"/><action content="확인" arguments="done:{note}" activationType="foreground"/></actions>{audio}</toast>"#,
+        r#"<toast launch="{SCHEME}open:{note}" activationType="protocol" scenario="reminder"><visual><binding template="ToastGeneric"><text>{}</text><text>{} · OhMemoJang 알람</text></binding></visual><actions><action content="열기" arguments="{SCHEME}open:{note}" activationType="protocol"/><action content="5분 뒤" arguments="{SCHEME}snooze:{note}" activationType="protocol"/><action content="확인" arguments="{SCHEME}done:{note}" activationType="protocol"/></actions>{audio}</toast>"#,
         escape(title),
         escape(when),
     )
@@ -129,6 +182,44 @@ mod imp {
                 );
             };
             set("DisplayName", "OhMemoJang");
+            // The `ohmemojang:` links the notification buttons open.
+            if let Ok(exe) = std::env::current_exe() {
+                let put = |path: &str, name: Option<&str>, value: &str| {
+                    let mut k = std::ptr::null_mut();
+                    if RegCreateKeyExW(
+                        HKEY_CURRENT_USER,
+                        wide(path).as_ptr(),
+                        0,
+                        std::ptr::null(),
+                        0,
+                        KEY_SET_VALUE,
+                        std::ptr::null(),
+                        &mut k,
+                        std::ptr::null_mut(),
+                    ) == 0
+                    {
+                        let v = wide(value);
+                        let n = name.map(wide);
+                        RegSetValueExW(
+                            k,
+                            n.as_ref().map_or(std::ptr::null(), |n| n.as_ptr()),
+                            0,
+                            REG_SZ,
+                            v.as_ptr() as *const u8,
+                            (v.len() * 2) as u32,
+                        );
+                        RegCloseKey(k);
+                    }
+                };
+                let base = r"Software\Classes\ohmemojang";
+                put(base, None, "URL:OhMemoJang 알림");
+                put(base, Some("URL Protocol"), "");
+                put(
+                    &format!(r"{base}\shell\open\command"),
+                    None,
+                    &format!("\"{}\" \"%1\"", exe.display()),
+                );
+            }
             if let Some(icon) = &icon {
                 set("IconUri", &icon.to_string_lossy());
             }
@@ -244,6 +335,13 @@ mod imp {
             .map_err(err)?;
         let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_ID))
             .map_err(err)?;
+
+        // Notifications turned off for the program (or by the user or a
+        // policy) are accepted and then never shown: the popup is used.
+        let setting = notifier.Setting().map_err(err)?;
+        if setting != windows::UI::Notifications::NotificationSetting::Enabled {
+            return Err("Windows 알림이 꺼져 있음".into());
+        }
         notifier.Show(&toast).map_err(err)?;
         let mut shown = SHOWN.lock().unwrap_or_else(|e| e.into_inner());
         shown.push(toast);
@@ -288,7 +386,11 @@ mod tests {
     fn notification_text_is_escaped_and_buttons_carry_the_memo() {
         let x = xml(7, "a<b & \"c\"", "11월 18일 09:00", true);
         assert!(x.contains("a&lt;b &amp; &quot;c&quot;"));
-        for a in ["open:7", "snooze:7", "done:7"] {
+        for a in [
+            "ohmemojang:open:7",
+            "ohmemojang:snooze:7",
+            "ohmemojang:done:7",
+        ] {
             assert!(x.contains(a));
         }
         assert!(x.contains("Notification.Reminder"));
@@ -302,9 +404,15 @@ mod tests {
         answer("snooze:4");
         answer("done:5");
         answer("bogus");
+        answer("ohmemojang:done:6");
         assert_eq!(
             take_answers(),
-            vec![Answer::Open(3), Answer::Snooze(4), Answer::Done(5)]
+            vec![
+                Answer::Open(3),
+                Answer::Snooze(4),
+                Answer::Done(5),
+                Answer::Done(6)
+            ]
         );
     }
 }

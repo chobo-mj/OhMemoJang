@@ -1037,6 +1037,10 @@ impl App {
     }
     /// Save what changed: after user input at most every two seconds, once a
     /// minute regardless, or now when `force` (e.g. on exit).
+    /// The data folder being saved to (once the first save set it up).
+    pub fn saving_dir(&self) -> Option<PathBuf> {
+        self.saving.dir.clone()
+    }
     pub fn autosave(&mut self, now: f64, force: bool) {
         if INPUT.swap(false, Ordering::Relaxed) {
             self.saving.pending = true;
@@ -1529,7 +1533,53 @@ pub fn read_file(path: &Path) -> Result<Saved, String> {
 /// they are never changed or deleted, so the images folder serves every
 /// backup.
 pub fn backup(dir: &Path) -> Result<PathBuf, String> {
-    let stamp = Local::now().format("%Y%m%d-%H%M%S").to_string();
+    backup_named(dir, "")
+}
+
+/// Daily automatic backups are named `auto-<time>`; this many are kept.
+const AUTO_BACKUPS: usize = 7;
+
+/// A backup a day, made by itself; the oldest automatic ones beyond
+/// `AUTO_BACKUPS` are removed (backups made by hand are never touched).
+/// Returns whether one was made.
+pub fn auto_backup(dir: &Path, now: chrono::NaiveDateTime) -> Result<bool, String> {
+    if !dir.join(DB).exists() {
+        return Ok(false);
+    }
+    let mut autos: Vec<String> = std::fs::read_dir(dir.join("backups"))
+        .map(|r| {
+            r.flatten()
+                .filter(|e| e.path().join(DB).exists())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.starts_with("auto-"))
+                .collect()
+        })
+        .unwrap_or_default();
+    autos.sort();
+    let newest = autos
+        .last()
+        .and_then(|n| chrono::NaiveDateTime::parse_from_str(n.get(5..20)?, "%Y%m%d-%H%M%S").ok());
+    let made = if newest.is_none_or(|t| now - t >= chrono::Duration::hours(24)) {
+        let path = backup_named(dir, "auto-")?;
+        autos.push(
+            path.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+        );
+        true
+    } else {
+        false
+    };
+    while autos.len() > AUTO_BACKUPS {
+        let old = autos.remove(0);
+        let _ = std::fs::remove_dir_all(dir.join("backups").join(old));
+    }
+    Ok(made)
+}
+
+fn backup_named(dir: &Path, prefix: &str) -> Result<PathBuf, String> {
+    let stamp = format!("{prefix}{}", Local::now().format("%Y%m%d-%H%M%S"));
     let mut target = dir.join("backups").join(&stamp);
     let mut n = 1;
     while target.join(DB).exists() {
@@ -1713,6 +1763,54 @@ mod tests {
         // A backup that cannot be read stops the search.
         std::fs::write(backup_dir.join(DB), b"broken").unwrap();
         assert!(unused_images(&dir, &memory).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_backup_a_day_and_only_the_last_seven_automatic_ones_are_kept() {
+        let dir = std::env::temp_dir().join(format!("ohmemojang-auto-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = App::sample(NaiveDate::from_ymd_opt(2026, 11, 11).unwrap());
+        let snap = a.snapshot(&dir);
+        write_all(&dir, &snap).unwrap();
+        // One made by hand is never removed.
+        backup(&dir).unwrap();
+        // Pretend nine automatic backups were made on earlier days.
+        for d in 1..=9 {
+            let old = dir
+                .join("backups")
+                .join(format!("auto-202611{d:02}-090000"));
+            std::fs::create_dir_all(&old).unwrap();
+            std::fs::write(old.join(DB), b"x").unwrap();
+        }
+        let now = NaiveDate::from_ymd_opt(2026, 11, 9)
+            .unwrap()
+            .and_hms_opt(20, 0, 0)
+            .unwrap();
+        // The newest is less than a day old: none made, the oldest pruned.
+        assert!(!auto_backup(&dir, now).unwrap());
+        let names = |dir: &Path| -> Vec<String> {
+            let mut v: Vec<String> = std::fs::read_dir(dir.join("backups"))
+                .unwrap()
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+            v.sort();
+            v
+        };
+        let autos = |dir: &Path| {
+            names(dir)
+                .into_iter()
+                .filter(|n| n.starts_with("auto-"))
+                .count()
+        };
+        assert_eq!(autos(&dir), 7);
+        assert_eq!(names(&dir).len(), 8);
+        // A day later: a new one, still seven kept.
+        let later = now + chrono::Duration::hours(30);
+        assert!(auto_backup(&dir, later).unwrap());
+        assert_eq!(autos(&dir), 7);
+        assert!(!names(&dir).contains(&"auto-20261103-090000".to_string()));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

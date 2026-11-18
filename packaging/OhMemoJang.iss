@@ -62,12 +62,15 @@ Name: "{userdesktop}\OhMemoJang"; Filename: "{app}\OhMemoJang.exe"; WorkingDir: 
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "OhMemoJang"; Flags: dontcreatekey uninsdeletevalue
 ; The notification identity the program registers for its alarms.
 Root: HKCU; Subkey: "Software\Classes\AppUserModelId\OhMemoJang.App"; ValueType: none; Flags: dontcreatekey uninsdeletekey
+; The ohmemojang: links its notification buttons open.
+Root: HKCU; Subkey: "Software\Classes\ohmemojang"; ValueType: none; Flags: dontcreatekey uninsdeletekey
 
 ; Files the program makes for its own use (not user data): the icon its
 ; notifications show, and the folders left empty. Memos (%APPDATA%) and the
 ; clipboard history stay.
 [UninstallDelete]
 Type: files; Name: "{localappdata}\OhMemoJang\notification_icon.png"
+Type: files; Name: "{localappdata}\OhMemoJang\notification_answers.txt"
 Type: dirifempty; Name: "{localappdata}\OhMemoJang"
 Type: dirifempty; Name: "{userprograms}\OhMemoJang"
 

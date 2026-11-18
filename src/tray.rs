@@ -173,6 +173,10 @@ pub fn single_instance() -> bool {
             let first = GetLastError() != ERROR_ALREADY_EXISTS;
             let show = CreateEventW(std::ptr::null(), 0, 0, event.as_ptr());
             if !first {
+                // A press on a notification: handed to the running copy.
+                if let Some(answer) = crate::toast::launch_answer() {
+                    crate::toast::queue_for_running(&answer);
+                }
                 // Started by Windows (`--tray`) while already running: stay quiet.
                 if !show.is_null() && !std::env::args().any(|x| x == "--tray") {
                     SetEvent(show);
@@ -185,7 +189,11 @@ pub fn single_instance() -> bool {
                     if WaitForSingleObject(show as _, INFINITE) != 0 {
                         break;
                     }
-                    SHOW.store(true, std::sync::atomic::Ordering::Relaxed);
+                    // A press handed over is answered without opening the
+                    // main window; any other launch shows it.
+                    if !crate::toast::take_queued() {
+                        SHOW.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
                     crate::wake::now();
                 });
             }

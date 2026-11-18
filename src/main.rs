@@ -210,12 +210,18 @@ impl App {
         a.prefs_saved = a.prefs.clone();
         a.tray = tray::Tray::new(&cc.egui_ctx);
         // Started with Windows: stay in the tray, stickers on the desktop.
-        a.main_open = !(a.tray.active() && std::env::args().any(|x| x == "--tray"));
+        a.main_open = !(a.tray.active() && std::env::args().any(|x| x == "--tray")
+            || toast::launch_answer().is_some());
         a.hotkeys = GlobalHotKeyManager::new().ok();
         wake::set(&cc.egui_ctx);
         if a.desktop.toast_center {
             toast::prepare();
         }
+        // Started for a press on a notification while not running.
+        if let Some(answer) = toast::launch_answer() {
+            toast::answer(&answer);
+        }
+        toast::take_queued();
         wake::watch_hotkeys();
         a.apply_shortcuts();
         a
@@ -524,6 +530,13 @@ impl eframe::App for App {
         if now - self.tidied >= 3600. {
             self.tidied = now;
             self.purge_expired_trash(Local::now().naive_local());
+            // A backup a day (checked at start and every hour).
+            if let Some(dir) = self.saving_dir() {
+                self.autosave(0., true);
+                if let Err(e) = storage::auto_backup(&dir, Local::now().naive_local()) {
+                    self.toast = format!("자동 백업을 만들지 못했습니다: {e}");
+                }
+            }
         }
         if now - self.textures_checked >= 10. {
             self.textures_checked = now;
