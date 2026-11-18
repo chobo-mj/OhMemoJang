@@ -79,6 +79,9 @@ pub struct NoteRec {
     pub body: String,
     pub document: DocRec,
     pub reminder: Option<NaiveDateTime>,
+    pub alarm_repeat: u8,
+    pub alarm_lead: u16,
+    pub alarm_more: Vec<NaiveDateTime>,
     pub locked: bool,
     pub purged: bool,
     pub date: Option<NaiveDate>,
@@ -752,6 +755,9 @@ fn note_rec(n: &Note) -> NoteRec {
         body: n.body.clone(),
         document: doc_rec(&n.document),
         reminder: n.reminder,
+        alarm_repeat: n.alarm_repeat,
+        alarm_lead: n.alarm_lead,
+        alarm_more: n.alarm_more.clone(),
         locked: n.locked,
         purged: n.purged,
         date: n.date,
@@ -790,6 +796,9 @@ fn note_from(r: &NoteRec, i: usize) -> Note {
     n.body = r.body.clone();
     n.document = doc_from(&r.document);
     n.reminder = r.reminder;
+    n.alarm_repeat = r.alarm_repeat.min(4);
+    n.alarm_lead = r.alarm_lead;
+    n.alarm_more = r.alarm_more.clone();
     n.locked = r.locked;
     n.purged = r.purged;
     n.duration = r.duration.max(1);

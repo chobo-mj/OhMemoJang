@@ -32,6 +32,12 @@ pub struct Note {
     pub body: String,
     pub document: crate::composer::Document,
     pub reminder: Option<NaiveDateTime>,
+    /// How the main alarm repeats (`alarm::REPEATS`; 0: once).
+    pub alarm_repeat: u8,
+    /// An early reminder this many minutes before the main alarm (0: none).
+    pub alarm_lead: u16,
+    /// Extra one-time alarms.
+    pub alarm_more: Vec<NaiveDateTime>,
     pub locked: bool,
     pub purged: bool,
     pub date: Option<NaiveDate>,
@@ -72,6 +78,9 @@ impl Note {
             body: "아이디어와 준비할 내용을 여기에 정리하세요.".into(),
             document: Default::default(),
             reminder: None,
+            alarm_repeat: 0,
+            alarm_lead: 0,
+            alarm_more: vec![],
             locked: false,
             purged: false,
             date,

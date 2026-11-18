@@ -501,6 +501,7 @@ impl App {
         n.journal_comments.clear();
         n.occurrence_comments.clear();
         n.reminder = None;
+        n.alarm_more.clear();
         n.purged = true;
         n.deleted = true;
         self.desktop.passwords.remove(&i);
@@ -775,11 +776,12 @@ impl App {
             let mut open = true;
             let mut applied = false;
             let mut cleared = false;
+            let mut add_extra = false;
             crate::ui::dialog(
                 ctx,
                 "reminder_dialog",
                 "알람 설정",
-                [340., 470.],
+                [360., 640.],
                 true,
                 &mut open,
                 |ui| {
@@ -840,11 +842,47 @@ impl App {
                         ui,
                         "시각이 되면 소리와 함께 화면 오른쪽 아래에 알림 창이 뜹니다",
                     );
+                    ui.add_space(6.);
+                    let n = &mut self.data.notes[i];
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("반복");
+                        for (k, label) in crate::alarm::REPEATS.iter().enumerate() {
+                            if crate::ui::pill(ui, n.alarm_repeat as usize == k, label).clicked() {
+                                n.alarm_repeat = k as u8;
+                            }
+                        }
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("미리 알림");
+                        for (m, label) in crate::alarm::LEADS {
+                            if crate::ui::pill(ui, n.alarm_lead == m, label).clicked() {
+                                n.alarm_lead = m;
+                            }
+                        }
+                    });
+                    ui.add_space(4.);
+                    let mut remove = None;
+                    for (k, t) in n.alarm_more.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("추가 알람 {}", t.format("%-m월 %-d일 %H:%M")));
+                            if ui.small_button("삭제").clicked() {
+                                remove = Some(k);
+                            }
+                        });
+                    }
+                    if let Some(k) = remove {
+                        n.alarm_more.remove(k);
+                    }
+                    add_extra = ui
+                        .button("고른 시각을 추가 알람으로 넣기")
+                        .on_hover_text("한 메모에 알람을 여러 개 둘 수 있어요")
+                        .clicked();
                     ui.add_space(4.);
                     let mut out = (false, false);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         out.0 = crate::ui::primary(ui, "설정").clicked();
-                        if self.data.notes[i].reminder.is_some() {
+                        let n = &self.data.notes[i];
+                        if n.reminder.is_some() || !n.alarm_more.is_empty() {
                             out.1 = ui.button("알람 해제").clicked();
                         }
                     });
@@ -859,8 +897,25 @@ impl App {
                 );
                 open = false;
             }
+            if add_extra {
+                if let Some(t) = self.desktop.reminder_date.and_hms_opt(
+                    self.desktop.reminder_hour,
+                    self.desktop.reminder_minute,
+                    0,
+                ) {
+                    let n = &mut self.data.notes[i];
+                    if !n.alarm_more.contains(&t) && n.reminder != Some(t) {
+                        n.alarm_more.push(t);
+                        n.alarm_more.sort();
+                    }
+                }
+            }
             if cleared {
-                self.data.notes[i].reminder = None;
+                let n = &mut self.data.notes[i];
+                n.reminder = None;
+                n.alarm_repeat = 0;
+                n.alarm_lead = 0;
+                n.alarm_more.clear();
                 open = false;
             }
             if !open {

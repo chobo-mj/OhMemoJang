@@ -13,9 +13,9 @@ pub const APP_ID: &str = "OhMemoJang.App";
 /// What was pressed on an alarm's notification.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Answer {
-    Open(usize),
-    Snooze(usize),
-    Done(usize),
+    Open(usize, Option<char>),
+    Snooze(usize, Option<char>),
+    Done(usize, Option<char>),
 }
 
 static ANSWERS: Mutex<Vec<Answer>> = Mutex::new(Vec::new());
@@ -79,12 +79,15 @@ pub fn take_answers() -> Vec<Answer> {
 
 pub fn answer(arguments: &str) {
     let arguments = arguments.strip_prefix(SCHEME).unwrap_or(arguments);
-    let parsed = arguments.split_once(':').and_then(|(what, note)| {
-        let note: usize = note.parse().ok()?;
+    // "<what>:<memo>" or "<what>:<memo><which alarm>" (m, p, x).
+    let parsed = arguments.split_once(':').and_then(|(what, token)| {
+        let digits: String = token.chars().take_while(char::is_ascii_digit).collect();
+        let note: usize = digits.parse().ok()?;
+        let letter = token[digits.len()..].chars().next();
         Some(match what {
-            "open" => Answer::Open(note),
-            "snooze" => Answer::Snooze(note),
-            "done" => Answer::Done(note),
+            "open" => Answer::Open(note, letter),
+            "snooze" => Answer::Snooze(note, letter),
+            "done" => Answer::Done(note, letter),
             _ => return None,
         })
     });
@@ -103,7 +106,8 @@ fn escape(s: &str) -> String {
 }
 
 /// The notification for `note`'s alarm.
-pub fn xml(note: usize, title: &str, when: &str, sound: bool) -> String {
+pub fn xml(note: usize, which: char, title: &str, when: &str, sound: bool) -> String {
+    let id = format!("{note}{which}");
     let title = if title.trim().is_empty() {
         "제목 없음"
     } else {
@@ -115,7 +119,7 @@ pub fn xml(note: usize, title: &str, when: &str, sound: bool) -> String {
         r#"<audio silent="true"/>"#
     };
     format!(
-        r#"<toast launch="{SCHEME}open:{note}" activationType="protocol" scenario="reminder"><visual><binding template="ToastGeneric"><text>{}</text><text>{} · OhMemoJang 알람</text></binding></visual><actions><action content="열기" arguments="{SCHEME}open:{note}" activationType="protocol"/><action content="5분 뒤" arguments="{SCHEME}snooze:{note}" activationType="protocol"/><action content="확인" arguments="{SCHEME}done:{note}" activationType="protocol"/></actions>{audio}</toast>"#,
+        r#"<toast launch="{SCHEME}open:{id}" activationType="protocol" scenario="reminder"><visual><binding template="ToastGeneric"><text>{}</text><text>{} · OhMemoJang 알람</text></binding></visual><actions><action content="열기" arguments="{SCHEME}open:{id}" activationType="protocol"/><action content="5분 뒤" arguments="{SCHEME}snooze:{id}" activationType="protocol"/><action content="확인" arguments="{SCHEME}done:{id}" activationType="protocol"/></actions>{audio}</toast>"#,
         escape(title),
         escape(when),
     )
@@ -287,14 +291,22 @@ mod imp {
             .get_or_insert_with(register)
     }
 
-    pub fn show(note: usize, title: &str, when: &str, sound: bool) -> Result<(), String> {
+    pub fn show(
+        note: usize,
+        which: char,
+        title: &str,
+        when: &str,
+        sound: bool,
+    ) -> Result<(), String> {
         let ready = prepare();
         if !ready {
             return Err("알림 등록 실패".into());
         }
         let err = |e: windows::core::Error| e.message().to_string();
+        let id = format!("{note}{which}");
+        let id2 = id.clone();
         let doc = XmlDocument::new().map_err(err)?;
-        doc.LoadXml(&HSTRING::from(xml(note, title, when, sound)))
+        doc.LoadXml(&HSTRING::from(xml(note, which, title, when, sound)))
             .map_err(err)?;
         let toast = ToastNotification::CreateToastNotification(&doc).map_err(err)?;
         // The same memo's newer alarm replaces its older notification.
@@ -310,7 +322,7 @@ mod imp {
                         .and_then(|a| a.cast::<ToastActivatedEventArgs>().ok())
                         .and_then(|a| a.Arguments().ok())
                         .map(|a| a.to_string())
-                        .unwrap_or_else(|| format!("open:{note}"));
+                        .unwrap_or_else(|| format!("open:{id}"));
                     answer(&pressed);
                     Ok(())
                 },
@@ -327,7 +339,7 @@ mod imp {
                         .and_then(|a| a.Reason().ok())
                         .is_some_and(|r| r == ToastDismissalReason::UserCanceled)
                     {
-                        answer(&format!("done:{note}"));
+                        answer(&format!("done:{id2}"));
                     }
                     Ok(())
                 },
@@ -371,7 +383,7 @@ mod imp {
     pub fn prepare() -> bool {
         false
     }
-    pub fn show(_: usize, _: &str, _: &str, _: bool) -> Result<(), String> {
+    pub fn show(_: usize, _: char, _: &str, _: &str, _: bool) -> Result<(), String> {
         Err("Windows only".into())
     }
     pub fn remove(_: usize) {}
@@ -384,7 +396,7 @@ mod tests {
     use super::*;
     #[test]
     fn notification_text_is_escaped_and_buttons_carry_the_memo() {
-        let x = xml(7, "a<b & \"c\"", "11월 18일 09:00", true);
+        let x = xml(7, 'm', "a<b & \"c\"", "11월 18일 09:00", true);
         assert!(x.contains("a&lt;b &amp; &quot;c&quot;"));
         for a in [
             "ohmemojang:open:7",
@@ -394,8 +406,8 @@ mod tests {
             assert!(x.contains(a));
         }
         assert!(x.contains("Notification.Reminder"));
-        assert!(xml(1, "", "", false).contains(r#"silent="true""#));
-        assert!(xml(1, "", "", false).contains("제목 없음"));
+        assert!(xml(1, 'm', "", "", false).contains(r#"silent="true""#));
+        assert!(xml(1, 'm', "", "", false).contains("제목 없음"));
     }
     #[test]
     fn presses_come_back_as_answers() {
@@ -405,13 +417,15 @@ mod tests {
         answer("done:5");
         answer("bogus");
         answer("ohmemojang:done:6");
+        answer("done:8p");
         assert_eq!(
             take_answers(),
             vec![
-                Answer::Open(3),
-                Answer::Snooze(4),
-                Answer::Done(5),
-                Answer::Done(6)
+                Answer::Open(3, None),
+                Answer::Snooze(4, None),
+                Answer::Done(5, None),
+                Answer::Done(6, None),
+                Answer::Done(8, Some('p'))
             ]
         );
     }
