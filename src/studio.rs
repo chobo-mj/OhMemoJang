@@ -1994,7 +1994,7 @@ impl App {
                     |ui| {
                         for line in [
                             "윗부분을 끌어 이동하고 가장자리로 크기를 조절합니다.",
-                            "접기: 제목 한 줄 → 색상 상자 · 상자를 두 번 클릭하면 복원",
+                            "접기: 제목 한 줄 → 색상 상자 · 상자를 누르면 복원",
                             "빈 곳을 우클릭하면 스티커 정렬 메뉴가 열립니다.",
                             "이미지와 표는 Ctrl+V로 본문에 붙여 넣습니다.",
                             "Esc를 두 번 누르면 창을 닫습니다. 메모는 유지됩니다.",
@@ -3243,5 +3243,60 @@ mod size_window_tests {
         let skip = at("접기 1단계 건너뛰기").expect("skip option");
         let button = at("1단 접기 크기 조절하기").expect("title width button");
         assert!(button > skip);
+    }
+
+    #[test]
+    fn each_settings_option_sits_with_what_it_changes() {
+        let mut app = App::sample(Local::now().date_naive());
+        let ctx = egui::Context::default();
+        let mut texts_of = |tab: usize| -> Vec<String> {
+            app.desktop.settings_tab = tab;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000., 3000.))),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| app.ppt_settings(ui));
+                },
+            );
+            output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Text(t) => Some(t.galley.job.text.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let sticker = [
+            "메모창을 작업표시줄에 표시",
+            "스티커 메모 체크완료 시 스티커 닫기",
+            "메모 정렬 모니터 정하기",
+            "매일 오늘 메모 자동으로 띄우기",
+        ];
+        let calendar = "메모 끌어 놓기 시 이날까지 업무 선택창 띄우기";
+        let general = texts_of(0);
+        assert!(general.iter().any(|t| t == "Windows 시작 시 자동 실행"));
+        for moved in sticker.iter().chain([&calendar]) {
+            assert!(
+                !general.iter().any(|t| t == moved),
+                "still in 일반: {moved}"
+            );
+        }
+        let memo = texts_of(2);
+        for wanted in sticker
+            .iter()
+            .chain(&["스티커 동작", "접기", "본문 기본값"])
+        {
+            assert!(
+                memo.iter().any(|t| t == wanted),
+                "missing in 메모창: {wanted}"
+            );
+        }
+        assert!(
+            texts_of(3).iter().any(|t| t == calendar),
+            "missing in 캘린더"
+        );
     }
 }

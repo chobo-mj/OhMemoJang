@@ -773,6 +773,12 @@ impl Document {
         }
         Some(label)
     }
+    /// Selects the whole text of the tab shown (from its context menu).
+    pub fn select_all(&mut self) {
+        // The tab is named: a selection asked for alone opens the first tab.
+        self.requested_tab = Some(self.active);
+        self.requested_selection = Some(0..self.tabs[self.active].body.chars().count());
+    }
     pub fn add_tab(&mut self) {
         let n = self.tabs.len() + 1;
         self.tabs.push(Tab::new(format!("탭 {n}")));
@@ -1520,9 +1526,15 @@ fn content_impl(
     }
     let response = output.response;
     crate::float::context_menu(&response, 220., |ui| {
-        for (label, event) in [("잘라내기", egui::Event::Cut), ("복사", egui::Event::Copy)] {
+        for (label, keys, event) in [
+            ("잘라내기", "Ctrl+X", egui::Event::Cut),
+            ("복사", "Ctrl+C", egui::Event::Copy),
+        ] {
             if ui
-                .add_enabled(!doc.selection.is_empty(), egui::Button::new(label))
+                .add_enabled(
+                    !doc.selection.is_empty(),
+                    egui::Button::new(label).shortcut_text(keys),
+                )
                 .clicked()
             {
                 ui.data_mut(|d| d.insert_temp(id.with("edit_menu_events"), vec![event]));
@@ -1530,7 +1542,10 @@ fn content_impl(
                 ui.close_menu();
             }
         }
-        if ui.button("붙여넣기").clicked() {
+        if ui
+            .add(egui::Button::new("붙여넣기").shortcut_text("Ctrl+V"))
+            .clicked()
+        {
             match crate::clipboard_copy::Clipboard::new().and_then(|mut c| c.get_text()) {
                 Ok(text) => ui.data_mut(|d| {
                     d.insert_temp(id.with("edit_menu_events"), vec![egui::Event::Paste(text)])
@@ -1543,8 +1558,19 @@ fn content_impl(
             ui.ctx().request_repaint();
             ui.close_menu();
         }
+        if ui
+            .add(egui::Button::new("모두 선택").shortcut_text("Ctrl+A"))
+            .clicked()
+        {
+            doc.select_all();
+            ui.ctx().request_repaint();
+            ui.close_menu();
+        }
         ui.separator();
-        if ui.button("원본 배율 100%").clicked() {
+        if ui
+            .add_enabled(doc.zoom != 1., egui::Button::new("원본 배율 100%"))
+            .clicked()
+        {
             doc.zoom = 1.;
             ui.close_menu();
         }
@@ -1622,7 +1648,10 @@ fn content_impl(
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(100));
     }
-    *legacy_body = doc.tabs[0].body.clone();
+    // Every frame for every open memo: copy only when it differs.
+    if *legacy_body != doc.tabs[0].body {
+        legacy_body.clone_from(&doc.tabs[0].body);
+    }
     response
 }
 
@@ -1968,6 +1997,33 @@ fn layout_reference(
     }
     job
 }
+/// How long a message (undo, copy, an error) stays under the memo.
+const STATUS_SECS: f64 = 5.;
+/// A message goes away by itself: it used to stay, with the row it takes,
+/// until another one replaced it.
+fn expire_status(ui: &egui::Ui, doc: &mut Document, id: Id) {
+    if doc.status.is_empty() {
+        return;
+    }
+    let key = id.with("status_shown");
+    let now = ui.input(|i| i.time);
+    let shown = ui.data(|d| d.get_temp::<(String, f64)>(key));
+    let since = match shown {
+        Some((text, since)) if text == doc.status => since,
+        _ => {
+            ui.data_mut(|d| d.insert_temp(key, (doc.status.clone(), now)));
+            now
+        }
+    };
+    let left = STATUS_SECS - (now - since);
+    if left <= 0. {
+        doc.status.clear();
+        ui.data_mut(|d| d.remove::<(String, f64)>(key));
+    } else {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_secs_f64(left));
+    }
+}
 fn render_footer(
     ui: &mut egui::Ui,
     doc: &mut Document,
@@ -1980,6 +2036,7 @@ fn render_footer(
     if doc.tabs.is_empty() {
         doc.tabs.push(Tab::new("본문".into()));
     }
+    expire_status(ui, doc, id);
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.y = 4.;
         let status = |ui: &mut egui::Ui, doc: &Document| {
@@ -2617,6 +2674,10 @@ fn show_links(ui: &mut egui::Ui, doc: &mut Document, id: Id) {
                         .id(id.with(("alias", pos)))
                         .desired_width(170.),
                 );
+                if ui.button("링크 열기").clicked() {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(url.clone()));
+                    ui.close_menu();
+                }
                 if ui.button("주소 복사").clicked() {
                     ui.ctx().copy_text(url.clone());
                     ui.close_menu();
@@ -3068,16 +3129,26 @@ fn paint_pictures(
                             }
                             ui.separator();
                             if ui.button("복사").clicked() {
-                                if let Ok(mut c) = crate::clipboard_copy::Clipboard::new() {
-                                    let _ = c.set_image(arboard::ImageData {
-                                        width: p.width,
-                                        height: p.height,
-                                        bytes: p.rgba(),
+                                let copied =
+                                    crate::clipboard_copy::Clipboard::new().and_then(|mut c| {
+                                        c.set_image(arboard::ImageData {
+                                            width: p.width,
+                                            height: p.height,
+                                            bytes: p.rgba(),
+                                        })
                                     });
-                                }
+                                // Said either way: nothing else shows it.
+                                doc.status = match copied {
+                                    Ok(()) => "이미지를 복사했습니다".into(),
+                                    Err(e) => format!("이미지를 복사하지 못했습니다: {e}"),
+                                };
                                 close = true;
                             }
-                            if ui.button("삭제").clicked() {
+                            if ui
+                                .button("삭제")
+                                .on_hover_text("Ctrl+Z로 되돌릴 수 있습니다")
+                                .clicked()
+                            {
                                 delete = true;
                                 close = true;
                             }
@@ -4284,13 +4355,17 @@ fn table_widget(
                     let g = s.range(t);
                     te::span_rect(t, g.0, g.1) != g
                 });
-                for (label, a, enabled) in [
-                    ("복사", TAct::Copy, has),
-                    ("잘라내기", TAct::Cut, has),
-                    ("붙여넣기", TAct::Paste, has),
-                    ("선택 영역 내용 삭제", TAct::Clear, has),
+                // In the order and with the keys of the body's menu.
+                for (label, keys, a) in [
+                    ("잘라내기", "Ctrl+X", TAct::Cut),
+                    ("복사", "Ctrl+C", TAct::Copy),
+                    ("붙여넣기", "Ctrl+V", TAct::Paste),
+                    ("선택 영역 내용 삭제", "Delete", TAct::Clear),
                 ] {
-                    if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+                    if ui
+                        .add_enabled(has, egui::Button::new(label).shortcut_text(keys))
+                        .clicked()
+                    {
                         act = Some(a);
                         ui.close_menu();
                     }
@@ -5616,6 +5691,52 @@ mod tests {
         assert_eq!(body, "첫 탭 원문");
         assert!(doc.requested_tab.is_none());
         assert!(doc.requested_selection.is_none());
+    }
+    #[test]
+    fn a_footer_message_goes_away_by_itself() {
+        let ctx = egui::Context::default();
+        let mut doc = Document::default();
+        let frame = |doc: &mut Document, time: f64| {
+            let input = egui::RawInput {
+                time: Some(time),
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    footer(ui, doc, "status_test", 0., false);
+                });
+            });
+        };
+        doc.status = "되돌릴 내용이 없습니다".into();
+        frame(&mut doc, 1.);
+        frame(&mut doc, 1. + STATUS_SECS - 0.5);
+        assert_eq!(
+            doc.status, "되돌릴 내용이 없습니다",
+            "still within its time"
+        );
+        // A new message starts its own time.
+        doc.status = "이미지를 복사했습니다".into();
+        frame(&mut doc, 1. + STATUS_SECS + 0.5);
+        assert_eq!(doc.status, "이미지를 복사했습니다");
+        frame(&mut doc, 2. + 2. * STATUS_SECS);
+        assert!(doc.status.is_empty(), "gone after its time");
+    }
+    #[test]
+    fn select_all_from_the_menu_stays_on_the_tab_shown() {
+        let ctx = egui::Context::default();
+        let mut doc = Document::default();
+        let mut body = "첫 탭".to_owned();
+        doc.add_tab();
+        doc.tabs[1].body = "둘째 탭 전체".into();
+        assert_eq!(doc.active, 1);
+        doc.select_all();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                show(ui, &mut body, &mut doc, "select_all_test");
+            });
+        });
+        assert_eq!(doc.active, 1);
+        assert_eq!(doc.selection, 0.."둘째 탭 전체".chars().count());
     }
     #[test]
     fn saved_rich_view_keeps_the_comment_and_formats_immutable() {

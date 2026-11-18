@@ -301,6 +301,10 @@ impl App {
         }
     }
     pub fn consume_body_project(&mut self, i: usize) {
+        // Asked every frame for every open memo: look before copying the body.
+        if !self.data.notes[i].body.starts_with('#') {
+            return;
+        }
         let first = self.data.notes[i].body.clone();
         let Some(rest) = first.strip_prefix('#') else {
             return;
@@ -1047,66 +1051,6 @@ impl App {
                     "Windows 시작 시 자동 실행",
                     "트레이에서 시작하고, 열어 둔 스티커 메모가 제자리에 다시 뜹니다",
                 );
-                toggle_row(
-                    ui,
-                    &mut self.desktop.taskbar,
-                    "메모창을 작업표시줄에 표시",
-                    "끄면 새로 여는 스티커 메모 창이 작업표시줄에 나타나지 않습니다",
-                );
-                if toggle_row(
-                    ui,
-                    &mut self.desktop.daily_today,
-                    "매일 오늘 메모 자동으로 띄우기",
-                    "매일 새벽 5시 기준으로 완료하지 않은 지난 메모와 오늘 메모를 제목만 보기로 화면 오른쪽에 정렬합니다",
-                )
-                .changed()
-                    && self.desktop.daily_today
-                {
-                    self.desktop.daily_shown = None;
-                }
-                toggle_row(
-                    ui,
-                    &mut self.prefs.drop_schedule_choice,
-                    "메모 끌어 놓기 시 이날까지 업무 선택창 띄우기",
-                    "캘린더에서만 표시 · Shift 드래그는 선택창 없이 이날까지 업무로 지정",
-                );
-                toggle_row(
-                    ui,
-                    &mut self.prefs.close_completed_sticker,
-                    "스티커 메모 체크완료 시 스티커 닫기",
-                    "완료한 스티커를 화면에서 닫습니다",
-                );
-                if self.prefs.close_completed_sticker {
-                    toggle_row(
-                        ui,
-                        &mut self.prefs.rearrange_completed_stickers,
-                        "완료메모 발생 시 스티커 재정렬",
-                        "기존 위치 순서를 유지해 오른쪽에 제목만 보기로 정렬합니다",
-                    );
-                }
-                let monitors = crate::native_window::monitors(ui.ctx()).len();
-                let mut pick = self.desktop.arrange_monitor.is_some() || self.desktop.monitor_pick;
-                ui.add_enabled_ui(monitors >= 2, |ui| {
-                    if toggle_row(
-                        ui,
-                        &mut pick,
-                        "메모 정렬 모니터 정하기",
-                        &match self.desktop.arrange_monitor {
-                            Some(m) => format!("스티커 자동 정렬을 모니터 {}에 합니다", m + 1),
-                            None if monitors >= 2 => {
-                                "켜면 각 모니터에 번호가 뜹니다 · 정렬에 쓸 모니터의 번호를 누르세요".into()
-                            }
-                            None => "모니터가 두 대 이상일 때 사용할 수 있습니다".into(),
-                        },
-                    )
-                    .changed()
-                    {
-                        self.desktop.monitor_pick = pick;
-                        if !pick {
-                            self.desktop.arrange_monitor = None;
-                        }
-                    }
-                });
                 section(ui, "첫 화면");
                 ui.horizontal_wrapped(|ui| {
                     for (page, name, _) in crate::PAGES {
@@ -1285,63 +1229,126 @@ impl App {
                     );
                 });
                 ui.add_space(10.);
-                toggle_row(
-                    ui,
-                    &mut self.desktop.auto_toolbar,
-                    "스티커 툴바 자동 숨기기",
-                    "끄면 편집 중이 아니어도 도구가 항상 보입니다",
-                );
-                toggle_row(
-                    ui,
-                    &mut self.desktop.skip_title,
-                    "접기 1단계 건너뛰기",
-                    "스티커에서 바로 색상 상자로 접습니다",
-                );
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(
-                            !self.desktop.title_probe,
-                            egui::Button::new("1단 접기 크기 조절하기"),
-                        )
-                        .on_hover_text(
-                            "제목만 보이는 접힌 메모가 하나 뜹니다 · 너비를 바꾸고 닫으면 1단 접기의 제목줄 너비가 됩니다",
-                        )
-                        .clicked()
-                    {
-                        self.desktop.title_probe = true;
+                settings_group(ui, "스티커 동작", |ui| {
+                    toggle_row(
+                        ui,
+                        &mut self.desktop.taskbar,
+                        "메모창을 작업표시줄에 표시",
+                        "끄면 새로 여는 스티커 메모 창이 작업표시줄에 나타나지 않습니다",
+                    );
+                    toggle_row(
+                        ui,
+                        &mut self.desktop.auto_toolbar,
+                        "스티커 툴바 자동 숨기기",
+                        "끄면 편집 중이 아니어도 도구가 항상 보입니다",
+                    );
+                    toggle_row(
+                        ui,
+                        &mut self.prefs.close_completed_sticker,
+                        "스티커 메모 체크완료 시 스티커 닫기",
+                        "완료한 스티커를 화면에서 닫습니다",
+                    );
+                    if self.prefs.close_completed_sticker {
+                        toggle_row(
+                            ui,
+                            &mut self.prefs.rearrange_completed_stickers,
+                            "완료메모 발생 시 스티커 재정렬",
+                            "기존 위치 순서를 유지해 오른쪽에 제목만 보기로 정렬합니다",
+                        );
                     }
-                    ui.label(
-                        RichText::new(format!("지금 너비 {} px", self.desktop.title_width.round()))
-                            .color(crate::ui::t(ui).muted),
+                    let monitors = crate::native_window::monitors(ui.ctx()).len();
+                    let mut pick =
+                        self.desktop.arrange_monitor.is_some() || self.desktop.monitor_pick;
+                    ui.add_enabled_ui(monitors >= 2, |ui| {
+                        if toggle_row(
+                            ui,
+                            &mut pick,
+                            "메모 정렬 모니터 정하기",
+                            &match self.desktop.arrange_monitor {
+                                Some(m) => format!("스티커 자동 정렬을 모니터 {}에 합니다", m + 1),
+                                None if monitors >= 2 => {
+                                    "켜면 각 모니터에 번호가 뜹니다 · 정렬에 쓸 모니터의 번호를 누르세요".into()
+                                }
+                                None => "모니터가 두 대 이상일 때 사용할 수 있습니다".into(),
+                            },
+                        )
+                        .changed()
+                        {
+                            self.desktop.monitor_pick = pick;
+                            if !pick {
+                                self.desktop.arrange_monitor = None;
+                            }
+                        }
+                    });
+                    if toggle_row(
+                        ui,
+                        &mut self.desktop.daily_today,
+                        "매일 오늘 메모 자동으로 띄우기",
+                        "매일 새벽 5시 기준으로 완료하지 않은 지난 메모와 오늘 메모를 제목만 보기로 화면 오른쪽에 정렬합니다",
+                    )
+                    .changed()
+                        && self.desktop.daily_today
+                    {
+                        self.desktop.daily_shown = None;
+                    }
+                });
+                ui.add_space(10.);
+                settings_group(ui, "접기", |ui| {
+                    toggle_row(
+                        ui,
+                        &mut self.desktop.skip_title,
+                        "접기 1단계 건너뛰기",
+                        "스티커에서 바로 색상 상자로 접습니다",
+                    );
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(
+                                !self.desktop.title_probe,
+                                egui::Button::new("1단 접기 크기 조절하기"),
+                            )
+                            .on_hover_text(
+                                "제목만 보이는 접힌 메모가 하나 뜹니다 · 너비를 바꾸고 닫으면 1단 접기의 제목줄 너비가 됩니다",
+                            )
+                            .clicked()
+                        {
+                            self.desktop.title_probe = true;
+                        }
+                        ui.label(
+                            RichText::new(format!("지금 너비 {} px", self.desktop.title_width.round()))
+                                .color(crate::ui::t(ui).muted),
+                        );
+                    });
+                    toggle_row(
+                        ui,
+                        &mut self.desktop.unpin_minimized,
+                        "상자로 접으면 ‘항상 위에’ 자동 해제",
+                        "",
                     );
                 });
-                toggle_row(
-                    ui,
-                    &mut self.desktop.unpin_minimized,
-                    "상자로 접으면 ‘항상 위에’ 자동 해제",
-                    "",
-                );
-                section(ui, "기본 글꼴");
-                font_choice(ui, "note_font", &mut self.desktop.note_font);
-                section(ui, "기본 글자 크기");
-                ui.add(
-                    egui::Slider::new(&mut self.desktop.note_font_size, 8.0..=30.0)
-                        .integer()
-                        .suffix(" pt"),
-                );
-                section(ui, "기본 투명도");
-                ui.add(
-                    egui::Slider::new(&mut self.desktop.opacity, 20.0..=100.0)
-                        .integer()
-                        .suffix("%"),
-                );
-                hint(ui, "투명도를 낮추면 스티커 뒤의 바탕화면이 비쳐 보입니다.");
-                section(ui, "이미지 붙여넣기 기본 크기");
-                segmented(
-                    ui,
-                    &mut self.desktop.image_scale,
-                    &["25%", "50%", "75%", "100%", "너비 맞춤"],
-                );
+                ui.add_space(10.);
+                settings_group(ui, "본문 기본값", |ui| {
+                    section(ui, "기본 글꼴");
+                    font_choice(ui, "note_font", &mut self.desktop.note_font);
+                    section(ui, "기본 글자 크기");
+                    ui.add(
+                        egui::Slider::new(&mut self.desktop.note_font_size, 8.0..=30.0)
+                            .integer()
+                            .suffix(" pt"),
+                    );
+                    section(ui, "기본 투명도");
+                    ui.add(
+                        egui::Slider::new(&mut self.desktop.opacity, 20.0..=100.0)
+                            .integer()
+                            .suffix("%"),
+                    );
+                    hint(ui, "투명도를 낮추면 스티커 뒤의 바탕화면이 비쳐 보입니다.");
+                    section(ui, "이미지 붙여넣기 기본 크기");
+                    segmented(
+                        ui,
+                        &mut self.desktop.image_scale,
+                        &["25%", "50%", "75%", "100%", "너비 맞춤"],
+                    );
+                });
             }
             3 => {
                 self.my_holidays_settings(ui);
@@ -1371,6 +1378,13 @@ impl App {
                 section(ui, "보기 단위");
                 segmented(ui, &mut self.prefs.cal_weeks, &["한 달", "1주", "2주"]);
                 hint(ui, "1주·2주 보기는 선택한 날짜가 있는 주부터 보여 줍니다");
+                section(ui, "메모 끌어 놓기");
+                toggle_row(
+                    ui,
+                    &mut self.prefs.drop_schedule_choice,
+                    "메모 끌어 놓기 시 이날까지 업무 선택창 띄우기",
+                    "캘린더에서만 표시 · Shift 드래그는 선택창 없이 이날까지 업무로 지정",
+                );
             }
             4 => {
                 section(ui, "알림 소리");
@@ -1716,7 +1730,7 @@ mod tests {
                 .unwrap()
         };
         let first = find("Windows 시작 시 자동 실행");
-        let second = find("메모창을 작업표시줄에 표시");
+        let second = find("첫 화면");
         assert!(second.y > first.y + 5.);
         assert!(second.x < 850.);
     }

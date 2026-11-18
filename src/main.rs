@@ -580,8 +580,6 @@ impl eframe::App for App {
         self.auto_relock();
         self.apply_autostart();
         self.autosave(ctx.input(|i| i.time), false);
-        // The windows of the first frame have their drawing contexts now.
-        system::forget_gpu_choice();
         // Sleep until something is due: an alarm, an automatic lock, a
         // pending save, the next housekeeping. Input wakes the program anyway.
         ctx.request_repaint_after(self.next_wake(ctx.input(|i| i.time)));
@@ -1362,7 +1360,6 @@ fn main() -> eframe::Result {
         return Ok(());
     }
     system::migrate_old_data_dirs();
-    system::prefer_integrated_gpu();
     // The root window is an invisible, never-minimized host. Every visible
     // window (main, calendar, stickers, dialogs) is an independent child, so
     // minimizing the main window leaves stickers alive on the desktop and the
