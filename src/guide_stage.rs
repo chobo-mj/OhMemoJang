@@ -125,6 +125,12 @@ fn guide_stage() {
     a.data.notes[i].wiki = true;
     a.data.notes[i].wiki_tab = Some(tab);
     a.extra.wiki_tab = tab;
+    // An alarm due shortly, to see the Windows notification.
+    if let Ok(secs) = std::env::var("OHMEMO_STAGE_ALARM") {
+        let secs: i64 = secs.parse().unwrap_or(40);
+        a.data.notes[shop].reminder =
+            Some(Local::now().naive_local() + chrono::Duration::seconds(secs));
+    }
     let mut saved = a.snapshot(&dir);
     saved.session = match std::env::var("OHMEMO_STAGE_MODE").as_deref() {
         // Stickers on the desktop: two open, three folded to titles on the right.

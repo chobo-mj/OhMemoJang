@@ -25,6 +25,8 @@ pub struct Desktop {
     pub auto_lock: usize,
     pub sound: bool,
     pub popup: bool,
+    /// Alarms go to the Windows notification center.
+    pub toast_center: bool,
     pub mute: bool,
     pub calendar_basis: usize,
     pub deleted_at: BTreeMap<usize, NaiveDateTime>,
@@ -93,6 +95,7 @@ impl Default for Desktop {
             auto_lock: 1,
             sound: true,
             popup: true,
+            toast_center: true,
             mute: false,
             calendar_basis: 1,
             deleted_at: BTreeMap::new(),
@@ -1241,9 +1244,15 @@ impl App {
                 ui.add_space(10.);
                 toggle_row(
                     ui,
+                    &mut self.desktop.toast_center,
+                    "Windows 알림 센터로 알리기",
+                    "알람이 Windows 알림으로 떠요 · 알림에서 바로 열기 · 5분 뒤 · 확인을 고를 수 있고, 놓친 알림은 알림 센터에 남아요",
+                );
+                toggle_row(
+                    ui,
                     &mut self.desktop.popup,
                     "바탕화면 우측 하단에 팝업으로 알리기",
-                    "",
+                    "Windows 알림 센터를 끄거나 Windows가 알림을 막았을 때 쓰는 프로그램 자체 팝업이에요",
                 );
                 toggle_row(
                     ui,

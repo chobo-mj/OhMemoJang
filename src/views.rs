@@ -662,11 +662,9 @@ impl App {
                     egui::StrokeKind::Inside,
                 );
             }
-            let holiday = matches!(
-                (day.month(), day.day()),
-                (1, 1) | (3, 1) | (5, 5) | (6, 6) | (8, 15) | (10, 3) | (10, 9) | (12, 25)
-            );
-            let datecolor = if holiday || weekday == 0 {
+            // Holidays are worked out offline (lunar dates and substitutes).
+            let holiday = crate::holidays::name(day);
+            let datecolor = if holiday.is_some() || weekday == 0 {
                 sun
             } else if weekday == 6 {
                 sat
@@ -688,6 +686,36 @@ impl App {
                     datecolor
                 },
             );
+            if let Some(name) = &holiday {
+                // The name beside the day number, cut to the cell.
+                let left = number.x + 15.;
+                let room = rect.right() - left - 6.;
+                if room > 14. {
+                    let galley = ui.painter().layout(
+                        name.clone(),
+                        egui::FontId::proportional(10.5),
+                        sun,
+                        f32::INFINITY,
+                    );
+                    let clip = Rect::from_min_max(
+                        egui::pos2(left, rect.top()),
+                        egui::pos2(left + room, rect.top() + 30.),
+                    );
+                    ui.painter()
+                        .with_clip_rect(clip.intersect(ui.clip_rect()))
+                        .galley(
+                            egui::pos2(left, number.y - galley.size().y / 2.),
+                            galley,
+                            sun,
+                        );
+                }
+                ui.interact(
+                    Rect::from_center_size(number, Vec2::splat(22.)),
+                    ui.id().with(("holiday", day)),
+                    Sense::hover(),
+                )
+                .on_hover_text(name.as_str());
+            }
             if ui.rect_contains_pointer(rect) {
                 let plus =
                     Rect::from_min_size(rect.right_top() + Vec2::new(-26., 5.), Vec2::splat(22.));

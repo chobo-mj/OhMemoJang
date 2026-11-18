@@ -52,7 +52,7 @@ Source: "{#StageDir}\README.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\SHA256SUMS.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{userprograms}\OhMemoJang\OhMemoJang"; Filename: "{app}\OhMemoJang.exe"; WorkingDir: "{app}"
+Name: "{userprograms}\OhMemoJang\OhMemoJang"; Filename: "{app}\OhMemoJang.exe"; WorkingDir: "{app}"; AppUserModelID: "OhMemoJang.App"
 Name: "{userdesktop}\OhMemoJang"; Filename: "{app}\OhMemoJang.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 ; Nothing is written to the registry at install time. The program itself adds
@@ -60,6 +60,8 @@ Name: "{userdesktop}\OhMemoJang"; Filename: "{app}\OhMemoJang.exe"; WorkingDir: 
 ; uninstalling removes it (ValueType none + uninsdeletevalue creates nothing).
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "OhMemoJang"; Flags: dontcreatekey uninsdeletevalue
+; The notification identity the program registers for its alarms.
+Root: HKCU; Subkey: "Software\Classes\AppUserModelId\OhMemoJang.App"; ValueType: none; Flags: dontcreatekey uninsdeletekey
 
 ; The program keeps running in the tray: stop it before its files are removed.
 ; Memos are saved within two seconds of every change, so nothing is lost.

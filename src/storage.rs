@@ -235,6 +235,7 @@ pub struct SettingsRec {
     pub auto_lock: usize,
     pub sound: bool,
     pub popup: bool,
+    pub toast_center: bool,
     pub mute: bool,
     pub calendar_basis: usize,
     pub always_sticker: bool,
@@ -275,6 +276,7 @@ impl Default for SettingsRec {
             auto_lock: 1,
             sound: true,
             popup: true,
+            toast_center: true,
             mute: false,
             calendar_basis: 1,
             always_sticker: true,
@@ -315,6 +317,7 @@ impl SettingsRec {
         self.auto_lock = d.auto_lock;
         self.sound = d.sound;
         self.popup = d.popup;
+        self.toast_center = d.toast_center;
         self.mute = d.mute;
         self.calendar_basis = d.calendar_basis;
         self.always_sticker = d.always_sticker;
@@ -346,6 +349,7 @@ impl SettingsRec {
         d.auto_lock = self.auto_lock.min(3);
         d.sound = self.sound;
         d.popup = self.popup;
+        d.toast_center = self.toast_center;
         d.mute = self.mute;
         d.calendar_basis = self.calendar_basis.min(2);
         d.always_sticker = self.always_sticker;

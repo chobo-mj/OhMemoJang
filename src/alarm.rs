@@ -10,6 +10,8 @@ use egui::{Pos2, Rect, Sense, Stroke};
 pub struct Alarms {
     /// Memos whose alarm is showing, in the order they came due.
     pub due: Vec<usize>,
+    /// Due alarms shown as Windows notifications (not in the popup).
+    pub toasted: Vec<usize>,
     checked: f64,
 }
 
@@ -39,14 +41,43 @@ impl App {
             .reduce(f64::min)
             .filter(|_| !self.desktop.mute)
     }
+    /// An alarm answered (from a notification or the popup).
+    fn answer_alarm(&mut self, i: usize, what: u8) {
+        if i >= self.data.notes.len() {
+            return;
+        }
+        self.alarms.due.retain(|&d| d != i);
+        self.alarms.toasted.retain(|&d| d != i);
+        // Saved right away, like a change made by hand.
+        crate::storage::INPUT.store(true, std::sync::atomic::Ordering::Relaxed);
+        crate::toast::remove(i);
+        let now = Local::now().naive_local();
+        match what {
+            0 => {
+                self.data.notes[i].reminder = None;
+                self.open_sticker(i, self.data.notes[i].date);
+            }
+            1 => self.data.notes[i].reminder = Some(now + chrono::Duration::minutes(5)),
+            _ => self.data.notes[i].reminder = None,
+        }
+    }
     /// Run about once a second from `update`.
     pub fn check_alarms(&mut self, ctx: &egui::Context) {
+        for a in crate::toast::take_answers() {
+            match a {
+                crate::toast::Answer::Open(i) => self.answer_alarm(i, 0),
+                crate::toast::Answer::Snooze(i) => self.answer_alarm(i, 1),
+                crate::toast::Answer::Done(i) => self.answer_alarm(i, 2),
+            }
+        }
         let t = ctx.input(|i| i.time);
         if t - self.alarms.checked >= 1. {
             self.alarms.checked = t;
             self.alarms
                 .due
                 .retain(|&i| self.data.notes.get(i).is_some_and(|n| n.reminder.is_some()));
+            let due = self.alarms.due.clone();
+            self.alarms.toasted.retain(|i| due.contains(i));
             // While all alarms are off nothing fires; turning them back on
             // shows the alarms that came due meanwhile.
             if !self.desktop.mute {
@@ -54,7 +85,20 @@ impl App {
                 for i in due_now(&self.data.notes, Local::now().naive_local()) {
                     if !self.alarms.due.contains(&i) {
                         self.alarms.due.push(i);
-                        new = true;
+                        // As a Windows notification when it can be (it has
+                        // its own sound); otherwise the popup below.
+                        let n = &self.data.notes[i];
+                        let when = n
+                            .reminder
+                            .map(|w| w.format("%-m월 %-d일 %H:%M").to_string())
+                            .unwrap_or_default();
+                        if self.desktop.toast_center
+                            && crate::toast::show(i, &n.title, &when, self.desktop.sound).is_ok()
+                        {
+                            self.alarms.toasted.push(i);
+                        } else {
+                            new = true;
+                        }
                     }
                 }
                 if new && self.desktop.sound {
@@ -62,7 +106,13 @@ impl App {
                 }
             }
         }
-        if self.alarms.due.is_empty() {
+        // Alarms on screen as notifications wait for their answer there.
+        if self
+            .alarms
+            .due
+            .iter()
+            .all(|i| self.alarms.toasted.contains(i))
+        {
             return;
         }
         if self.desktop.popup {
@@ -77,12 +127,23 @@ impl App {
                 .collect();
             self.toast = format!("알람 · {}", titles.join(", "));
             for i in std::mem::take(&mut self.alarms.due) {
-                self.data.notes[i].reminder = None;
+                if !self.alarms.toasted.contains(&i) {
+                    self.data.notes[i].reminder = None;
+                } else {
+                    self.alarms.due.push(i);
+                }
             }
         }
     }
     fn alarm_popup(&mut self, ctx: &egui::Context) {
-        let rows = self.alarms.due.len().min(5);
+        let shown: Vec<usize> = self
+            .alarms
+            .due
+            .iter()
+            .copied()
+            .filter(|i| !self.alarms.toasted.contains(i))
+            .collect();
+        let rows = shown.len().min(5);
         let size = Vec2::new(360., 58. + rows as f32 * 66.);
         let area = crate::native_window::work_area(ctx)
             .unwrap_or(Rect::from_min_size(Pos2::ZERO, Vec2::new(1280., 800.)));
@@ -124,7 +185,7 @@ impl App {
                             );
                             ui.add_space(26.);
                             ui.label(
-                                RichText::new(format!("알람 {}개", self.alarms.due.len()))
+                                RichText::new(format!("알람 {}개", shown.len()))
                                     .strong()
                                     .size(14.),
                             );
@@ -138,7 +199,7 @@ impl App {
                             );
                         });
                         ui.add_space(6.);
-                        for &i in self.alarms.due.iter().take(5) {
+                        for &i in shown.iter().take(5) {
                             let n = &self.data.notes[i];
                             let (rect, _) = ui.allocate_exact_size(
                                 Vec2::new(ui.available_width(), 60.),
@@ -204,22 +265,12 @@ impl App {
             },
         );
         if all {
-            for i in std::mem::take(&mut self.alarms.due) {
-                self.data.notes[i].reminder = None;
+            for i in shown {
+                self.answer_alarm(i, 2);
             }
         }
         if let Some((i, what)) = action {
-            self.alarms.due.retain(|&d| d != i);
-            match what {
-                0 => {
-                    self.data.notes[i].reminder = None;
-                    self.open_sticker(i, self.data.notes[i].date);
-                }
-                1 => {
-                    self.data.notes[i].reminder = Some(now + chrono::Duration::minutes(5));
-                }
-                _ => self.data.notes[i].reminder = None,
-            }
+            self.answer_alarm(i, what);
         }
     }
 }

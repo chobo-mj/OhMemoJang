@@ -12,6 +12,18 @@ pub fn window() -> egui::IconData {
     decode(TASKBAR_ICO, 128)
 }
 
+/// The icon as a PNG file, the frame closest to `size` pixels (used for the
+/// Windows notifications, which need an image file).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn png(size: u32) -> Vec<u8> {
+    let icon = decode(TASKBAR_ICO, size);
+    let mut out = std::io::Cursor::new(Vec::new());
+    if let Some(img) = image::RgbaImage::from_raw(icon.width, icon.height, icon.rgba) {
+        let _ = img.write_to(&mut out, image::ImageFormat::Png);
+    }
+    out.into_inner()
+}
+
 /// A 32×32 RGBA buffer for the system-tray icon.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn tray_rgba() -> Vec<u8> {

@@ -903,6 +903,10 @@ pub fn month_grid(ui: &mut Ui, month: &mut chrono::NaiveDate, day: &mut chrono::
                 .circle_stroke(r.center(), 13.5, Stroke::new(1.0_f32, ACCENT));
         }
         let wd = d.weekday().num_days_from_sunday();
+        let holiday = crate::holidays::name(d);
+        if let Some(name) = &holiday {
+            resp.clone().on_hover_text(name.as_str());
+        }
         ui.painter().text(
             r.center(),
             egui::Align2::CENTER_CENTER,
@@ -910,7 +914,7 @@ pub fn month_grid(ui: &mut Ui, month: &mut chrono::NaiveDate, day: &mut chrono::
             FontId::proportional(13.),
             if selected {
                 Color32::WHITE
-            } else if wd == 0 {
+            } else if wd == 0 || holiday.is_some() {
                 ACCENT
             } else if wd == 6 {
                 BLUE

@@ -2909,6 +2909,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tray-icon",
+ "windows",
  "windows-sys 0.59.0",
  "winresource",
 ]

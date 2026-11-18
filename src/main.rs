@@ -14,6 +14,7 @@ mod extras;
 mod guide;
 #[cfg(test)]
 mod guide_stage;
+mod holidays;
 mod icons;
 mod lists;
 mod media;
@@ -30,6 +31,7 @@ mod storage;
 mod studio;
 mod system;
 mod table_edit;
+mod toast;
 mod trash_groups;
 mod tray;
 mod tutorial;
@@ -211,6 +213,9 @@ impl App {
         a.main_open = !(a.tray.active() && std::env::args().any(|x| x == "--tray"));
         a.hotkeys = GlobalHotKeyManager::new().ok();
         wake::set(&cc.egui_ctx);
+        if a.desktop.toast_center {
+            toast::prepare();
+        }
         wake::watch_hotkeys();
         a.apply_shortcuts();
         a
@@ -1286,7 +1291,6 @@ fn main() -> eframe::Result {
                 .with_resizable(false)
                 .with_transparent(true)
                 .with_taskbar(false)
-                .with_visible(false)
                 .with_icon(app_icon::window()),
             vsync: false,
             ..Default::default()
