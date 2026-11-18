@@ -64,10 +64,16 @@ fn with_event_loop<R>(
     })
 }
 
+/// The shortest time between two frames of one window (about 60 per second).
+const MIN_FRAME: std::time::Duration = std::time::Duration::from_millis(16);
+
 /// Wraps a [`WinitApp`] to implement [`ApplicationHandler`]. This handles redrawing, exit states, and
 /// some events, but otherwise forwards events to the [`WinitApp`].
 struct WinitAppWrapper<T: WinitApp> {
     windows_next_repaint_times: HashMap<WindowId, Instant>,
+    /// When each window last ran a frame (OhMemoJang: frames are spaced by
+    /// at least [`MIN_FRAME`]).
+    last_frames: HashMap<WindowId, Instant>,
     winit_app: T,
     return_result: Result<(), crate::Error>,
     run_and_return: bool,
@@ -77,6 +83,7 @@ impl<T: WinitApp> WinitAppWrapper<T> {
     fn new(winit_app: T, run_and_return: bool) -> Self {
         Self {
             windows_next_repaint_times: HashMap::default(),
+            last_frames: HashMap::default(),
             winit_app,
             return_result: Ok(()),
             run_and_return,
@@ -114,11 +121,17 @@ impl<T: WinitApp> WinitAppWrapper<T> {
                 }
                 EventResult::RepaintNext(window_id) => {
                     log::trace!("RepaintNext of {window_id:?}",);
-                    self.windows_next_repaint_times
-                        .insert(window_id, Instant::now());
+                    let at = self.spaced(window_id, Instant::now());
+                    self.windows_next_repaint_times.insert(
+                        window_id,
+                        self.windows_next_repaint_times
+                            .get(&window_id)
+                            .map_or(at, |last| (*last).min(at)),
+                    );
                     Ok(event_result)
                 }
                 EventResult::RepaintAt(window_id, repaint_time) => {
+                    let repaint_time = self.spaced(window_id, repaint_time);
                     self.windows_next_repaint_times.insert(
                         window_id,
                         self.windows_next_repaint_times
@@ -165,6 +178,16 @@ impl<T: WinitApp> WinitAppWrapper<T> {
         }
 
         self.check_redraw_requests(event_loop);
+    }
+
+    /// `at`, or later so that the window's frames are at least [`MIN_FRAME`]
+    /// apart. Moving the mouse over a window asks for two or three frames per
+    /// move (egui draws once more after input, and every window asks for
+    /// itself); requests within one interval share a frame.
+    fn spaced(&self, window_id: WindowId, at: Instant) -> Instant {
+        self.last_frames
+            .get(&window_id)
+            .map_or(at, |last| at.max(*last + MIN_FRAME))
     }
 
     fn check_redraw_requests(&mut self, event_loop: &ActiveEventLoop) {
@@ -301,6 +324,7 @@ impl<T: WinitApp> ApplicationHandler<UserEvent> for WinitAppWrapper<T> {
         event_loop_context::with_event_loop_context(event_loop, move || {
             let event_result = match event {
                 winit::event::WindowEvent::RedrawRequested => {
+                    self.last_frames.insert(window_id, Instant::now());
                     self.winit_app.run_ui_and_paint(event_loop, window_id)
                 }
                 _ => self.winit_app.window_event(event_loop, window_id, event),

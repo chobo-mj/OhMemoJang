@@ -512,10 +512,11 @@ impl WinitApp for GlowWinitApp<'_> {
                     if let Some(egui_winit) = viewport.egui_winit.as_mut() {
                         egui_winit.on_mouse_motion(delta);
                     }
-
-                    if let Some(window) = viewport.window.as_ref() {
-                        return Ok(EventResult::RepaintNext(window.id()));
-                    }
+                    // OhMemoJang: raw mouse motion does not wake the program.
+                    // It arrives for every move of the mouse anywhere on the
+                    // screen while one of our windows has the focus (at the
+                    // mouse's own rate), and nothing here uses it; a move
+                    // over our windows wakes them through `CursorMoved`.
                 }
             }
         }
