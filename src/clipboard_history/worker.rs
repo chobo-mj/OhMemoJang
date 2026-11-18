@@ -163,6 +163,18 @@ impl Worker {
             Cmd::Detail(id) => self.detail(id),
             Cmd::Full(id) => self.full(id),
             Cmd::Restore(id) => self.restore(id),
+            Cmd::Comment(id, text) => {
+                if let Some(s) = &mut self.store {
+                    let _ = s.set_comment(id, &text);
+                }
+                self.emit(Event::Changed);
+            }
+            Cmd::Pin(id, on) => {
+                if let Some(s) = &mut self.store {
+                    let _ = s.set_pinned(id, on);
+                }
+                self.emit(Event::Changed);
+            }
             Cmd::Delete(id) => {
                 self.shared.epoch.fetch_add(1, Relaxed);
                 if let Some(s) = &mut self.store {

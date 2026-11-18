@@ -42,6 +42,8 @@ enum Act {
     Restore(i64),
     Delete(i64),
     Select(usize),
+    Comment(i64, String),
+    Pin(i64, bool),
 }
 
 impl ClipboardHistory {
@@ -98,6 +100,19 @@ impl ClipboardHistory {
                     }
                 }
                 Act::Restore(id) => self.restore(id, now),
+                // The list reloads in its new order once the worker saved it.
+                Act::Comment(id, text) => {
+                    if let Some(m) = self.items.iter_mut().find(|m| m.id == id) {
+                        m.comment = text.clone();
+                    }
+                    self.send(Cmd::Comment(id, text));
+                }
+                Act::Pin(id, on) => {
+                    if let Some(m) = self.items.iter_mut().find(|m| m.id == id) {
+                        m.pinned = on;
+                    }
+                    self.send(Cmd::Pin(id, on));
+                }
                 Act::Delete(id) => {
                     self.send(Cmd::Delete(id));
                     self.items.retain(|m| m.id != id);
@@ -501,6 +516,7 @@ impl ClipboardHistory {
                     m,
                     self.sel == Some(i),
                     self.textures.get(&m.id),
+                    &mut self.comment_drafts,
                     acts,
                 );
                 if m.has_thumb
@@ -528,6 +544,7 @@ fn row(
     m: &ItemMeta,
     selected: bool,
     tex: Option<&egui::TextureHandle>,
+    drafts: &mut std::collections::HashMap<i64, String>,
     acts: &mut Vec<Act>,
 ) {
     let c = ui::t(ui);
@@ -569,11 +586,15 @@ fn row(
         }
     }
     let text_left = left.right() + 10.0;
+    // Right side, in order: comment, pin, 복사, 삭제.
     let buttons_w = 92.0;
+    let comment_w = (rect.width() * 0.22).clamp(110.0, 200.0);
+    let pin_w = 30.0;
+    let extra_w = comment_w + pin_w + 12.0;
     let clip = Rect::from_min_max(
         Pos2::new(text_left, rect.top()),
         Pos2::new(
-            (rect.right() - buttons_w).max(text_left + 20.0),
+            (rect.right() - buttons_w - extra_w).max(text_left + 20.0),
             rect.bottom(),
         ),
     );
@@ -600,8 +621,62 @@ fn row(
         FontId::proportional(11.5),
         c.muted,
     );
-    // right buttons: detail, delete
-    let mut hit_button = false;
+    // Comment: a small text box, saved when the typing ends.
+    let comment_rect = Rect::from_min_size(
+        Pos2::new(
+            rect.right() - buttons_w - extra_w + 4.0,
+            rect.center().y - 13.0,
+        ),
+        Vec2::new(comment_w, 26.0),
+    );
+    let edit_id = ui.id().with(("clip_comment", m.id));
+    let mut text = drafts
+        .get(&m.id)
+        .cloned()
+        .unwrap_or_else(|| m.comment.clone());
+    let edit = ui.put(
+        comment_rect,
+        egui::TextEdit::singleline(&mut text)
+            .id(edit_id)
+            .hint_text("코멘트")
+            .font(FontId::proportional(12.5))
+            .margin(egui::Margin::symmetric(6, 4)),
+    );
+    if edit.has_focus() || edit.changed() {
+        drafts.insert(m.id, text.clone());
+    }
+    if edit.lost_focus() {
+        drafts.remove(&m.id);
+        if text.trim() != m.comment.trim() {
+            acts.push(Act::Comment(m.id, text.trim().to_owned()));
+        }
+    }
+    // Pin: keeps the item at the top (and out of automatic cleanup).
+    let pin_rect = Rect::from_center_size(
+        Pos2::new(comment_rect.right() + 6.0 + pin_w / 2.0, rect.center().y),
+        Vec2::splat(26.0),
+    );
+    let pin = ui
+        .interact(pin_rect, ui.id().with(("clip_pin", m.id)), Sense::click())
+        .on_hover_text(if m.pinned {
+            "고정 해제"
+        } else {
+            "맨 위에 고정 · 자동 정리에서 빠져요"
+        });
+    let mut hit_button = edit.hovered() || pin.hovered();
+    if pin.hovered() {
+        painter.rect_filled(pin_rect, 6.0, c.pressed);
+    }
+    crate::icons::paint_icon(
+        &painter,
+        pin_rect.shrink(5.0),
+        Icon::Pin,
+        if m.pinned { ui::ACCENT } else { c.faint },
+    );
+    if pin.clicked() {
+        acts.push(Act::Pin(m.id, !m.pinned));
+    }
+    // right buttons: copy, delete
     for (n, (name, is_delete)) in [("복사", false), ("삭제", true)].into_iter().enumerate() {
         let r = Rect::from_min_size(
             Pos2::new(

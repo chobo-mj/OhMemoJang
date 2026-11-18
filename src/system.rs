@@ -161,6 +161,15 @@ pub fn shift_down() -> bool {
     }
 }
 
+/// Whether a standing calendar cannot work on Windows build `build`: only
+/// Windows 11 24H2 (build 26100) itself; earlier and later builds support it.
+pub fn standing_unsupported_on(build: u32) -> bool {
+    build == 26100
+}
+/// [`standing_unsupported_on`] for this PC.
+pub fn standing_unsupported() -> bool {
+    standing_unsupported_on(windows_build())
+}
 /// Windows build number (26100 and up: Windows 11 24H2 or later); 0 when it
 /// cannot be read.
 pub fn windows_build() -> u32 {
@@ -194,4 +203,17 @@ pub fn windows_build() -> u32 {
         }
         0
     })
+}
+
+#[cfg(test)]
+mod standing_tests {
+    #[test]
+    fn only_windows_11_24h2_lacks_the_standing_calendar() {
+        use super::standing_unsupported_on as no;
+        assert!(no(26100), "24H2");
+        assert!(!no(22631), "23H2");
+        assert!(!no(26200), "25H2");
+        assert!(!no(27000), "later");
+        assert!(!no(0), "unknown build");
+    }
 }

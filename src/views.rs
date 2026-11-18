@@ -264,7 +264,7 @@ impl App {
                     self.open_note_on(i, occurrence);
                 }
             }
-            row.context_menu(|ui| {
+            crate::float::context_menu(&row, 180., |ui| {
                 if ui.button("편집창 열기").clicked() {
                     self.open_editor_on(i, occurrence);
                     ui.close_menu();

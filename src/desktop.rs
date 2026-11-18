@@ -260,38 +260,24 @@ impl App {
                         if project.clicked() {
                             ui.memory_mut(|m| m.toggle_popup(popup));
                         }
-                        egui::popup_above_or_below_widget(
-                            ui,
-                            popup,
-                            &project,
-                            egui::AboveOrBelow::Above,
-                            egui::PopupCloseBehavior::CloseOnClickOutside,
-                            |ui| {
-                                ui.set_min_width(200.);
-                                if self.project_items(ui, i) {
-                                    ui.memory_mut(|m| m.close_popup());
-                                }
-                            },
-                        );
+                        crate::float::popup(ui, popup, &project, 214., |ui| {
+                            ui.set_min_width(200.);
+                            if self.project_items(ui, i) {
+                                ui.memory_mut(|m| m.close_popup());
+                            }
+                        });
                         let linked =
                             icons::icon_button(ui, icons::Icon::ChevronRight, "연결된 메모");
                         let popup = ui.make_persistent_id(("inline_linked", i));
                         if linked.clicked() {
                             ui.memory_mut(|m| m.toggle_popup(popup));
                         }
-                        egui::popup_above_or_below_widget(
-                            ui,
-                            popup,
-                            &linked,
-                            egui::AboveOrBelow::Above,
-                            egui::PopupCloseBehavior::CloseOnClickOutside,
-                            |ui| {
-                                ui.set_min_width(240.);
-                                if self.linked_items(ui, i) {
-                                    ui.memory_mut(|m| m.close_popup());
-                                }
-                            },
-                        );
+                        crate::float::popup(ui, popup, &linked, 254., |ui| {
+                            ui.set_min_width(240.);
+                            if self.linked_items(ui, i) {
+                                ui.memory_mut(|m| m.close_popup());
+                            }
+                        });
                     });
                 });
             });

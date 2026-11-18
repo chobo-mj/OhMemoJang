@@ -1519,7 +1519,7 @@ fn content_impl(
         }
     }
     let response = output.response;
-    response.context_menu(|ui| {
+    crate::float::context_menu(&response, 220., |ui| {
         for (label, event) in [("잘라내기", egui::Event::Cut), ("복사", egui::Event::Copy)] {
             if ui
                 .add_enabled(!doc.selection.is_empty(), egui::Button::new(label))
@@ -1682,13 +1682,12 @@ pub fn view(ui: &mut egui::Ui, legacy: &str, doc: &Document, id: impl Hash) {
         ui.visuals().text_color(),
     );
     job.wrap.max_width = ui.available_width();
-    ui.add(egui::Label::new(job).selectable(true))
-        .context_menu(|ui| {
-            if ui.button("본문 복사").clicked() {
-                ui.ctx().copy_text(body.to_owned());
-                ui.close_menu();
-            }
-        });
+    let label = ui.add(egui::Label::new(job).selectable(true));
+    crate::float::context_menu(&label, 160., |ui| {
+        if ui.button("본문 복사").clicked() {
+            ui.ctx().copy_text(body.to_owned());
+        }
+    });
     let links = urls(body);
     if !links.is_empty() {
         ui.horizontal_wrapped(|ui| {
@@ -2108,11 +2107,11 @@ fn toolbar(ui: &mut egui::Ui, doc: &mut Document, id: Id, opacity: bool) -> egui
                             if response.clicked() {
                                 ui.memory_mut(|m| m.toggle_popup(popup_id));
                             }
-                            egui::popup_below_widget(
+                            crate::float::popup(
                                 ui,
                                 popup_id,
                                 &response,
-                                egui::PopupCloseBehavior::CloseOnClickOutside,
+                                if tool == Tool::Color { 250. } else { 190. },
                                 |ui| {
                                     ui.set_min_width(170.);
                                     match tool {
@@ -2490,7 +2489,7 @@ fn tabs(ui: &mut egui::Ui, doc: &mut Document, id: Id) {
             if r.double_clicked() {
                 doc.rename = Some(i);
             }
-            r.context_menu(|ui| {
+            crate::float::context_menu(&r, 200., |ui| {
                 if ui.button("이름 바꾸기").clicked() {
                     doc.rename = Some(i);
                     ui.close_menu();
@@ -2506,14 +2505,19 @@ fn tabs(ui: &mut egui::Ui, doc: &mut Document, id: Id) {
                     delete = Some(i);
                     ui.close_menu();
                 }
-                ui.menu_button("숨긴 탭 보이기", |ui| {
+                if doc.tabs.iter().any(|t| t.hidden) {
+                    ui.separator();
+                    ui.label(
+                        egui::RichText::new("숨긴 탭 보이기")
+                            .small()
+                            .color(crate::ui::t(ui).muted),
+                    );
                     for t in doc.tabs.iter_mut().filter(|t| t.hidden) {
-                        if ui.button(&t.title).clicked() {
+                        if ui.button(format!("  {}", t.title)).clicked() {
                             t.hidden = false;
-                            ui.close_menu();
                         }
                     }
-                });
+                }
             });
         }
         if max_scroll > 0 && tab_icon(ui, crate::icons::Icon::ChevronRight, "다음 탭").clicked()
@@ -2593,7 +2597,7 @@ fn show_links(ui: &mut egui::Ui, doc: &mut Document, id: Id) {
                     ui.ctx().open_url(egui::OpenUrl::new_tab(url.clone()));
                 }
             }
-            r.context_menu(|ui| {
+            crate::float::context_menu(&r, 200., |ui| {
                 ui.label("하이퍼링크 이름");
                 ui.add(
                     egui::TextEdit::singleline(&mut doc.aliases[pos].1)
@@ -4257,7 +4261,7 @@ fn table_widget(
                 ctx.memory_mut(|m| m.request_focus(gid));
             }
             // ---- context menu
-            resp.context_menu(|ui| {
+            crate::float::context_menu(&resp, 230., |ui| {
                 let has = sel.is_some();
                 let merged = sel.as_ref().is_some_and(|s| {
                     let g = s.range(t);
@@ -4341,13 +4345,24 @@ fn table_widget(
                 act = Some(TAct::Align(al));
             }
         }
-        ui.menu_button("표 삭제", |ui| {
-            ui.label("이 표를 삭제할까요?");
-            if ui.button("삭제").clicked() {
-                act = Some(TAct::Remove);
-                ui.close_menu();
+        // Deleting asks once more, in the same menu.
+        let ask = ui.id().with("table_remove_ask");
+        let asking = ui.data(|d| d.get_temp::<bool>(ask).unwrap_or(false));
+        if !asking {
+            if ui.button("표 삭제…").clicked() {
+                ui.data_mut(|d| d.insert_temp(ask, true));
+                crate::float::keep_open(ui);
             }
-        });
+        } else {
+            ui.label("이 표를 삭제할까요?");
+            if ui
+                .button(egui::RichText::new("삭제").color(crate::ACCENT))
+                .clicked()
+            {
+                act = Some(TAct::Remove);
+                ui.data_mut(|d| d.remove::<bool>(ask));
+            }
+        }
     });
     let mut remove = false;
     if let Some(a) = act {

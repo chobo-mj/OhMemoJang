@@ -11,6 +11,7 @@ mod content_collections;
 mod desktop;
 mod dragging;
 mod extras;
+mod float;
 mod guide;
 #[cfg(test)]
 mod guide_stage;

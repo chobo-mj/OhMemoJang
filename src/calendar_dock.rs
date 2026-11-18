@@ -105,8 +105,6 @@ pub struct Dock {
     /// True while the calendar grid is drawn inside the calendar window.
     pub painting: bool,
     standing: Option<Standing>,
-    /// Where the right-click view menu (month / 1 week / 2 weeks) is open.
-    view_menu: Option<Pos2>,
     /// True: the detached window shows the grid and the day's memos side by
     /// side instead of stacked.
     pub horizontal: bool,
@@ -139,7 +137,6 @@ impl Default for Dock {
             theme: 0,
             painting: false,
             standing: None,
-            view_menu: None,
             horizontal: false,
             split_frac: 1. / 3.,
         }
@@ -419,76 +416,47 @@ impl App {
     /// as the toolbar's stand icon). Returns whether that entry was clicked,
     /// so the caller can pin the window the same way the toolbar does.
     fn calendar_view_menu(&mut self, ctx: &egui::Context) -> bool {
-        let (secondary, pressed, pointer) = ctx.input(|i| {
-            (
-                i.pointer.secondary_clicked(),
-                i.pointer.any_pressed(),
-                i.pointer.interact_pos(),
-            )
-        });
+        let id = egui::Id::new("calendar_view_menu");
+        let (secondary, pointer) =
+            ctx.input(|i| (i.pointer.secondary_clicked(), i.pointer.interact_pos()));
         if secondary {
-            self.cal.view_menu = pointer;
+            if let Some(p) = pointer {
+                // Its own window: it may reach past the calendar window.
+                crate::float::open_at(
+                    ctx,
+                    id,
+                    crate::float::screen_origin(ctx) + p.to_vec2(),
+                    170.,
+                );
+            }
             return false;
         }
-        let Some(at) = self.cal.view_menu else {
-            return false;
-        };
-        let mut close = ctx.input(|i| i.key_pressed(egui::Key::Escape));
         let mut separate = false;
-        // Right-clicking near the window's bottom or right edge would
-        // otherwise open this menu partly off-screen.
-        let at = ui::clamp_popup_pos(ctx, at, Vec2::new(160., 200.));
-        let shown = egui::Area::new(egui::Id::new("calendar_view_menu"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(at)
-            .show(ctx, |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.set_min_width(150.);
-                    ui.label(RichText::new("보기 단위").size(12.).color(ui::t(ui).muted));
-                    for (k, label) in ["한 달 보기", "1주 보기", "2주 보기"]
-                        .into_iter()
-                        .enumerate()
-                    {
-                        let on = self.prefs.cal_weeks == k;
-                        let text = if on {
-                            RichText::new(format!("✓  {label}")).color(ACCENT)
-                        } else {
-                            RichText::new(format!("     {label}"))
-                        };
-                        if ui
-                            .add(
-                                egui::Button::new(text)
-                                    .frame(false)
-                                    .min_size(Vec2::new(140., 26.)),
-                            )
-                            .clicked()
-                        {
-                            self.prefs.cal_weeks = k;
-                            close = true;
-                        }
-                    }
-                    ui.separator();
-                    if ui
-                        .add(
-                            egui::Button::new("캘린더 분리하기")
-                                .frame(false)
-                                .min_size(Vec2::new(140., 26.)),
-                        )
-                        .on_hover_text("바탕화면에 고정 · 도구줄의 스탠딩 아이콘과 같은 동작")
-                        .clicked()
-                    {
-                        separate = true;
-                        close = true;
-                    }
-                });
-            });
-        // A click outside the menu closes it.
-        if pressed && pointer.is_some_and(|p| !shown.response.rect.contains(p)) {
-            close = true;
-        }
-        if close {
-            self.cal.view_menu = None;
-        }
+        crate::float::menu(ctx, id, |ui| {
+            ui.label(RichText::new("보기 단위").size(12.).color(ui::t(ui).muted));
+            for (k, label) in ["한 달 보기", "1주 보기", "2주 보기"]
+                .into_iter()
+                .enumerate()
+            {
+                let on = self.prefs.cal_weeks == k;
+                let text = if on {
+                    RichText::new(format!("✓  {label}")).color(ACCENT)
+                } else {
+                    RichText::new(format!("     {label}"))
+                };
+                if ui.add(egui::Button::new(text).frame(false)).clicked() {
+                    self.prefs.cal_weeks = k;
+                }
+            }
+            ui.separator();
+            if ui
+                .add(egui::Button::new("캘린더 분리하기").frame(false))
+                .on_hover_text("바탕화면에 고정 · 도구줄의 스탠딩 아이콘과 같은 동작")
+                .clicked()
+            {
+                separate = true;
+            }
+        });
         separate
     }
     /// Theme picker, standing toggle and the big minimize button. Returns
@@ -585,13 +553,11 @@ impl App {
                 );
                 stand_rect = r.rect;
                 stand = r.clicked();
-                // Windows 11 24H2 moved the desktop's windows: standing does
-                // not work there (the button stays, to try anyway).
-                if !standing && crate::system::windows_build() >= 26100 {
+                // Standing does not work on Windows 11 24H2 itself (the
+                // button stays, to try anyway).
+                if !standing && crate::system::standing_unsupported() {
                     ui.label(RichText::new("지원 안 됨").color(tone.muted).size(10.5))
-                        .on_hover_text(
-                            "Windows 11 24H2 이후에서는 스탠딩 캘린더가 동작하지 않아요",
-                        );
+                        .on_hover_text("Windows 11 24H2에서는 스탠딩 캘린더가 동작하지 않아요");
                 }
                 if standing {
                     ui.label(

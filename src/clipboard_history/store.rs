@@ -4,8 +4,10 @@
 use rusqlite::{params, params_from_iter, types::Value, Connection, OptionalExtension};
 use std::path::Path;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 pub const DAY_MS: i64 = 86_400_000;
+/// Sort group of an item: pinned (2), with a comment (1), the rest (0).
+const RANK: &str = "(CASE WHEN i.pinned<>0 THEN 2 WHEN trim(i.comment)<>'' THEN 1 ELSE 0 END)";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Policy {
@@ -54,6 +56,27 @@ pub struct ItemMeta {
     pub formats: String,
     pub reduced: bool,
     pub has_thumb: bool,
+    /// The user's own note on the item.
+    pub comment: String,
+    /// Pinned: listed first and never removed by the retention rules.
+    pub pinned: bool,
+}
+
+impl ItemMeta {
+    /// Where the item sorts: pinned (2), with a comment (1), the rest (0).
+    pub fn rank(&self) -> i64 {
+        if self.pinned {
+            2
+        } else if !self.comment.trim().is_empty() {
+            1
+        } else {
+            0
+        }
+    }
+    /// The paging cursor after this item.
+    pub fn cursor(&self) -> (i64, i64, i64) {
+        (self.rank(), self.captured_ms, self.id)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -61,8 +84,8 @@ pub struct Query {
     /// "" for every kind, else text | link | table | image.
     pub kind: String,
     pub search: String,
-    /// Continue after this (captured_ms, id).
-    pub after: Option<(i64, i64)>,
+    /// Continue after this (rank, captured_ms, id): see [`ItemMeta::cursor`].
+    pub after: Option<(i64, i64, i64)>,
     pub limit: usize,
 }
 
@@ -121,6 +144,21 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
             PRIMARY KEY(item_id, kind)
         );",
     )?;
+    // Version 2: the user's comment and pin on an item.
+    let has = |col: &str| -> rusqlite::Result<bool> {
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('items') WHERE name=?1",
+            [col],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
+    };
+    if !has("comment")? {
+        conn.execute_batch("ALTER TABLE items ADD COLUMN comment TEXT NOT NULL DEFAULT ''")?;
+    }
+    if !has("pinned")? {
+        conn.execute_batch("ALTER TABLE items ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")?;
+    }
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
 }
@@ -230,7 +268,8 @@ impl Store {
         let mut sql = String::from(
             "SELECT i.id,i.captured_at,i.kind,i.summary,i.meta,i.total_bytes,i.reduced,
                 (SELECT group_concat(format_key,',') FROM item_formats f WHERE f.item_id=i.id),
-                EXISTS(SELECT 1 FROM item_previews p WHERE p.item_id=i.id AND p.kind='thumb')
+                EXISTS(SELECT 1 FROM item_previews p WHERE p.item_id=i.id AND p.kind='thumb'),
+                i.comment,i.pinned
              FROM items i WHERE 1=1",
         );
         let mut args: Vec<Value> = vec![];
@@ -239,7 +278,7 @@ impl Store {
             args.push(Value::Text(q.kind.clone()));
         }
         if !q.search.trim().is_empty() {
-            sql.push_str(" AND i.search_text LIKE ? ESCAPE '\\'");
+            sql.push_str(" AND (i.search_text LIKE ? ESCAPE '\\' OR i.comment LIKE ? ESCAPE '\\')");
             let esc = q
                 .search
                 .trim()
@@ -247,14 +286,22 @@ impl Store {
                 .replace('%', "\\%")
                 .replace('_', "\\_");
             args.push(Value::Text(format!("%{esc}%")));
+            args.push(Value::Text(format!("%{esc}%")));
         }
-        if let Some((ms, id)) = q.after {
-            sql.push_str(" AND (i.captured_at<? OR (i.captured_at=? AND i.id<?))");
+        if let Some((rank, ms, id)) = q.after {
+            sql.push_str(&format!(
+                " AND ({RANK}<? OR ({RANK}=? AND (i.captured_at<? OR (i.captured_at=? AND i.id<?))))"
+            ));
+            args.push(Value::Integer(rank));
+            args.push(Value::Integer(rank));
             args.push(Value::Integer(ms));
             args.push(Value::Integer(ms));
             args.push(Value::Integer(id));
         }
-        sql.push_str(" ORDER BY i.captured_at DESC, i.id DESC LIMIT ?");
+        // Pinned first, then those with a comment, then newest first.
+        sql.push_str(&format!(
+            " ORDER BY {RANK} DESC, i.captured_at DESC, i.id DESC LIMIT ?"
+        ));
         args.push(Value::Integer(q.limit.max(1) as i64));
         let mut st = self.conn.prepare(&sql)?;
         let rows = st.query_map(params_from_iter(args), |r| {
@@ -268,6 +315,8 @@ impl Store {
                 reduced: r.get(6)?,
                 formats: r.get::<_, Option<String>>(7)?.unwrap_or_default(),
                 has_thumb: r.get(8)?,
+                comment: r.get(9)?,
+                pinned: r.get::<_, i64>(10)? != 0,
             })
         })?;
         rows.collect()
@@ -302,6 +351,18 @@ impl Store {
             .optional()
     }
 
+    pub fn set_comment(&mut self, id: i64, comment: &str) -> rusqlite::Result<usize> {
+        self.conn.execute(
+            "UPDATE items SET comment=?2 WHERE id=?1",
+            params![id, comment.trim()],
+        )
+    }
+    pub fn set_pinned(&mut self, id: i64, pinned: bool) -> rusqlite::Result<usize> {
+        self.conn.execute(
+            "UPDATE items SET pinned=?2 WHERE id=?1",
+            params![id, pinned as i64],
+        )
+    }
     pub fn delete(&mut self, id: i64) -> rusqlite::Result<usize> {
         self.conn.execute("DELETE FROM items WHERE id=?1", [id])
     }
@@ -330,11 +391,16 @@ fn retention(tx: &Connection, p: &Policy, now_ms: i64) -> rusqlite::Result<usize
     let mut deleted = 0;
     if p.retention_days > 0 {
         let cutoff = now_ms - p.retention_days as i64 * DAY_MS;
-        deleted += tx.execute("DELETE FROM items WHERE captured_at<?1", [cutoff])?;
+        deleted += tx.execute(
+            "DELETE FROM items WHERE pinned=0 AND captured_at<?1",
+            [cutoff],
+        )?;
     }
+    // Pinned items stay and do not count toward the number kept.
     deleted += tx.execute(
         "DELETE FROM items WHERE id IN
-         (SELECT id FROM items ORDER BY captured_at DESC, id DESC LIMIT -1 OFFSET ?1)",
+         (SELECT id FROM items WHERE pinned=0
+          ORDER BY captured_at DESC, id DESC LIMIT -1 OFFSET ?1)",
         [p.max_items as i64],
     )?;
     let mut total: i64 =
@@ -342,8 +408,9 @@ fn retention(tx: &Connection, p: &Policy, now_ms: i64) -> rusqlite::Result<usize
             r.get(0)
         })?;
     if total as u64 > p.max_total_bytes {
-        let mut st =
-            tx.prepare("SELECT id,total_bytes FROM items ORDER BY captured_at ASC, id ASC")?;
+        let mut st = tx.prepare(
+            "SELECT id,total_bytes FROM items WHERE pinned=0 ORDER BY captured_at ASC, id ASC",
+        )?;
         let rows: Vec<(i64, i64)> = st
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<Result<_, _>>()?;
@@ -496,11 +563,101 @@ mod tests {
         let rest = s
             .list(&Query {
                 limit: 2,
-                after: Some((last.captured_ms, last.id)),
+                after: Some(last.cursor()),
                 ..Default::default()
             })
             .unwrap();
         assert_eq!(rest.len(), 1);
+    }
+
+    #[test]
+    fn pinned_then_commented_then_newest_and_pins_survive_retention() {
+        let mut s = Store::memory();
+        let p = Policy {
+            max_items: 100,
+            retention_days: 0,
+            ..Default::default()
+        };
+        for k in 1..=5 {
+            s.insert(&item(k, &format!("t{k}"), 1), &p, 10).unwrap();
+        }
+        s.set_comment(2, "  회의 메모 ").unwrap();
+        s.set_pinned(1, true).unwrap();
+        assert_eq!(ids(&s), vec![1, 2, 5, 4, 3]);
+        // The comment is stored trimmed and found by search.
+        let got = s
+            .list(&Query {
+                search: "회의".into(),
+                limit: 10,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].comment, "회의 메모");
+        // Paging across the groups keeps the same order.
+        let mut seen = vec![];
+        let mut after = None;
+        loop {
+            let page = s
+                .list(&Query {
+                    limit: 2,
+                    after,
+                    ..Default::default()
+                })
+                .unwrap();
+            let Some(last) = page.last() else { break };
+            after = Some(last.cursor());
+            seen.extend(page.iter().map(|m| m.id));
+        }
+        assert_eq!(seen, vec![1, 2, 5, 4, 3]);
+        // Retention: a pin stays however old; the rest follow the rules.
+        let tight = Policy {
+            max_items: 1,
+            retention_days: 0,
+            ..p
+        };
+        s.apply_retention(&tight, 10).unwrap();
+        assert_eq!(ids(&s), vec![1, 5]);
+        let week = Policy {
+            retention_days: 7,
+            ..p
+        };
+        s.apply_retention(&week, 100 * DAY_MS).unwrap();
+        assert_eq!(ids(&s), vec![1]);
+        // Unpinning puts it back among the rest.
+        s.set_pinned(1, false).unwrap();
+        assert!(
+            !s.list(&Query {
+                limit: 9,
+                ..Default::default()
+            })
+            .unwrap()[0]
+                .pinned
+        );
+    }
+
+    #[test]
+    fn a_version_1_database_gains_the_new_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE items(id INTEGER PRIMARY KEY AUTOINCREMENT, captured_at INTEGER NOT NULL,
+             kind TEXT NOT NULL, summary TEXT NOT NULL, search_text TEXT NOT NULL,
+             meta TEXT NOT NULL DEFAULT '', total_bytes INTEGER NOT NULL,
+             reduced INTEGER NOT NULL DEFAULT 0);
+             INSERT INTO items(captured_at,kind,summary,search_text,total_bytes) VALUES(1,'text','a','a',1);
+             PRAGMA user_version=1;",
+        )
+        .unwrap();
+        init(&conn).unwrap();
+        let s = Store { conn };
+        let got = s
+            .list(&Query {
+                limit: 9,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(got.len(), 1);
+        assert!(got[0].comment.is_empty() && !got[0].pinned);
     }
 
     #[test]

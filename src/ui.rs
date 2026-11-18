@@ -655,19 +655,6 @@ pub fn divider(ui: &mut Ui) {
     );
 }
 
-/// Keep a popup of `size` anchored near `pos` fully inside the current
-/// viewport's screen rect, so a menu opened near an edge (e.g. a right-click
-/// close to the window's bottom or right) is not cut off or left
-/// unreachable. `size` is an estimate when the popup resizes to its content;
-/// that's fine here since this only nudges the anchor, not the final size.
-pub fn clamp_popup_pos(ctx: &egui::Context, pos: Pos2, size: Vec2) -> Pos2 {
-    let area = ctx.screen_rect();
-    Pos2::new(
-        pos.x.min(area.right() - size.x).max(area.left()),
-        pos.y.min(area.bottom() - size.y).max(area.top()),
-    )
-}
-
 pub fn weekday(d: chrono::NaiveDate) -> &'static str {
     use chrono::Datelike;
     ["일", "월", "화", "수", "목", "금", "토"][d.weekday().num_days_from_sunday() as usize]
@@ -1004,49 +991,43 @@ pub fn time_input(ui: &mut Ui, id: impl Hash, hour: &mut u32, minute: &mut u32) 
         ui.memory_mut(|mem| mem.toggle_popup(popup));
     }
     let anchor = h.union(m);
-    egui::popup_below_widget(
-        ui,
-        popup,
-        &anchor,
-        egui::PopupCloseBehavior::CloseOnClickOutside,
-        |ui| {
-            ui.set_width(6. * 38.);
-            ui.spacing_mut().item_spacing = Vec2::new(2., 2.);
-            caption(ui, "시");
-            let mut close = false;
-            egui::Grid::new(popup.with("hours"))
-                .spacing([2., 2.])
-                .show(ui, |ui| {
-                    for v in 0..24u32 {
-                        if pick_cell(ui, v == *hour, format!("{v:02}")).clicked() {
-                            *hour = v;
-                        }
-                        if v % 6 == 5 {
-                            ui.end_row();
-                        }
+    crate::float::popup(ui, popup, &anchor, 6. * 38. + 14., |ui| {
+        ui.set_width(6. * 38.);
+        ui.spacing_mut().item_spacing = Vec2::new(2., 2.);
+        caption(ui, "시");
+        let mut close = false;
+        egui::Grid::new(popup.with("hours"))
+            .spacing([2., 2.])
+            .show(ui, |ui| {
+                for v in 0..24u32 {
+                    if pick_cell(ui, v == *hour, format!("{v:02}")).clicked() {
+                        *hour = v;
                     }
-                });
-            ui.add_space(6.);
-            caption(ui, "분");
-            egui::Grid::new(popup.with("minutes"))
-                .spacing([2., 2.])
-                .show(ui, |ui| {
-                    for k in 0..12u32 {
-                        let v = k * 5;
-                        if pick_cell(ui, v == *minute, format!("{v:02}")).clicked() {
-                            *minute = v;
-                            close = true;
-                        }
-                        if k % 6 == 5 {
-                            ui.end_row();
-                        }
+                    if v % 6 == 5 {
+                        ui.end_row();
                     }
-                });
-            if close {
-                ui.memory_mut(|mem| mem.close_popup());
-            }
-        },
-    );
+                }
+            });
+        ui.add_space(6.);
+        caption(ui, "분");
+        egui::Grid::new(popup.with("minutes"))
+            .spacing([2., 2.])
+            .show(ui, |ui| {
+                for k in 0..12u32 {
+                    let v = k * 5;
+                    if pick_cell(ui, v == *minute, format!("{v:02}")).clicked() {
+                        *minute = v;
+                        close = true;
+                    }
+                    if k % 6 == 5 {
+                        ui.end_row();
+                    }
+                }
+            });
+        if close {
+            ui.memory_mut(|mem| mem.close_popup());
+        }
+    });
 }
 fn pick_cell(ui: &mut Ui, selected: bool, text: String) -> Response {
     let c = t(ui);
@@ -1133,33 +1114,5 @@ mod tests {
             });
             assert!((size.x / size.y - ratio).abs() < 0.01, "{size:?}");
         }
-    }
-
-    #[test]
-    fn clamp_popup_pos_keeps_an_anchor_inside_the_screen() {
-        let ctx = egui::Context::default();
-        let screen = egui::Rect::from_min_size(Pos2::ZERO, Vec2::new(800., 600.));
-        let _ = ctx.run(
-            egui::RawInput {
-                screen_rect: Some(screen),
-                ..Default::default()
-            },
-            |ctx| {
-                let size = Vec2::new(160., 200.);
-                // Comfortably inside: untouched.
-                let inside = clamp_popup_pos(ctx, Pos2::new(300., 300.), size);
-                assert_eq!(inside, Pos2::new(300., 300.));
-                // Near the bottom-right corner: pulled back so the whole
-                // popup stays on screen.
-                let corner = clamp_popup_pos(ctx, Pos2::new(790., 590.), size);
-                assert_eq!(
-                    corner,
-                    Pos2::new(screen.right() - size.x, screen.bottom() - size.y)
-                );
-                // Negative/near-origin anchors never go further negative.
-                let origin = clamp_popup_pos(ctx, Pos2::new(-50., -50.), size);
-                assert_eq!(origin, Pos2::new(0., 0.));
-            },
-        );
     }
 }

@@ -145,6 +145,9 @@ pub enum Cmd {
     /// Enlarged image preview (decoded on demand).
     Full(i64),
     Restore(i64),
+    /// The user's comment on an item ("" removes it).
+    Comment(i64, String),
+    Pin(i64, bool),
     Delete(i64),
     DeleteBefore(i64),
     DeleteAll {
@@ -369,6 +372,8 @@ pub struct ClipboardHistory {
     scroll_to: Option<f32>,
     settings_open: bool,
     search_focused: bool,
+    /// Comments being typed, by item (saved when the box loses focus).
+    comment_drafts: HashMap<i64, String>,
 }
 
 impl ClipboardHistory {
@@ -442,7 +447,7 @@ impl ClipboardHistory {
         });
     }
 
-    fn query(&self, after: Option<(i64, i64)>) -> Query {
+    fn query(&self, after: Option<(i64, i64, i64)>) -> Query {
         Query {
             kind: ["", "text", "link", "table", "image"][self.filter.min(4)].to_owned(),
             search: self.search.clone(),
@@ -472,7 +477,7 @@ impl ClipboardHistory {
         };
         self.req += 1;
         self.loading = true;
-        let q = self.query(Some((last.captured_ms, last.id)));
+        let q = self.query(Some(last.cursor()));
         self.send(Cmd::List {
             req: self.req,
             query: q,
