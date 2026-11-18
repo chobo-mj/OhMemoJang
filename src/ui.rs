@@ -149,6 +149,12 @@ pub fn apply(ctx: &egui::Context, dark: bool, family: egui::FontFamily, body: f3
         s.spacing.scroll.dormant_handle_opacity = 0.;
         s.spacing.scroll.dormant_background_opacity = 0.;
         s.interaction.selectable_labels = false;
+        // A tooltip shows only once the pointer has rested on a widget
+        // (tooltip_delay). With egui's grace time, the tooltip of each icon
+        // the pointer passed over popped up and went again at once, so
+        // sweeping over a sticker's toolbar redrew the window on every frame.
+        s.interaction.show_tooltips_only_when_still = false;
+        s.interaction.tooltip_grace_time = 0.;
         let sizes = [
             (egui::TextStyle::Small, body * 0.86),
             (egui::TextStyle::Body, body),
@@ -1114,5 +1120,58 @@ mod tests {
             });
             assert!((size.x / size.y - ratio).abs() < 0.01, "{size:?}");
         }
+    }
+
+    #[test]
+    fn sweeping_over_a_toolbar_pops_no_tooltips_until_the_pointer_rests() {
+        let ctx = egui::Context::default();
+        apply(&ctx, false, egui::FontFamily::Proportional, 14.);
+        let i = ctx.style().interaction.clone();
+        assert!(!i.show_tooltips_only_when_still);
+        assert_eq!(i.tooltip_grace_time, 0.);
+        assert!(i.tooltip_delay > 0.);
+        // Two buttons side by side; (rect, tooltip open) of each.
+        let frame = |ctx: &egui::Context, input: egui::RawInput| {
+            let mut seen = Vec::new();
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        for label in ["a", "b"] {
+                            let r = ui.button(label).on_hover_text("tip");
+                            seen.push((r.rect, r.is_tooltip_open()));
+                        }
+                    });
+                });
+            });
+            seen
+        };
+        let at = |t: f64, p: Option<egui::Pos2>| egui::RawInput {
+            time: Some(t),
+            events: p.map(egui::Event::PointerMoved).into_iter().collect(),
+            ..Default::default()
+        };
+        let mut seen = frame(&ctx, at(0., None));
+        let (a, b) = (seen[0].0.center(), seen[1].0.center());
+        // Resting on "a" shows its tooltip.
+        let mut t = 1.;
+        let _ = frame(&ctx, at(t, Some(a)));
+        while t < 2. {
+            t += 0.05;
+            seen = frame(&ctx, at(t, None));
+        }
+        assert!(seen[0].1, "the tooltip of a resting pointer shows");
+        // Passing on to "b" does not show its tooltip right away.
+        let _ = frame(&ctx, at(t + 0.016, Some(b)));
+        for k in 2..6 {
+            seen = frame(&ctx, at(t + 0.016 * f64::from(k), None));
+            assert!(!seen[1].1, "no tooltip while passing over");
+        }
+        // It shows once the pointer has rested there.
+        let mut u = t + 0.1;
+        while u < t + 1.2 {
+            u += 0.05;
+            seen = frame(&ctx, at(u, None));
+        }
+        assert!(seen[1].1);
     }
 }

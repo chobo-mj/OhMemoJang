@@ -777,6 +777,14 @@ impl App {
             self.open_schedule(i);
             done = true;
         }
+        if plain(&ui.button("알람 설정…")) {
+            self.open_reminder(i);
+            done = true;
+        }
+        if w.mode == Mode::Sticker && plain(&ui.button("메모 편집 창 열기")) {
+            w.edit();
+            done = true;
+        }
         if plain(&ui.button("메모 잠금")) {
             self.ask_lock(i);
             done = true;
@@ -2080,9 +2088,6 @@ impl App {
                     }
                 });
             }
-            if engaged && icon_button(ui, Icon::Alarm, "알람 날짜와 시간").clicked() {
-                self.open_reminder(i);
-            }
             if engaged {
                 let n = &self.data.notes[i];
                 let tip = match n.date {
@@ -2115,11 +2120,6 @@ impl App {
                     ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(w.size()));
                     w.applied = Some((Mode::Title, false));
                     w.native.start_drag(ctx);
-                }
-                if mode == Mode::Sticker
-                    && icon_button(ui, Icon::Edit, "메모 편집 창 열기").clicked()
-                {
-                    w.edit();
                 }
             }
             pin_button(ui, &mut self.data.notes[i].topmost);

@@ -66,6 +66,10 @@ fn with_event_loop<R>(
 
 /// The shortest time between two frames of one window (about 60 per second).
 const MIN_FRAME: std::time::Duration = std::time::Duration::from_millis(16);
+/// The same while the mouse only passes over a window, no button held (about
+/// 30 per second): hover highlights need no more, and every frame runs all
+/// windows' interfaces.
+const HOVER_FRAME: std::time::Duration = std::time::Duration::from_millis(33);
 
 /// Wraps a [`WinitApp`] to implement [`ApplicationHandler`]. This handles redrawing, exit states, and
 /// some events, but otherwise forwards events to the [`WinitApp`].
@@ -74,6 +78,10 @@ struct WinitAppWrapper<T: WinitApp> {
     /// When each window last ran a frame (OhMemoJang: frames are spaced by
     /// at least [`MIN_FRAME`]).
     last_frames: HashMap<WindowId, Instant>,
+    /// Mouse buttons held now.
+    buttons_held: u32,
+    /// The latest input was the mouse moving with no button held.
+    hover_only: bool,
     winit_app: T,
     return_result: Result<(), crate::Error>,
     run_and_return: bool,
@@ -84,6 +92,8 @@ impl<T: WinitApp> WinitAppWrapper<T> {
         Self {
             windows_next_repaint_times: HashMap::default(),
             last_frames: HashMap::default(),
+            buttons_held: 0,
+            hover_only: false,
             winit_app,
             return_result: Ok(()),
             run_and_return,
@@ -185,9 +195,37 @@ impl<T: WinitApp> WinitAppWrapper<T> {
     /// move (egui draws once more after input, and every window asks for
     /// itself); requests within one interval share a frame.
     fn spaced(&self, window_id: WindowId, at: Instant) -> Instant {
+        let gap = if self.hover_only {
+            HOVER_FRAME
+        } else {
+            MIN_FRAME
+        };
         self.last_frames
             .get(&window_id)
-            .map_or(at, |last| at.max(*last + MIN_FRAME))
+            .map_or(at, |last| at.max(*last + gap))
+    }
+    /// Keeps [`Self::hover_only`] up to date.
+    fn note_input(&mut self, event: &winit::event::WindowEvent) {
+        use winit::event::{ElementState, WindowEvent as E};
+        match event {
+            E::CursorMoved { .. } => self.hover_only = self.buttons_held == 0,
+            E::MouseInput { state, .. } => {
+                self.buttons_held = match state {
+                    ElementState::Pressed => self.buttons_held + 1,
+                    ElementState::Released => self.buttons_held.saturating_sub(1),
+                };
+                self.hover_only = false;
+            }
+            // A release can be missed while another program has the focus.
+            E::Focused(_) => self.buttons_held = 0,
+            E::KeyboardInput { .. }
+            | E::Ime(_)
+            | E::MouseWheel { .. }
+            | E::Resized(_)
+            | E::Moved(_)
+            | E::Touch(_) => self.hover_only = false,
+            _ => {}
+        }
     }
 
     fn check_redraw_requests(&mut self, event_loop: &ActiveEventLoop) {
@@ -327,7 +365,10 @@ impl<T: WinitApp> ApplicationHandler<UserEvent> for WinitAppWrapper<T> {
                     self.last_frames.insert(window_id, Instant::now());
                     self.winit_app.run_ui_and_paint(event_loop, window_id)
                 }
-                _ => self.winit_app.window_event(event_loop, window_id, event),
+                _ => {
+                    self.note_input(&event);
+                    self.winit_app.window_event(event_loop, window_id, event)
+                }
             };
 
             self.handle_event_result(event_loop, event_result);
