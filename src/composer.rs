@@ -1524,8 +1524,36 @@ fn content_impl(
             );
         }
     }
+    // A right click on a web address in the text: the menu offers the link.
+    let menu_link = id.with("menu_link");
+    if output.response.secondary_clicked() {
+        let link = output.response.interact_pointer_pos().and_then(|p| {
+            let at = output
+                .galley
+                .cursor_from_pos(p - output.galley_pos)
+                .ccursor
+                .index;
+            url_at(&doc.tabs[doc.active].body, at)
+        });
+        ui.data_mut(|d| d.insert_temp(menu_link, link));
+    }
     let response = output.response;
     crate::float::context_menu(&response, 220., |ui| {
+        if let Some(url) = ui
+            .data(|d| d.get_temp::<Option<String>>(menu_link))
+            .flatten()
+        {
+            if ui.button("링크 열기").clicked() {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(url.clone()));
+                ui.close_menu();
+            }
+            if ui.button("링크 주소 복사").clicked() {
+                ui.ctx().copy_text(url);
+                doc.status = "링크 주소를 복사했습니다".into();
+                ui.close_menu();
+            }
+            ui.separator();
+        }
         for (label, keys, event) in [
             ("잘라내기", "Ctrl+X", egui::Event::Cut),
             ("복사", "Ctrl+C", egui::Event::Copy),
@@ -4737,6 +4765,25 @@ fn transform_spans(before: &str, after: &str, spans: &mut Vec<Span>, typing: &Fo
         });
     }
 }
+/// The web address (as [`urls`] finds them) at character `at`, or ending
+/// right before it (a click on an address's last letter can land after it).
+fn url_at(text: &str, at: usize) -> Option<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let inside = |i: usize| chars.get(i).is_some_and(|c| !c.is_whitespace());
+    let at = if inside(at) {
+        at
+    } else if at > 0 && inside(at - 1) {
+        at - 1
+    } else {
+        return None;
+    };
+    let start = (0..at).rev().find(|&i| !inside(i)).map_or(0, |i| i + 1);
+    let end = (at..chars.len())
+        .find(|&i| !inside(i))
+        .unwrap_or(chars.len());
+    let word: String = chars[start..end].iter().collect();
+    urls(&word).into_iter().next()
+}
 fn urls(text: &str) -> Vec<String> {
     let mut out = vec![];
     for t in text.split_whitespace() {
@@ -5720,6 +5767,30 @@ mod tests {
         assert_eq!(doc.status, "이미지를 복사했습니다");
         frame(&mut doc, 2. + 2. * STATUS_SECS);
         assert!(doc.status.is_empty(), "gone after its time");
+    }
+    #[test]
+    fn a_right_click_finds_the_web_address_under_it() {
+        let text = "참고 https://a.com/x, 끝 http://b.kr";
+        let at = |s: &str| text[..text.find(s).unwrap()].chars().count();
+        let a = Some("https://a.com/x".to_owned());
+        assert_eq!(url_at(text, at("https") + 3), a, "inside");
+        assert_eq!(url_at(text, at("https")), a, "first letter");
+        assert_eq!(url_at(text, at("x,")), a, "last letter");
+        assert_eq!(
+            url_at(text, at(", 끝")),
+            a,
+            "right after it, before the comma"
+        );
+        assert_eq!(url_at(text, at(" 끝") + 1), None, "next word");
+        assert_eq!(url_at(text, at("참고")), None, "plain word");
+        let end = text.chars().count();
+        assert_eq!(
+            url_at(text, end),
+            Some("http://b.kr".into()),
+            "at the very end"
+        );
+        assert_eq!(url_at("", 0), None);
+        assert_eq!(url_at("a  b", 2), None, "between spaces");
     }
     #[test]
     fn select_all_from_the_menu_stays_on_the_tab_shown() {
@@ -6927,6 +6998,34 @@ mod inline_table_tests {
             (tool.min - at).length() < 40.,
             "the toolbar is at the mouse: toolbar {tool:?}, mouse {at:?}"
         );
+    }
+    #[test]
+    fn a_right_click_on_a_table_cell_opens_the_table_menu() {
+        let ctx = egui::Context::default();
+        let mut doc = Document::default();
+        doc.tabs[0].insert_table(0..0, Table::new(2, 2));
+        let mut body = doc.tabs[0].body.clone();
+        let mut t = 0.0;
+        let mut run = |doc: &mut Document, body: &mut String, ev: Vec<egui::Event>| {
+            t += 0.2;
+            ui_frame(&ctx, doc, body, ev, t);
+        };
+        for _ in 0..3 {
+            run(&mut doc, &mut body, vec![]);
+        }
+        let area = table_area(&ctx);
+        let at = area.left_top() + egui::vec2(12., 10.);
+        let button = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        run(&mut doc, &mut body, vec![egui::Event::PointerMoved(at)]);
+        run(&mut doc, &mut body, vec![button(true)]);
+        run(&mut doc, &mut body, vec![button(false)]);
+        run(&mut doc, &mut body, vec![]);
+        assert!(crate::float::shown_in(&ctx), "the table menu is shown");
     }
     #[test]
     fn column_drag_resizes_and_round_trips_history() {

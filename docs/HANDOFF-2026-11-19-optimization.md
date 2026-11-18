@@ -37,9 +37,10 @@
    - (끝남) 손대지 않은 스티커 쉬기: `studio::may_rest` + vendor `eframe_rest`. 실제 데이터 4초 스윕 CPU가 약 373ms에서 242ms로 줄었다. 작업일지 '전역 최적화 4' 참고.
    - 메인 창이 열려 있으면 스티커 위 hover에도 메인 UI가 매 프레임 약 1ms 든다.
    - NVIDIA 드라이버의 창당 스레드·메모리(실제 데이터 약 1GB, 320 스레드): 창별 GL 컨텍스트나 wgpu 백엔드를 검토한다. 큰 작업이다.
-4. 표 메뉴·링크 메뉴는 화면에서 열어 확인하지 않았다.
+4. (끝남) 표 메뉴·본문 메뉴를 화면에서 확인했다. 본문 속 주소를 우클릭하면 링크 항목이 나온다.
 
 ## 시험 메모
+- Claude 앱 창이 화면 오른쪽(x≥1788px)을 덮고 있다. 스크린샷에서는 가려져 보이지 않는다. 시험할 스티커는 그 왼쪽에 둔다. `wins.ps1 -move "<제목>" -x .. -y ..`로 옮긴다.
 - Claude 앱에서 연 터미널에는 `SHIM_MCCOMPAT=0x810000001`이 들어 있어, 여기서 띄운 앱은 NVIDIA로 그린다.
 - 시험용 프로필: APPDATA=`<scratchpad>\stage`, LOCALAPPDATA=`<scratchpad>\stage\local`.
 - 실제 데이터: APPDATA=`C:\Users\corea\AppData\Roaming`, LOCALAPPDATA=`C:\Users\corea\AppData\Local`.
