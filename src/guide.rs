@@ -15,7 +15,7 @@ struct Page {
 
 /// Raised whenever the guide text changes; guide memos written for an older
 /// version are replaced the next time the program starts.
-pub const GUIDE_VERSION: u32 = 5;
+pub const GUIDE_VERSION: u32 = 6;
 
 const PAGES: &[Page] = &[
     Page {
@@ -175,6 +175,38 @@ const PAGES: &[Page] = &[
 · 백업 / 복원: 데이터 위치, ‘지금 백업’, ‘백업에서 복원’. 백업은 데이터 폴더의 backups 안에 날짜별로 쌓여요. 프로그램이 하루 한 번 자동 백업도 해 두고 최근 7개를 남겨요. ‘사용하지 않는 이미지 정리’는 어디서도 쓰지 않는 이미지를 지우지 않고 따로 옮겨 둬요.
 · 정보: 버전과 만든 사람, 사용법 보기, 튜토리얼 다시 하기.",
     },
+    Page {
+        title: "⑮ 2.0 새 기능 한눈에 보기",
+        image: None,
+        intro: "2.0에서 새로 생긴 기능을 한곳에 모았어요. 자세한 설명은 괄호 안의 페이지에도 있어요.",
+        body: "[알람] (④)
+· 반복 알람: 스티커의 알람 아이콘 › ‘반복’에서 매일 · 평일 · 매주 · 매월 중 하나를 골라요. 알림에서 ‘확인’을 누르면 다음 시각으로 저절로 넘어가요. 매월 31일처럼 없는 날은 그달 마지막 날에 울려요.
+· 미리 알림: 같은 창의 ‘미리 알림’에서 5분 전 · 10분 전 · 30분 전 · 1시간 전 · 하루 전 중에 골라요. 본 알람 전에 ‘미리 알림’이라고 한 번 더 알려 줘요.
+· 알람 여러 개: 달력에서 날짜, 아래에서 시각을 고른 뒤 ‘고른 시각을 추가 알람으로 넣기’를 눌러요. 넣은 알람은 목록에 보이고 ‘삭제’로 하나씩 지워요. ‘알람 해제’를 누르면 반복 · 미리 알림 · 추가 알람까지 모두 꺼져요.
+· Windows 알림이 꺼져 있으면 프로그램 팝업으로 대신 알려 줘요. 프로그램이 꺼져 있을 때 누른 알림 버튼(열기 · 5분 뒤 · 확인)도 다음 실행 때 처리돼요.
+
+[메모 꾸미기] (③)
+· 글자 색 · 형광펜: 글자를 끌어 선택하고 아래 툴바의 펜 아이콘을 눌러요. 위 줄에서 글자 색, 아래 줄에서 형광펜 색을 골라요. ‘기본’ · ‘없음’을 고르면 원래대로 돌아가요.
+· 아무것도 선택하지 않고 색을 고르면 그다음에 쓰는 글자에 그 색이 들어가요.
+· 색을 칠한 글자에 굵게 · 밑줄을 더해도 색은 그대로예요. 선택한 글자가 전부 굵으면 굵게 버튼이 굵게를 풀어요.
+· 툴바가 안 보이면 설정 › 메모창의 ‘스티커 툴바 자동 숨기기’를 꺼요.
+
+[메모 다루기] (②, ⑧)
+· 본문 우클릭: 일정 설정 · 알람 설정 · 스티커 정렬 메뉴가 바로 나와요.
+· 체크박스 진행률: 본문에 체크박스가 있으면 목록과 캘린더에 ‘2/5’처럼 끝낸 개수가 보여요.
+· 스티커 위쪽 빈 곳(툴바)을 잡고 캘린더 날짜 칸에 놓으면 그날 일정이 돼요. 캘린더 밖에 놓으면 스티커가 옮겨지기만 해요.
+
+[캘린더] (⑥, ⑦)
+· 여러 날 일정: 날짜 칸을 누른 채 다른 날까지 끌었다 놓으면 그 기간의 새 일정 스티커가 생겨요.
+· 음력: 날짜 칸 오른쪽 위의 흐린 ‘음 10.1’ 같은 글씨가 음력 매달 1일이에요.
+· 내 휴일: 설정 › 캘린더 › ‘내 휴일’에 창립기념일 · 휴가 같은 날을 넣으면 빨간 날로 보여요.
+· Windows 11 24H2 이후 PC에서는 스탠딩 버튼 옆에 ‘지원 안 됨’이 작게 보여요. 분리창이나 색상 상자를 써 주세요.
+
+[그 밖에] (⑭)
+· 검색 단축키 Ctrl+Alt+F: 어디서든 검색 창을 열고 바로 입력할 수 있어요. 결과의 ‘달력에서 보기’를 누르면 그날 캘린더로 가요.
+· 자동 백업: 하루 한 번 데이터 폴더의 backups에 백업하고 최근 7개를 남겨요.
+· 첫 실행 때 데이터 폴더를 묻지 않아요. 저장 위치는 튜토리얼과 설정 › 백업 / 복원에서 확인해요.",
+    },
 ];
 
 /// Add the guide memos to the wiki tab `tab`.
@@ -331,6 +363,21 @@ mod tests {
         let count = a.data.notes.len();
         a.refresh_guide();
         assert_eq!(a.data.notes.len(), count);
+    }
+    #[test]
+    fn the_guide_has_a_page_about_the_new_features() {
+        let mut a = App::sample(Local::now().date_naive());
+        a.start_fresh();
+        let page = a
+            .data
+            .notes
+            .iter()
+            .find(|n| n.title.contains("2.0 새 기능"))
+            .expect("the 2.0 page is in the guide");
+        assert!(is_guide_title(&page.title), "it is replaced on refresh");
+        for word in ["반복 알람", "미리 알림", "글자 색", "내 휴일", "Ctrl+Alt+F"] {
+            assert!(page.body.contains(word), "{word}");
+        }
     }
     #[test]
     fn a_deleted_guide_tab_is_not_brought_back() {
