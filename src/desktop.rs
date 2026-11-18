@@ -781,112 +781,116 @@ impl App {
                 ctx,
                 "reminder_dialog",
                 "알람 설정",
-                [360., 640.],
+                [370., 730.],
                 true,
                 &mut open,
                 |ui| {
-                    ui.horizontal(|ui| {
-                        crate::icons::paint_icon(
-                            ui.painter(),
-                            egui::Rect::from_min_size(ui.cursor().min, Vec2::splat(20.)),
-                            crate::icons::Icon::Alarm,
-                            ACCENT,
-                        );
-                        ui.add_space(26.);
-                        ui.label(
-                            RichText::new(if self.data.notes[i].title.is_empty() {
-                                "새 메모"
-                            } else {
-                                &self.data.notes[i].title
-                            })
-                            .strong()
-                            .size(15.),
-                        );
-                    });
-                    ui.add_space(8.);
-                    ui.horizontal_wrapped(|ui| {
-                        let now = Local::now().naive_local();
-                        for (label, t) in [
-                            ("+10분", now + Duration::minutes(10)),
-                            ("+1시간", now + Duration::hours(1)),
-                            ("오늘 18:00", now.date().and_hms_opt(18, 0, 0).unwrap()),
-                            (
-                                "내일 09:00",
-                                (now.date() + Duration::days(1))
-                                    .and_hms_opt(9, 0, 0)
-                                    .unwrap(),
-                            ),
-                        ] {
-                            if crate::ui::pill(ui, false, label).clicked() {
-                                use chrono::Timelike;
-                                self.desktop.reminder_date = t.date();
-                                self.desktop.reminder_month = t.date().with_day(1).unwrap();
-                                self.desktop.reminder_hour = t.hour();
-                                self.desktop.reminder_minute = t.minute();
-                            }
-                        }
-                    });
-                    ui.add_space(10.);
-                    crate::ui::month_grid(
-                        ui,
-                        &mut self.desktop.reminder_month,
-                        &mut self.desktop.reminder_date,
-                    );
-                    ui.add_space(6.);
-                    crate::ui::time_row(
-                        ui,
-                        &mut self.desktop.reminder_hour,
-                        &mut self.desktop.reminder_minute,
-                    );
-                    crate::ui::hint(
-                        ui,
-                        "시각이 되면 소리와 함께 화면 오른쪽 아래에 알림 창이 뜹니다",
-                    );
-                    ui.add_space(6.);
-                    let n = &mut self.data.notes[i];
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label("반복");
-                        for (k, label) in crate::alarm::REPEATS.iter().enumerate() {
-                            if crate::ui::pill(ui, n.alarm_repeat as usize == k, label).clicked() {
-                                n.alarm_repeat = k as u8;
-                            }
-                        }
-                    });
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label("미리 알림");
-                        for (m, label) in crate::alarm::LEADS {
-                            if crate::ui::pill(ui, n.alarm_lead == m, label).clicked() {
-                                n.alarm_lead = m;
-                            }
-                        }
-                    });
-                    ui.add_space(4.);
-                    let mut remove = None;
-                    for (k, t) in n.alarm_more.iter().enumerate() {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.label(format!("추가 알람 {}", t.format("%-m월 %-d일 %H:%M")));
-                            if ui.small_button("삭제").clicked() {
-                                remove = Some(k);
+                            crate::icons::paint_icon(
+                                ui.painter(),
+                                egui::Rect::from_min_size(ui.cursor().min, Vec2::splat(20.)),
+                                crate::icons::Icon::Alarm,
+                                ACCENT,
+                            );
+                            ui.add_space(26.);
+                            ui.label(
+                                RichText::new(if self.data.notes[i].title.is_empty() {
+                                    "새 메모"
+                                } else {
+                                    &self.data.notes[i].title
+                                })
+                                .strong()
+                                .size(15.),
+                            );
+                        });
+                        ui.add_space(8.);
+                        ui.horizontal_wrapped(|ui| {
+                            let now = Local::now().naive_local();
+                            for (label, t) in [
+                                ("+10분", now + Duration::minutes(10)),
+                                ("+1시간", now + Duration::hours(1)),
+                                ("오늘 18:00", now.date().and_hms_opt(18, 0, 0).unwrap()),
+                                (
+                                    "내일 09:00",
+                                    (now.date() + Duration::days(1))
+                                        .and_hms_opt(9, 0, 0)
+                                        .unwrap(),
+                                ),
+                            ] {
+                                if crate::ui::pill(ui, false, label).clicked() {
+                                    use chrono::Timelike;
+                                    self.desktop.reminder_date = t.date();
+                                    self.desktop.reminder_month = t.date().with_day(1).unwrap();
+                                    self.desktop.reminder_hour = t.hour();
+                                    self.desktop.reminder_minute = t.minute();
+                                }
                             }
                         });
-                    }
-                    if let Some(k) = remove {
-                        n.alarm_more.remove(k);
-                    }
-                    add_extra = ui
-                        .button("고른 시각을 추가 알람으로 넣기")
-                        .on_hover_text("한 메모에 알람을 여러 개 둘 수 있어요")
-                        .clicked();
-                    ui.add_space(4.);
-                    let mut out = (false, false);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        out.0 = crate::ui::primary(ui, "설정").clicked();
-                        let n = &self.data.notes[i];
-                        if n.reminder.is_some() || !n.alarm_more.is_empty() {
-                            out.1 = ui.button("알람 해제").clicked();
+                        ui.add_space(10.);
+                        crate::ui::month_grid(
+                            ui,
+                            &mut self.desktop.reminder_month,
+                            &mut self.desktop.reminder_date,
+                        );
+                        ui.add_space(6.);
+                        crate::ui::time_row(
+                            ui,
+                            &mut self.desktop.reminder_hour,
+                            &mut self.desktop.reminder_minute,
+                        );
+                        crate::ui::hint(
+                            ui,
+                            "시각이 되면 소리와 함께 화면 오른쪽 아래에 알림 창이 뜹니다",
+                        );
+                        ui.add_space(6.);
+                        let n = &mut self.data.notes[i];
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("반복");
+                            for (k, label) in crate::alarm::REPEATS.iter().enumerate() {
+                                if crate::ui::pill(ui, n.alarm_repeat as usize == k, label)
+                                    .clicked()
+                                {
+                                    n.alarm_repeat = k as u8;
+                                }
+                            }
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("미리 알림");
+                            for (m, label) in crate::alarm::LEADS {
+                                if crate::ui::pill(ui, n.alarm_lead == m, label).clicked() {
+                                    n.alarm_lead = m;
+                                }
+                            }
+                        });
+                        ui.add_space(4.);
+                        let mut remove = None;
+                        for (k, t) in n.alarm_more.iter().enumerate() {
+                            ui.horizontal(|ui| {
+                                ui.label(format!("추가 알람 {}", t.format("%-m월 %-d일 %H:%M")));
+                                if ui.small_button("삭제").clicked() {
+                                    remove = Some(k);
+                                }
+                            });
                         }
+                        if let Some(k) = remove {
+                            n.alarm_more.remove(k);
+                        }
+                        add_extra = ui
+                            .button("고른 시각을 추가 알람으로 넣기")
+                            .on_hover_text("한 메모에 알람을 여러 개 둘 수 있어요")
+                            .clicked();
+                        ui.add_space(4.);
+                        let mut out = (false, false);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            out.0 = crate::ui::primary(ui, "설정").clicked();
+                            let n = &self.data.notes[i];
+                            if n.reminder.is_some() || !n.alarm_more.is_empty() {
+                                out.1 = ui.button("알람 해제").clicked();
+                            }
+                        });
+                        (applied, cleared) = out;
                     });
-                    (applied, cleared) = out;
                 },
             );
             if applied {

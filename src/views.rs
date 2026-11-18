@@ -56,11 +56,21 @@ impl App {
     }
     pub fn task_row_on(&mut self, ui: &mut egui::Ui, i: usize, occurrence: Option<NaiveDate>) {
         let tone = ui::t(ui);
-        let height = match self.desktop.row_spacing {
+        let base = match self.desktop.row_spacing {
             0 => 40.,
             2 => 54.,
             _ => 46.,
         };
+        // In search results the row also holds a "달력에서 보기" line.
+        let jump = self.extra.search_mode.then(|| {
+            if self.extra.created_basis {
+                Some(self.data.notes[i].created.date())
+            } else {
+                self.data.notes[i].date
+            }
+        });
+        let jump = jump.flatten();
+        let height = base + if jump.is_some() { 18. } else { 0. };
         // On 오늘의 할일 / 다음에 할일 a click shows the memo in the preview
         // pane; the eye button beside the check opens it as a sticker.
         let preview = matches!(self.page, 2 | 3);
@@ -202,7 +212,7 @@ impl App {
                 );
                 let galley = ui.fonts(|f| f.layout_job(job));
                 ui.painter().galley(
-                    egui::pos2(text_left, rect.top() + height - 20.),
+                    egui::pos2(text_left, rect.top() + base - 20.),
                     galley,
                     tone.muted,
                 );
@@ -273,24 +283,21 @@ impl App {
                     ui.close_menu();
                 }
             });
-            if self.extra.search_mode {
-                let d = if self.extra.created_basis {
-                    Some(self.data.notes[i].created.date())
-                } else {
-                    self.data.notes[i].date
-                };
-                if let Some(d) = d {
-                    ui.horizontal(|ui| {
-                        ui.add_space(48.);
-                        if ui
-                            .link(RichText::new(format!("{d} · 달력에서 보기")).small())
-                            .clicked()
-                        {
-                            self.month = d.with_day(1).unwrap();
-                            self.day = d;
-                            self.split = true;
-                        }
-                    });
+            if let Some(d) = jump {
+                let at = Rect::from_min_size(
+                    egui::pos2(rect.left() + 48. + lead, rect.top() + base - 2.),
+                    Vec2::new((rect.width() - 56. - lead).max(40.), 16.),
+                );
+                let link = ui.put(at, |ui: &mut egui::Ui| {
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.link(RichText::new(format!("{d} · 달력에서 보기")).small())
+                    })
+                    .inner
+                });
+                if link.clicked() {
+                    self.month = d.with_day(1).unwrap();
+                    self.day = d;
+                    self.split = true;
                 }
             }
         });

@@ -798,17 +798,9 @@ impl Document {
         self.selection = 0..0;
         self.selected_cell = None;
     }
-    /// Color (`highlight`: false) or highlight the selected text, keeping
-    /// each character's other formatting.
-    pub fn paint_selection(&mut self, highlight: bool, k: u8) {
-        if highlight {
-            self.format.highlight = k;
-        } else {
-            self.format.color = k;
-        }
-        if self.selected_cell.is_some() || self.selection.is_empty() {
-            return;
-        }
+    /// Change one thing about each selected character (`edit`), keeping the
+    /// rest of its formatting.
+    fn restyle(&mut self, edit: impl Fn(&mut Format)) {
         let tab = &mut self.tabs[self.active];
         let chars = tab.body.chars().count();
         let range = self.selection.start.min(chars)..self.selection.end.min(chars);
@@ -819,11 +811,7 @@ impl Document {
                 Some(&w) if w != u32::MAX => tab.spans[w as usize].format.clone(),
                 _ => Format::default(),
             };
-            if highlight {
-                f.highlight = k;
-            } else {
-                f.color = k;
-            }
+            edit(&mut f);
             match runs.last_mut() {
                 Some(r) if r.range.end == i && r.format == f => r.range.end = i + 1,
                 _ => runs.push(Span {
@@ -834,13 +822,45 @@ impl Document {
         }
         tab.spans.extend(runs);
     }
-    pub fn toggle_format(&mut self, kind: usize) {
-        match kind {
-            0 => self.format.bold = !self.format.bold,
-            1 => self.format.italic = !self.format.italic,
-            2 => self.format.underline = !self.format.underline,
-            _ => self.format.strike = !self.format.strike,
+    /// Color (`highlight`: false) or highlight the selected text. With
+    /// nothing selected, the color is for what is typed next.
+    pub fn paint_selection(&mut self, highlight: bool, k: u8) {
+        let set = |f: &mut Format| {
+            if highlight {
+                f.highlight = k;
+            } else {
+                f.color = k;
+            }
+        };
+        if self.selected_cell.is_some() || self.selection.is_empty() {
+            set(&mut self.format);
+        } else {
+            self.restyle(set);
         }
+    }
+    pub fn toggle_format(&mut self, kind: usize) {
+        fn flag(f: &mut Format, kind: usize) -> &mut bool {
+            match kind {
+                0 => &mut f.bold,
+                1 => &mut f.italic,
+                2 => &mut f.underline,
+                _ => &mut f.strike,
+            }
+        }
+        // On a selection: on unless every selected character has it.
+        let on = if self.selected_cell.is_none() && !self.selection.is_empty() {
+            let tab = &self.tabs[self.active];
+            let chars = tab.body.chars().count();
+            let winner = winning_spans(&tab.spans, chars);
+            let range = self.selection.start.min(chars)..self.selection.end.min(chars);
+            !range.clone().all(|i| match winner[i] {
+                u32::MAX => false,
+                w => *flag(&mut tab.spans[w as usize].format.clone(), kind),
+            }) || range.is_empty()
+        } else {
+            !*flag(&mut self.format, kind)
+        };
+        *flag(&mut self.format, kind) = on;
         if let Some((b, r, c)) = self.selected_cell {
             if let Some(Block::Table(t)) = self.tabs[self.active].blocks.get_mut(b) {
                 if let Some(cell) = t.cells.get_mut(r).and_then(|r| r.get_mut(c)) {
@@ -848,10 +868,9 @@ impl Document {
                 }
             }
         } else if !self.selection.is_empty() {
-            self.tabs[self.active].spans.push(Span {
-                range: self.selection.clone(),
-                format: self.format.clone(),
-            });
+            // Only this one style changes; colors and the other styles of
+            // each selected character stay.
+            self.restyle(|f| *flag(f, kind) = on);
         }
     }
 }
@@ -2136,6 +2155,7 @@ fn toolbar(ui: &mut egui::Ui, doc: &mut Document, id: Id, opacity: bool) -> egui
                                             }
                                         }
                                         Tool::Color => {
+                                            ui.set_min_width(230.);
                                             for (highlight, title, colors) in [
                                                 (false, "글자 색", &TEXT_COLORS[..]),
                                                 (true, "형광펜", &HIGHLIGHTS[..]),
@@ -4998,6 +5018,28 @@ mod tests {
         assert_eq!(job.sections[2].format.color, TEXT_COLORS[1].1);
         assert_eq!(job.sections[2].format.background, HIGHLIGHTS[2].1);
         assert_eq!(job.sections[5].format.background, Color32::TRANSPARENT);
+    }
+    #[test]
+    fn bold_after_coloring_keeps_colors_and_does_not_spread_them() {
+        let mut d = Document::default();
+        d.tabs[0].body = "red bold".into();
+        d.selection = 0..3;
+        d.paint_selection(false, 1);
+        assert_eq!(
+            d.format.color, 0,
+            "a colored selection leaves the typing color"
+        );
+        d.selection = 4..8;
+        d.toggle_format(0);
+        d.selection = 0..3;
+        d.toggle_format(0);
+        let w = winning_spans(&d.tabs[0].spans, 8);
+        let f = |i: usize| d.tabs[0].spans[w[i] as usize].format.clone();
+        assert!(f(5).bold && f(5).color == 0, "'bold' is not red");
+        assert!(
+            f(1).bold && f(1).color == 1,
+            "'red' keeps its color when bolded"
+        );
     }
     thread_local! {
         /// Stands in for the keyboard state `chord_down` reads.
