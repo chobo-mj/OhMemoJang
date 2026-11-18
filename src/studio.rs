@@ -2487,6 +2487,20 @@ mod tests {
         assert!(!a.data.notes[body].deleted);
     }
     #[test]
+    fn choosing_the_page_behind_the_settings_leaves_the_settings() {
+        let mut a = App::sample(Local::now().date_naive());
+        a.page = 0;
+        a.settings = true;
+        a.open_page(0);
+        assert!(
+            !a.settings && a.page == 0,
+            "내 작업실 again shows 내 작업실"
+        );
+        a.settings = true;
+        a.open_page(4);
+        assert!(!a.settings && a.page == 4);
+    }
+    #[test]
     fn unchecked_single_note_cannot_expose_stale_completion_time() {
         let mut a = App::sample(Local::now().date_naive());
         a.data.notes[0].completed = Some(Local::now().naive_local());

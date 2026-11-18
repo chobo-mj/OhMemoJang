@@ -83,3 +83,9 @@
 - 전체메모의 ‘목록에서 찾기’는 더 이상 Ctrl+F를 쓰지 않는다(입력칸을 눌러 쓴다). 찾아 바꾸기는 Ctrl+H 그대로. 스티커 안의 Ctrl+F는 예전대로 전체메모 찾기로 간다.
 - 캘린더에서 날짜를 끌어 만든 메모를 제목·본문·그림·표 없이 닫으면 영구 삭제한다(`drafts`, `drop_blank_drafts`, 휴지통을 거치지 않음). 무엇이든 쓴 메모, 다른 방법으로 만든 빈 메모는 그대로다.
 - 테스트: `ctrl_f_in_the_main_window_puts_the_cursor_in_the_search_box`, `a_calendar_drag_memo_closed_blank_is_erased_and_a_written_one_stays`. GUIDE_VERSION 7.
+
+## 설정에서 같은 메뉴로 돌아가기
+
+- 증상: 내 작업실을 보다가 설정을 연 뒤 다시 ‘내 작업실’을 누르면 설정 화면이 그대로였다. 설정은 ‘보던 페이지가 바뀌면 닫는다’로만 닫혀서, 같은 페이지를 누르면 아무 일도 없었다.
+- 수정: 메뉴(넓은 사이드바·아이콘 사이드바)의 페이지 버튼은 `open_page`로 페이지를 정하고 설정을 닫는다. 설정이 열려 있는 동안에는 뒤의 페이지 버튼을 선택 표시하지 않는다.
+- 테스트 `choosing_the_page_behind_the_settings_leaves_the_settings`.

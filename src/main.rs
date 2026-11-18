@@ -753,6 +753,12 @@ impl App {
         }
         self.focus_search = true;
     }
+    /// A page chosen in the menu. It also leaves the settings, even when it
+    /// is the page that was open behind them.
+    fn open_page(&mut self, page: usize) {
+        self.page = page;
+        self.settings = false;
+    }
     fn main_ui(&mut self, ctx: &egui::Context) {
         let tone = ui::tone(self.dark);
         if self.sidebar {
@@ -978,10 +984,16 @@ impl App {
             }
             for (page, name, icon) in PAGES {
                 if !self.prefs.hidden_pages.contains(&page)
-                    && icons::toggle_icon_sized(ui, icon, name, self.page == page, COMPACT_ICON)
-                        .clicked()
+                    && icons::toggle_icon_sized(
+                        ui,
+                        icon,
+                        name,
+                        self.page == page && !self.settings,
+                        COMPACT_ICON,
+                    )
+                    .clicked()
                 {
-                    self.page = page;
+                    self.open_page(page);
                 }
             }
             ui.add_space(6.);
@@ -1120,12 +1132,19 @@ impl App {
                 continue;
             }
             let badge = (page == 2 && today_count > 0).then(|| today_count.to_string());
-            let r = studio::nav_button(ui, name, self.page == page, icon, badge, false);
+            let r = studio::nav_button(
+                ui,
+                name,
+                self.page == page && !self.settings,
+                icon,
+                badge,
+                false,
+            );
             if page == 6 {
                 tutorial::mark(ui.ctx(), tutorial::Spot::NavUtilities, r.rect);
             }
             if r.clicked() {
-                self.page = page;
+                self.open_page(page);
             }
         }
         ui.add_space(18.);
