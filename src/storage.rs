@@ -233,6 +233,8 @@ pub struct SettingsRec {
     pub show_preview: bool,
     pub auto_toolbar: bool,
     pub skip_title: bool,
+    /// Width of the title line folded once; 0 in saves made before it.
+    pub title_width: f32,
     pub unpin_minimized: bool,
     pub default_color: [u8; 4],
     pub font: String,
@@ -274,6 +276,7 @@ impl Default for SettingsRec {
             show_preview: false,
             auto_toolbar: false,
             skip_title: false,
+            title_width: 0.,
             unpin_minimized: false,
             default_color: [0; 4],
             font: String::new(),
@@ -309,12 +312,13 @@ impl Default for SettingsRec {
 }
 
 impl SettingsRec {
-    fn read_desktop(&mut self, d: &crate::desktop::Desktop) {
+    pub(crate) fn read_desktop(&mut self, d: &crate::desktop::Desktop) {
         self.hide_completed = d.hide_completed;
         self.hide_locked = d.hide_locked;
         self.show_preview = d.show_preview;
         self.auto_toolbar = d.auto_toolbar;
         self.skip_title = d.skip_title;
+        self.title_width = d.title_width;
         self.unpin_minimized = d.unpin_minimized;
         self.default_color = color(d.default_color);
         self.font = d.font.clone();
@@ -341,12 +345,18 @@ impl SettingsRec {
         self.new_monitor = d.new_monitor;
         self.new_right = d.new_right;
     }
-    fn write_desktop(&self, d: &mut crate::desktop::Desktop) {
+    pub(crate) fn write_desktop(&self, d: &mut crate::desktop::Desktop) {
         d.hide_completed = self.hide_completed;
         d.hide_locked = self.hide_locked;
         d.show_preview = self.show_preview;
         d.auto_toolbar = self.auto_toolbar;
         d.skip_title = self.skip_title;
+        d.title_width = if self.title_width > 0. {
+            self.title_width
+                .clamp(crate::studio::TITLE_MIN, crate::studio::TITLE_MAX)
+        } else {
+            crate::studio::TITLE_WIDTH
+        };
         d.unpin_minimized = self.unpin_minimized;
         d.default_color = to_color(self.default_color);
         d.font = self.font.clone();

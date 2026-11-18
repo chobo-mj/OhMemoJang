@@ -9,6 +9,11 @@ pub const STAR: Color32 = Color32::from_rgb(236, 168, 32);
 /// buttons with a little blank space to drag it by, the format buttons on
 /// one row).
 pub const STICKER_MIN: Vec2 = Vec2::new(290., 220.);
+/// Width of the title line a memo folds to (step 1) unless set otherwise,
+/// and the range it can be set in.
+pub const TITLE_WIDTH: f32 = 360.;
+pub const TITLE_MIN: f32 = 160.;
+pub const TITLE_MAX: f32 = 1600.;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     Editor,
@@ -25,6 +30,8 @@ pub struct Window {
     full_size: Vec2,
     title_width: f32,
     skip_title: bool,
+    /// The title line width a fold into step 1 starts with (the setting).
+    title_default: f32,
     pub sticker_size: Vec2,
     swatch_size: Vec2,
     applied: Option<(Mode, bool)>,
@@ -70,6 +77,7 @@ impl Window {
             full_size: Vec2::new(620., 720.),
             title_width: 360.,
             skip_title: false,
+            title_default: TITLE_WIDTH,
             sticker_size: Vec2::splat(360.),
             swatch_size: Vec2::splat(48.),
             applied: None,
@@ -151,8 +159,11 @@ impl Window {
     pub fn fold(&mut self) {
         self.mode = match self.mode {
             Mode::Editor | Mode::Sticker if self.skip_title => Mode::Swatch,
-            Mode::Editor => Mode::Title,
-            Mode::Sticker => Mode::Title,
+            Mode::Editor | Mode::Sticker => {
+                // Folded into the title line, at the width set for it.
+                self.title_width = self.title_default;
+                Mode::Title
+            }
             Mode::Title => Mode::Swatch,
             Mode::Swatch => {
                 if self.sticker_preferred {
@@ -367,6 +378,71 @@ impl App {
                 );
                 self.desktop.sticker_size = size;
                 self.toast = format!("새 스티커 메모 크기를 {} × {}로 정했습니다", size.x, size.y);
+            }
+        }
+    }
+    /// The window for choosing how wide a memo's title line is when folded
+    /// once: a folded memo to stretch sideways. Closing it keeps its width.
+    pub fn title_probe_window(&mut self, ctx: &egui::Context) {
+        if !self.desktop.title_probe {
+            return;
+        }
+        let builder = egui::ViewportBuilder::default()
+            .with_title("1단 접기 크기 설정 · 너비를 바꾸고 닫으세요")
+            .with_inner_size([self.desktop.title_width, 44.])
+            .with_min_inner_size([TITLE_MIN, 44.])
+            .with_max_inner_size([TITLE_MAX, 44.])
+            .with_taskbar(false)
+            .with_window_level(egui::WindowLevel::AlwaysOnTop);
+        let fill = mix(self.desktop.default_color, Color32::WHITE, 0.15);
+        let mut closed = false;
+        let mut seen = None;
+        ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("title_probe"),
+            builder,
+            |ctx, _| {
+                self.theme(ctx);
+                if ctx.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape))
+                {
+                    closed = true;
+                }
+                seen = ctx.input(|i| i.viewport().inner_rect.map(|r| r.width()));
+                egui::CentralPanel::default()
+                    .frame(
+                        egui::Frame::NONE
+                            .fill(fill)
+                            .inner_margin(egui::Margin::symmetric(6, 5)),
+                    )
+                    .show(ctx, |ui| {
+                        ui.horizontal(|ui| {
+                            // Looks like a folded memo: done circle, title.
+                            let mut done = false;
+                            crate::ui::round_check(ui, &mut done, None);
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(format!(
+                                        "제목줄 너비 {} px",
+                                        seen.unwrap_or(self.desktop.title_width).round()
+                                    ))
+                                    .color(INK),
+                                )
+                                .truncate(),
+                            );
+                        });
+                    });
+            },
+        );
+        if let Some(width) = seen {
+            self.desktop.title_probe_last = Some(width);
+        }
+        if closed {
+            self.desktop.title_probe = false;
+            if let Some(width) = self.desktop.title_probe_last.take() {
+                self.desktop.title_width = width.round().clamp(TITLE_MIN, TITLE_MAX);
+                self.toast = format!(
+                    "1단 접기 제목줄 너비를 {} px로 정했습니다",
+                    self.desktop.title_width
+                );
             }
         }
     }
@@ -1327,6 +1403,7 @@ impl App {
             }
             w.reconcile(&self.data.notes[i]);
             w.skip_title = self.desktop.skip_title;
+            w.title_default = self.desktop.title_width;
             let locked = self.data.notes[i].locked;
             if locked {
                 w.mode = Mode::Swatch;
@@ -2012,7 +2089,14 @@ impl App {
                     self.new_sticker();
                 }
                 if engaged {
-                    crate::ui::icon_menu(ui, Icon::Palette, "메모 색상", |ui| {
+                    // In a window of its own, so a short sticker does not cut
+                    // off the color picker it can open.
+                    let r = icon_button(ui, Icon::Palette, "메모 색상");
+                    let popup_id = ui.make_persistent_id(("color_popup", i));
+                    if r.clicked() {
+                        ui.memory_mut(|m| m.toggle_popup(popup_id));
+                    }
+                    crate::float::popup(ui, popup_id, &r, 270., |ui| {
                         crate::desktop::color_choices(ui, &mut self.data.notes[i].color)
                     });
                 }
@@ -3061,6 +3145,54 @@ mod size_window_tests {
     }
 
     #[test]
+    fn closing_the_title_width_window_sets_the_width_folds_start_with() {
+        let mut app = App::sample(Local::now().date_naive());
+        let ctx = egui::Context::default();
+        assert_eq!(app.desktop.title_width, TITLE_WIDTH);
+        app.desktop.title_probe = true;
+        let run = |app: &mut App, events| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1200., 800.))),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| app.title_probe_window(ctx),
+            );
+        };
+        run(&mut app, vec![]);
+        assert!(app.desktop.title_probe, "stays open until closed");
+        app.desktop.title_probe_last = Some(241.6);
+        run(&mut app, escape());
+        assert!(!app.desktop.title_probe);
+        assert_eq!(app.desktop.title_width, 242.);
+        // Out of range widths come inside it.
+        app.desktop.title_probe = true;
+        app.desktop.title_probe_last = Some(40.);
+        run(&mut app, escape());
+        assert_eq!(app.desktop.title_width, TITLE_MIN);
+        // A memo folded once takes that width, also after it was resized
+        // as a title line before.
+        let mut w = Window::new(Mode::Sticker);
+        w.title_default = 242.;
+        w.title_width = 700.;
+        w.fold();
+        assert_eq!((w.mode, w.size()), (Mode::Title, Vec2::new(242., 44.)));
+        // Saved and restored with the settings; old saves get the default.
+        let mut rec = crate::storage::SettingsRec::default();
+        app.desktop.title_width = 242.;
+        rec.read_desktop(&app.desktop);
+        let back: crate::storage::SettingsRec =
+            serde_json::from_str(&serde_json::to_string(&rec).unwrap()).unwrap();
+        let mut d = crate::desktop::Desktop::default();
+        back.write_desktop(&mut d);
+        assert_eq!(d.title_width, 242.);
+        let old: crate::storage::SettingsRec = serde_json::from_str("{}").unwrap();
+        old.write_desktop(&mut d);
+        assert_eq!(d.title_width, TITLE_WIDTH);
+    }
+
+    #[test]
     fn the_new_memo_group_shows_in_the_settings_with_the_size_button() {
         let mut app = App::sample(Local::now().date_naive());
         app.desktop.settings_tab = 2;
@@ -3092,5 +3224,24 @@ mod size_window_tests {
         ] {
             assert!(texts.iter().any(|t| t == wanted), "missing: {wanted}");
         }
+        // The memo window tab: the title width button under "접기 1단계 건너뛰기".
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000., 2400.))),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.ppt_settings(ui));
+            },
+        );
+        let at = |wanted: &str| {
+            output.shapes.iter().find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.job.text == wanted => Some(t.pos.y),
+                _ => None,
+            })
+        };
+        let skip = at("접기 1단계 건너뛰기").expect("skip option");
+        let button = at("1단 접기 크기 조절하기").expect("title width button");
+        assert!(button > skip);
     }
 }

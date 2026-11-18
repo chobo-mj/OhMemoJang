@@ -64,6 +64,12 @@ pub struct Desktop {
     pub new_monitor: Option<usize>,
     /// New memos open on the right edge of the monitor, one below the other.
     pub new_right: bool,
+    /// Width of a memo's title line when it is folded once (step 1).
+    pub title_width: f32,
+    /// The window for setting that width is open, and its width when last
+    /// drawn.
+    pub title_probe: bool,
+    pub title_probe_last: Option<f32>,
     /// The window for setting the size of new stickers is open.
     pub size_probe: bool,
     /// The size the size window had when it was last drawn.
@@ -124,6 +130,9 @@ impl Default for Desktop {
             monitor_pick: false,
             new_monitor: None,
             new_right: true,
+            title_width: crate::studio::TITLE_WIDTH,
+            title_probe: false,
+            title_probe_last: None,
             size_probe: false,
             size_probe_last: None,
         }
@@ -1238,7 +1247,7 @@ impl App {
                         ui,
                         &mut self.desktop.always_sticker,
                         "메모를 항상 스티커 메모로 열기",
-                        "메모 편집 창은 스티커 제목줄의 편집 버튼으로 엽니다",
+                        "메모 편집 창은 스티커의 … 더보기 › 메모 편집 창 열기로 엽니다",
                     );
                     section(ui, "새 메모 기본 색");
                     color_choices(ui, &mut self.desktop.default_color);
@@ -1288,6 +1297,24 @@ impl App {
                     "접기 1단계 건너뛰기",
                     "스티커에서 바로 색상 상자로 접습니다",
                 );
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(
+                            !self.desktop.title_probe,
+                            egui::Button::new("1단 접기 크기 조절하기"),
+                        )
+                        .on_hover_text(
+                            "제목만 보이는 접힌 메모가 하나 뜹니다 · 너비를 바꾸고 닫으면 1단 접기의 제목줄 너비가 됩니다",
+                        )
+                        .clicked()
+                    {
+                        self.desktop.title_probe = true;
+                    }
+                    ui.label(
+                        RichText::new(format!("지금 너비 {} px", self.desktop.title_width.round()))
+                            .color(crate::ui::t(ui).muted),
+                    );
+                });
                 toggle_row(
                     ui,
                     &mut self.desktop.unpin_minimized,
@@ -1556,6 +1583,7 @@ fn font_choice(ui: &mut egui::Ui, id: &str, value: &mut String) {
     crate::ui::hint(ui, "설치된 글꼴을 사용하며 없으면 기본 글꼴로 표시합니다.");
 }
 pub fn color_choices(ui: &mut egui::Ui, color: &mut Color32) {
+    let key = ui.make_persistent_id("custom_color_open");
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = Vec2::splat(6.);
         for c in PALETTE {
@@ -1575,13 +1603,85 @@ pub fn color_choices(ui: &mut egui::Ui, color: &mut Color32) {
                 *color = c;
             }
         }
-        ui.color_edit_button_srgba(color)
-            .on_hover_text("사용자 지정 색");
+        // Other colors: the picker opens here, inside the same menu. egui's
+        // color button opened it as a popup of its own, and a click in it
+        // was a click outside the color menu, which then closed.
+        let open = ui.data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
+        let (rect, r) = ui.allocate_exact_size(Vec2::splat(24.), egui::Sense::click());
+        let custom = !PALETTE.contains(color);
+        ui.painter().circle_filled(
+            rect.center(),
+            11.,
+            if custom { *color } else { Color32::WHITE },
+        );
+        ui.painter().circle_stroke(
+            rect.center(),
+            11.,
+            egui::Stroke::new(1.0_f32, Color32::from_black_alpha(60)),
+        );
+        if !custom {
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "+",
+                egui::FontId::proportional(16.),
+                Color32::from_gray(90),
+            );
+        }
+        if custom || open {
+            ui.painter()
+                .circle_stroke(rect.center(), 12.5, egui::Stroke::new(2.0_f32, ACCENT));
+        }
+        if r.on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text("기타 색상")
+            .clicked()
+        {
+            ui.data_mut(|d| d.insert_temp(key, !open));
+        }
     });
+    if ui.data(|d| d.get_temp::<bool>(key)).unwrap_or(false) {
+        ui.add_space(4.);
+        egui::color_picker::color_picker_color32(ui, color, egui::color_picker::Alpha::Opaque);
+    }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn other_colors_are_picked_inside_the_color_menu_itself() {
+        let ctx = egui::Context::default();
+        let mut color = PALETTE[0];
+        let run = |open: bool, color: &mut Color32| {
+            let mut height = 0.;
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(300., 600.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.set_width(220.);
+                        let key = ui.make_persistent_id("custom_color_open");
+                        ui.data_mut(|d| d.insert_temp(key, open));
+                        let top = ui.cursor().top();
+                        color_choices(ui, color);
+                        height = ui.cursor().top() - top;
+                    });
+                },
+            );
+            let popups = ctx.memory(|m| m.any_popup_open());
+            (height, popups)
+        };
+        let (closed, _) = run(false, &mut color);
+        let (open, popups) = run(true, &mut color);
+        // The picker is laid out in the menu (it grows), not in a popup
+        // of its own, whose clicks would close the menu.
+        assert!(open > closed + 100., "{closed} -> {open}");
+        assert!(!popups);
+    }
     #[test]
     fn settings_content_stacks_vertically_inside_its_navigation_row() {
         let mut app = App::sample(Local::now().date_naive());

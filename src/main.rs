@@ -537,6 +537,7 @@ impl eframe::App for App {
         self.daily_today(ctx);
         self.monitor_picker(ctx);
         self.size_probe_window(ctx);
+        self.title_probe_window(ctx);
         self.apply_arrangement(ctx);
         self.detached_note(ctx);
         self.finish_completed_stickers(ctx);
