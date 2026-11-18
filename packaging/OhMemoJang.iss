@@ -1,10 +1,10 @@
 ; Per-user, offline Windows x64 installer.
 ; Input is a strictly staged directory, never the source tree or user data.
 #ifndef AppVersion
-  #define AppVersion "2.0.2"
+  #define AppVersion "2.0.3"
 #endif
 #ifndef ReleaseLabel
-  #define ReleaseLabel "2.0.2"
+  #define ReleaseLabel "2.0.3"
 #endif
 #ifndef StageDir
   #define StageDir "..\dist\portable\OhMemoJang"
