@@ -1567,7 +1567,17 @@ fn render_immediate_viewport(
 
     // ---------------------------------------------------
 
-    let clipped_primitives = egui_ctx.tessellate(shapes, pixels_per_point);
+    // The app built nothing for this window this frame (it rests while the
+    // pointer works elsewhere): the window keeps showing its last frame.
+    let rest = egui_ctx.data_mut(|d| {
+        d.remove_temp::<bool>(egui::Id::new("eframe_rest").with(viewport_id))
+            .unwrap_or(false)
+    });
+    let clipped_primitives = if rest {
+        vec![]
+    } else {
+        egui_ctx.tessellate(shapes, pixels_per_point)
+    };
 
     let mut glutin = glutin.borrow_mut();
 
@@ -1591,6 +1601,26 @@ fn render_immediate_viewport(
     ) else {
         return;
     };
+
+    if rest {
+        // Textures are shared by every window: an update that came with this
+        // pass is applied, but nothing is drawn or swapped.
+        if !(textures_delta.set.is_empty() && textures_delta.free.is_empty()) {
+            change_gl_context(current_gl_context, not_current_gl_context, gl_surface);
+            let mut painter = painter.borrow_mut();
+            for (id, delta) in &textures_delta.set {
+                painter.set_texture(*id, delta);
+            }
+            for id in &textures_delta.free {
+                painter.free_texture(*id);
+            }
+        }
+        egui_winit.handle_platform_output(window, platform_output);
+        event_loop_context::with_current_event_loop(|event_loop| {
+            glutin.handle_viewport_output(event_loop, egui_ctx, &viewport_output);
+        });
+        return;
+    }
 
     let screen_size_in_pixels: [u32; 2] = window.inner_size().into();
 

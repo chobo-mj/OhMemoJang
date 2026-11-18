@@ -77,6 +77,11 @@ pub fn marked(r: egui::Response, spot: Spot) -> egui::Response {
     r
 }
 
+/// The tutorial runs (every window must say where its parts are).
+pub fn active() -> bool {
+    ACTIVE.load(Ordering::Relaxed)
+}
+
 /// Start of a frame: forget last frame's spots.
 pub fn begin_frame(active: bool) {
     ACTIVE.store(active, Ordering::Relaxed);

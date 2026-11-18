@@ -51,6 +51,43 @@ pub struct Window {
     /// the same frame let its own TextEdit see the same event again and
     /// insert a stray newline (or duplicate the just-composed character).
     move_caret_to_body: bool,
+    /// When the window was last built in full, and `lists::CHANGES` then.
+    drawn_at: f64,
+    drawn_changes: u64,
+}
+/// A window resting (see [`may_rest`]) is built in full again at least this
+/// often, and once more this long after the last rest.
+pub(crate) const REST_MAX: f64 = 0.25;
+/// The pointer this close to a window (points) keeps it built every frame:
+/// a window it enters has its widgets laid out, so the first click counts.
+const REST_NEAR: f32 = 160.;
+/// What decides whether a window may skip building its contents this
+/// frame and keep showing the last one.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Quiet {
+    /// Input, focus or the pointer in this window, or a menu, dialog,
+    /// drag or window command of its own under way.
+    pub busy: bool,
+    pub pointer_near: bool,
+    /// Data changed by input since the window was last built.
+    pub changed: bool,
+    pub since_drawn: f64,
+}
+/// Pointer moves over one window make every window run a frame (they share
+/// one). A window none of that concerns keeps its last picture, so moving
+/// the mouse costs about what one window costs, not all of them.
+pub(crate) fn may_rest(q: Quiet) -> bool {
+    !q.busy && !q.pointer_near && !q.changed && (0. ..REST_MAX).contains(&q.since_drawn)
+}
+/// An area floats over the window (egui's own background layer, there in
+/// every frame, aside).
+fn floating_area_shown(ctx: &egui::Context) -> bool {
+    ctx.memory(|m| {
+        m.areas()
+            .visible_layer_ids()
+            .iter()
+            .any(|l| *l != egui::LayerId::background())
+    })
 }
 /// Desktop arrangement requested from a sticker's context menu.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -90,6 +127,8 @@ impl Window {
             menu: None,
             last_pos: None,
             move_caret_to_body: false,
+            drawn_at: f64::NEG_INFINITY,
+            drawn_changes: 0,
         }
     }
     /// What is needed to reopen this window after a restart.
@@ -1383,6 +1422,7 @@ impl App {
     }
     pub fn render_note_windows(&mut self, root: &egui::Context) {
         self.drop_blank_drafts();
+        let mut rested = false;
         let ids: Vec<_> = self
             .studio
             .windows
@@ -1468,6 +1508,16 @@ impl App {
                 builder = builder.with_inner_size(size);
             }
             root.show_viewport_immediate(viewport(i), builder, |ctx, _| {
+                let now = ctx.input(|v| v.time);
+                let changes = crate::lists::CHANGES.load(std::sync::atomic::Ordering::Relaxed);
+                if may_rest(self.quiet(ctx, i, &w, key, changes, now)) {
+                    let rest = egui::Id::new("eframe_rest").with(ctx.viewport_id());
+                    ctx.data_mut(|d| d.insert_temp(rest, true));
+                    rested = true;
+                    return;
+                }
+                w.drawn_at = now;
+                w.drawn_changes = changes;
                 crate::tutorial::mark(ctx, crate::tutorial::Spot::Note(i), ctx.screen_rect());
                 self.theme(ctx);
                 let serial = self.schedule_drop_serial;
@@ -2014,12 +2064,77 @@ impl App {
             self.extra.edit_occurrence = previous_occurrence;
             self.studio.windows.insert(i, w);
         }
+        if rested {
+            // Once the pointer stops, every window is built once more.
+            root.request_repaint_after(std::time::Duration::from_secs_f64(REST_MAX + 0.05));
+        }
         self.editor = self
             .studio
             .windows
             .values()
             .any(|w| w.open && w.mode == Mode::Editor);
         self.sticky = self.studio.windows.values().any(|w| w.open);
+    }
+    /// The facts [`may_rest`] decides on, for memo window `i` this frame.
+    fn quiet(
+        &self,
+        ctx: &egui::Context,
+        i: usize,
+        w: &Window,
+        key: (Mode, bool),
+        changes: u64,
+        now: f64,
+    ) -> Quiet {
+        let here = ctx.viewport_id();
+        let own_input = ctx.input(|v| {
+            !v.events.is_empty()
+                || !v.raw.dropped_files.is_empty()
+                || !v.raw.hovered_files.is_empty()
+                || v.pointer.hover_pos().is_some()
+                || v.pointer.any_down()
+                || v.viewport().focused == Some(true)
+                || v.viewport().close_requested()
+        });
+        let doc = &self.data.notes[i].document;
+        let busy = own_input
+            || crate::tutorial::active()
+            || ctx.memory(|m| m.focused().is_some() || m.any_popup_open())
+            || crate::float::shown_in(ctx)
+            // A floating area (the picture toolbar) left out of one frame
+            // fades in again: it keeps its window built.
+            || floating_area_shown(ctx)
+            || w.menu.is_some()
+            || w.help
+            || w.focus
+            || w.center
+            || w.place.is_some()
+            || w.move_caret_to_body
+            || w.swatch_drag.is_some()
+            || w.applied != Some(key)
+            || !w.native.idle()
+            || doc.requested_selection.is_some()
+            || doc.requested_tab.is_some()
+            || self.drag.is_some()
+            || self.studio.drag.is_some()
+            || self.extra.picker.as_ref().is_some_and(|p| p.owner == here)
+            || (self.extra.scope_owner == here && self.extra.completion_scope.is_some());
+        let pointer_near = match (
+            crate::system::cursor_pos(),
+            ctx.input(|v| v.viewport().outer_rect),
+        ) {
+            (Some((x, y)), Some(rect)) => {
+                let p = Pos2::new(x as f32, y as f32) / ctx.pixels_per_point().max(0.5);
+                rect.expand(REST_NEAR).contains(p)
+            }
+            // Not known: never rest.
+            _ => true,
+        };
+        Quiet {
+            busy,
+            pointer_near,
+            changed: changes != w.drawn_changes,
+            since_drawn: now - w.drawn_at,
+        }
     }
     fn memo_shortcuts(&mut self, ctx: &egui::Context, i: usize, w: &mut Window) {
         if ctx.input_mut(|v| {
@@ -2463,6 +2578,87 @@ pub fn project_button(ui: &mut egui::Ui, name: &str, selected: bool) -> egui::Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_a_floating_area_keeps_a_window_built() {
+        let ctx = egui::Context::default();
+        let run = |tools: bool| {
+            let _ = ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| ui.label("본문"));
+                if tools {
+                    egui::Area::new(egui::Id::new("picture_tools"))
+                        .show(ctx, |ui| ui.label("100%"));
+                }
+            });
+        };
+        run(false);
+        assert!(!floating_area_shown(&ctx), "panels alone");
+        run(true);
+        assert!(floating_area_shown(&ctx), "the picture toolbar");
+        run(false);
+        run(false);
+        assert!(!floating_area_shown(&ctx), "toolbar gone");
+    }
+    #[test]
+    fn a_window_rests_only_when_nothing_concerns_it() {
+        let quiet = Quiet {
+            since_drawn: 0.1,
+            ..Quiet::default()
+        };
+        assert!(may_rest(quiet), "pointer elsewhere, nothing changed");
+        for (what, q) in [
+            (
+                "its own input, menu or drag",
+                Quiet {
+                    busy: true,
+                    ..quiet
+                },
+            ),
+            (
+                "pointer close by",
+                Quiet {
+                    pointer_near: true,
+                    ..quiet
+                },
+            ),
+            (
+                "data changed",
+                Quiet {
+                    changed: true,
+                    ..quiet
+                },
+            ),
+            (
+                "built too long ago",
+                Quiet {
+                    since_drawn: REST_MAX,
+                    ..quiet
+                },
+            ),
+            (
+                "never built",
+                Quiet {
+                    since_drawn: f64::INFINITY,
+                    ..quiet
+                },
+            ),
+            (
+                "clock went back",
+                Quiet {
+                    since_drawn: -1.,
+                    ..quiet
+                },
+            ),
+        ] {
+            assert!(!may_rest(q), "{what}");
+        }
+        let w = Window::new(Mode::Sticker);
+        assert_eq!(
+            w.drawn_at,
+            f64::NEG_INFINITY,
+            "a new window is built at once"
+        );
+        assert!(w.native.idle());
+    }
     #[test]
     fn normal_fold_and_title_to_sticker_are_distinct() {
         let mut w = Window::new(Mode::Editor);

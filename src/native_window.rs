@@ -29,6 +29,13 @@ struct Square {
     stable: u8,
 }
 impl State {
+    /// No move or resize is being carried out or waited on.
+    pub fn idle(&self) -> bool {
+        self.square.is_none()
+            && self.attempt.is_none()
+            && self.moving.is_none()
+            && self.press.is_none()
+    }
     pub fn start_drag(&mut self, ctx: &egui::Context) {
         let now = ctx.input(|i| i.time);
         if self.command_time == Some(now) || self.moving.is_some() {

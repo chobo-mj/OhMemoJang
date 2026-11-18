@@ -69,6 +69,12 @@ pub fn was_open_in(ctx: &egui::Context) -> bool {
         .unwrap_or(false)
 }
 
+/// Like [`was_open_in`], without forgetting it.
+pub fn shown_in(ctx: &egui::Context) -> bool {
+    let key = open_in_key(ctx);
+    ctx.data(|d| d.get_temp::<bool>(key)).unwrap_or(false)
+}
+
 pub fn close(ctx: &egui::Context, id: Id) {
     ctx.data_mut(|d| d.remove::<Open>(state(id)));
 }
