@@ -118,6 +118,10 @@ pub struct Extra {
     pub tutorial: u32,
     /// The tutorial's example memos (see `tutorial.rs`).
     pub tutorial_notes: Vec<usize>,
+    /// The user's own days off (shown like holidays in the calendar).
+    pub my_holidays: Vec<crate::holidays::MyHoliday>,
+    /// The "내 휴일" form: date text, name, every year.
+    pub holiday_form: (String, String, bool),
     /// Width of the wiki's left tree/unfiled column, in pixels. `0.` keeps
     /// the proportional default (22% of the wiki area, clamped 210-280).
     pub wiki_left_width: f32,
@@ -197,6 +201,8 @@ impl Default for Extra {
             guide_version: 0,
             tutorial: 0,
             tutorial_notes: vec![],
+            my_holidays: vec![],
+            holiday_form: (String::new(), String::new(), false),
             wiki_left_width: 0.,
             wiki_pane_frac: 0.5,
             delete_wiki_tab: None,

@@ -339,6 +339,67 @@ impl App {
     }
     /// Pick a backed-up `data.json` and load it, after backing up the
     /// current data.
+    /// 설정 › 캘린더 › 내 휴일: add and remove the user's own days off.
+    fn my_holidays_settings(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(10.);
+        crate::ui::caption(ui, "내 휴일");
+        ui.add_space(4.);
+        crate::ui::hint(
+            ui,
+            "회사 창립기념일·휴가처럼 나만 쉬는 날을 넣으면 캘린더에 공휴일처럼 빨간 날짜로 보여요",
+        );
+        let mut remove = None;
+        for (k, h) in self.extra.my_holidays.iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.label(if h.yearly {
+                    format!("매년 {}", h.date.format("%-m월 %-d일"))
+                } else {
+                    h.date.format("%Y년 %-m월 %-d일").to_string()
+                });
+                ui.label(RichText::new(&h.name).strong());
+                if ui.small_button("삭제").clicked() {
+                    remove = Some(k);
+                }
+            });
+        }
+        if let Some(k) = remove {
+            self.extra.my_holidays.remove(k);
+            crate::holidays::set_mine(&self.extra.my_holidays);
+        }
+        let (date, name, yearly) = &mut self.extra.holiday_form;
+        let mut add = false;
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(date)
+                    .desired_width(110.)
+                    .hint_text("2026-12-31"),
+            );
+            ui.add(
+                egui::TextEdit::singleline(name)
+                    .desired_width(140.)
+                    .hint_text("이름 (예: 창립기념일)"),
+            );
+            ui.checkbox(yearly, "매년");
+            add = ui.button("추가").clicked();
+        });
+        if add {
+            match chrono::NaiveDate::parse_from_str(date.trim(), "%Y-%m-%d") {
+                Ok(d) if !name.trim().is_empty() => {
+                    self.extra.my_holidays.push(crate::holidays::MyHoliday {
+                        date: d,
+                        name: name.trim().to_owned(),
+                        yearly: *yearly,
+                    });
+                    self.extra.my_holidays.sort_by_key(|h| h.date);
+                    crate::holidays::set_mine(&self.extra.my_holidays);
+                    self.extra.holiday_form = (String::new(), String::new(), false);
+                }
+                Ok(_) => self.desktop.last_action = "휴일 이름을 적어 주세요".into(),
+                Err(_) => self.desktop.last_action = "날짜는 2026-12-31처럼 적어 주세요".into(),
+            }
+        }
+        ui.add_space(12.);
+    }
     /// Ask, then move the pictures nothing uses out of the images folder.
     pub fn shelve_unused_images(&mut self, dir: &std::path::Path) {
         self.autosave(0., true);
@@ -1208,6 +1269,7 @@ impl App {
                 );
             }
             3 => {
+                self.my_holidays_settings(ui);
                 section(ui, "테마 (분리 캘린더 · 스탠딩 캘린더)");
                 ui.horizontal_wrapped(|ui| {
                     let names = ["기본", "종이", "세이지", "나이트"];

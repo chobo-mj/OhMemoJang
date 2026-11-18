@@ -25,13 +25,47 @@ pub struct Holiday {
     pub substitute: bool,
 }
 
-/// The names of the holidays on `date` ("어린이날 · 부처님오신날"), if any.
+/// A day off of the user's own (a company anniversary, a vacation day).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MyHoliday {
+    pub date: NaiveDate,
+    pub name: String,
+    /// The same month and day every year.
+    pub yearly: bool,
+}
+
+impl MyHoliday {
+    fn on(&self, date: NaiveDate) -> bool {
+        if self.yearly {
+            (self.date.month(), self.date.day()) == (date.month(), date.day())
+        } else {
+            self.date == date
+        }
+    }
+}
+
+static MINE: Mutex<Vec<MyHoliday>> = Mutex::new(Vec::new());
+
+/// The user's own days off, shown with the public holidays.
+pub fn set_mine(days: &[MyHoliday]) {
+    *MINE.lock().unwrap_or_else(|e| e.into_inner()) = days.to_vec();
+}
+
+/// The names of the holidays on `date` ("어린이날 · 부처님오신날"), the
+/// user's own days off included, if any.
 pub fn name(date: NaiveDate) -> Option<String> {
-    let names: Vec<&str> = for_year(date.year())
+    let mut names: Vec<String> = for_year(date.year())
         .into_iter()
         .filter(|h| h.date == date)
-        .map(|h| h.name)
+        .map(|h| h.name.to_owned())
         .collect();
+    names.extend(
+        MINE.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .filter(|m| m.on(date))
+            .map(|m| m.name.clone()),
+    );
     (!names.is_empty()).then(|| names.join(" · "))
 }
 
@@ -568,6 +602,26 @@ mod tests {
                 "부처님오신날 {s}"
             );
         }
+    }
+
+    #[test]
+    fn my_own_days_off_show_once_or_every_year() {
+        set_mine(&[
+            MyHoliday {
+                date: d("2026-04-14"),
+                name: "창립기념일".into(),
+                yearly: true,
+            },
+            MyHoliday {
+                date: d("2026-08-03"),
+                name: "여름휴가".into(),
+                yearly: false,
+            },
+        ]);
+        assert_eq!(name(d("2027-04-14")).as_deref(), Some("창립기념일"));
+        assert_eq!(name(d("2026-08-03")).as_deref(), Some("여름휴가"));
+        assert_eq!(name(d("2027-08-03")), None);
+        set_mine(&[]);
     }
 
     #[test]
