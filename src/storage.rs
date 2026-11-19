@@ -10,7 +10,8 @@
 //!
 //! `App::autosave` runs after user input (at most every two seconds), once a
 //! minute as a safety net, and on exit; it writes only the memos that changed.
-//! An older `data.json` is moved into the database on first start.
+//! An older `data.json` is moved into the database on first start, and
+//! deleted once the database reads back the same.
 use crate::composer::{Block, Cell, Document, Format, Picture, Span, Tab, Table};
 use crate::*;
 use chrono::NaiveDateTime;
@@ -1303,7 +1304,7 @@ pub fn unused_images(dir: &Path, used: &HashSet<String>) -> Result<Vec<(String, 
     let mut sources = vec![dir.join(DB)];
     let mut loose = vec![
         dir.join(FILE),
-        dir.join("data.before-db.json"),
+        dir.join(MOVED_JSON),
         dir.join("data.unreadable.json"),
     ];
     if let Ok(backups) = std::fs::read_dir(dir.join("backups")) {
@@ -1499,10 +1500,26 @@ pub fn write_all(dir: &Path, saved: &Saved) -> Result<(), String> {
     write(&mut db, &notes, notes.len(), Some(&meta))
 }
 
+/// The name an older `data.json` had after its move, before it was deleted.
+const MOVED_JSON: &str = "data.before-db.json";
+
+/// `data.json` was just written into the database: it goes once the
+/// database reads back the same workspace, else it stays (renamed).
+fn drop_moved_json(dir: &Path, saved: &Saved) {
+    let json = dir.join(FILE);
+    if read_db(&dir.join(DB)).is_ok_and(|back| back == *saved) {
+        let _ = std::fs::remove_file(&json);
+    } else {
+        let _ = std::fs::rename(&json, dir.join(MOVED_JSON));
+    }
+}
+
 /// Read the workspace from `dir`. `Ok(None)` when there is none yet. An
-/// older `data.json` is moved into the database (and kept, renamed). If an
-/// older version wrote `data.json` after the move (it is newer than the
-/// database), that newer data wins; the database is backed up first.
+/// older `data.json` is moved into the database and deleted once the
+/// database reads back the same. If an older version wrote `data.json`
+/// after the move (it is newer than the database), that newer data wins;
+/// the database is backed up first. A `data.before-db.json` left by an
+/// earlier move goes once the database can be read.
 pub fn read(dir: &Path) -> Result<Option<Saved>, String> {
     let json = dir.join(FILE);
     let modified = |name: &str| {
@@ -1513,7 +1530,9 @@ pub fn read(dir: &Path) -> Result<Option<Saved>, String> {
     if dir.join(DB).exists() {
         let db_time = modified(DB).max(modified(&format!("{DB}-wal")));
         if !json.exists() || modified(FILE) <= db_time {
-            return read_db(&dir.join(DB)).map(Some);
+            let saved = read_db(&dir.join(DB))?;
+            let _ = std::fs::remove_file(dir.join(MOVED_JSON));
+            return Ok(Some(saved));
         }
         // An unreadable newer file must not cost the good database.
         let Ok(saved) = read_file(&json) else {
@@ -1522,7 +1541,7 @@ pub fn read(dir: &Path) -> Result<Option<Saved>, String> {
         };
         backup(dir)?;
         write_all(dir, &saved)?;
-        let _ = std::fs::rename(&json, dir.join("data.before-db.json"));
+        drop_moved_json(dir, &saved);
         return Ok(Some(saved));
     }
     if !json.exists() {
@@ -1530,7 +1549,7 @@ pub fn read(dir: &Path) -> Result<Option<Saved>, String> {
     }
     let saved = read_file(&json)?;
     write_all(dir, &saved)?;
-    let _ = std::fs::rename(&json, dir.join("data.before-db.json"));
+    drop_moved_json(dir, &saved);
     Ok(Some(saved))
 }
 
@@ -2102,9 +2121,13 @@ mod tests {
         let loaded = read(&dir).unwrap().unwrap();
         assert!(loaded == snap);
         assert!(dir.join(DB).exists());
-        assert!(!dir.join(FILE).exists());
-        assert!(dir.join("data.before-db.json").exists());
+        assert!(!dir.join(FILE).exists(), "read back the same: deleted");
+        assert!(!dir.join(MOVED_JSON).exists());
         assert!(read(&dir).unwrap().unwrap() == snap);
+        // A copy an earlier version kept after its move goes too.
+        std::fs::write(dir.join(MOVED_JSON), "{}").unwrap();
+        assert!(read(&dir).unwrap().unwrap() == snap);
+        assert!(!dir.join(MOVED_JSON).exists());
         let b = backup(&dir).unwrap();
         assert!(read_file(&b.join(DB)).unwrap() == snap);
         // An older version writing data.json later: the newer file wins.
