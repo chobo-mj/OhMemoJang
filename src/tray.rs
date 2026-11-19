@@ -179,6 +179,12 @@ pub fn single_instance() -> bool {
                 }
                 // Started by Windows (`--tray`) while already running: stay quiet.
                 if !show.is_null() && !std::env::args().any(|x| x == "--tray") {
+                    // This launch may bring a window forward (the user just
+                    // started it); the running copy may not on its own, so
+                    // its main window would stay behind the others.
+                    windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow(
+                        windows_sys::Win32::UI::WindowsAndMessaging::ASFW_ANY,
+                    );
                     SetEvent(show);
                 }
                 return false;
