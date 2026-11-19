@@ -74,7 +74,8 @@ pub fn dpi_to_scale_factor(dpi: u32) -> f64 {
 pub unsafe fn hwnd_dpi(hwnd: HWND) -> u32 {
     let hdc = unsafe { GetDC(hwnd) };
     if hdc == 0 {
-        panic!("[winit] `GetDC` returned null!");
+        // OhMemoJang: a window destroyed from outside has no DC.
+        return BASE_DPI;
     }
     if let Some(GetDpiForWindow) = *GET_DPI_FOR_WINDOW {
         // We are on Windows 10 Anniversary Update (1607) or later.

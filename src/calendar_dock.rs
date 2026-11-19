@@ -121,6 +121,12 @@ pub struct Dock {
     /// Frames until the calendar, standing at the last quit, stands on the
     /// desktop again (0: nothing pending).
     stand_on_start: u8,
+    /// The calendar window is left out for one frame, so egui lets its
+    /// (dead) native window go and makes a new one.
+    recreate: bool,
+    /// Times the standing calendar stood again by itself after losing its
+    /// place on the desktop, since the button was last pressed.
+    restands: u8,
 }
 
 impl Dock {
@@ -155,6 +161,8 @@ impl Default for Dock {
             horizontal: false,
             split_frac: 1. / 3.,
             stand_on_start: 0,
+            recreate: false,
+            restands: 0,
         }
     }
 }
@@ -244,6 +252,21 @@ impl App {
         self.cal.state = DockState::Window;
     }
     pub fn calendar_dock(&mut self, ctx: &egui::Context) {
+        // Its window went with the desktop it stood on (Explorer restarted):
+        // never painted into, a new one stands in its place.
+        if self
+            .cal
+            .standing
+            .as_ref()
+            .is_some_and(|s| s.pinned && !crate::win_style::window_alive(s.hwnd))
+        {
+            self.restand(ctx);
+        }
+        if std::mem::take(&mut self.cal.recreate) {
+            // Left out for this frame: egui lets the old window go.
+            ctx.request_repaint();
+            return;
+        }
         match self.cal.state {
             DockState::Window => self.calendar_window(ctx),
             DockState::Box => self.calendar_box(ctx),
@@ -320,6 +343,7 @@ impl App {
                             .is_some_and(|t| (0. ..0.6).contains(&(now - t)));
                         if pressed && !just_unpinned {
                             stand = true;
+                            self.cal.restands = 0;
                         }
                         ui.add_space(6.);
                         self.cal.painting = true;
@@ -332,6 +356,7 @@ impl App {
                     });
                 if !standing && self.calendar_view_menu(ctx) {
                     stand = true;
+                    self.cal.restands = 0;
                 }
                 if self.cal.stand_on_start > 0 && !standing {
                     self.cal.stand_on_start -= 1;
@@ -447,20 +472,53 @@ impl App {
 
         ui.allocate_rect(rect, Sense::hover());
     }
-    /// Lets go of the standing calendar's desktop click watch (its mouse
-    /// hook thread ends); the window itself goes with the program.
+    /// At quit: lets go of the standing calendar (its desktop click watch
+    /// ends, and the window leaves the desktop layer before it is destroyed,
+    /// so no picture of it stays on the wallpaper). It is saved as standing,
+    /// to stand again at the next start.
     pub fn release_standing(&mut self) {
-        self.cal.standing = None;
+        if let Some(s) = self.cal.standing.take() {
+            if s.pinned {
+                crate::win_style::let_go_of_desktop(s.hwnd);
+            }
+            if self.cal.state == DockState::Window {
+                self.cal.stand_on_start = 10;
+            }
+        }
     }
     /// Pin, poll and unpin the standing calendar.
     fn restore_standing(&mut self) {
         if let Some(s) = self.cal.standing.as_ref() {
-            if s.pinned && !crate::win_style::unpin_from_desktop(s.hwnd, s.outer) {
-                self.toast = "분리 창으로 돌아오지 못했습니다. 해제 버튼을 다시 눌러 주세요".into();
-                return;
+            if s.pinned {
+                if !crate::win_style::window_alive(s.hwnd) {
+                    // Gone with the desktop layer it stood on: what it
+                    // showed is cleared, and a new window is made.
+                    crate::win_style::refresh_desktop(s.rect);
+                    self.cal.recreate = true;
+                } else if !crate::win_style::unpin_from_desktop(s.hwnd, s.outer) {
+                    self.toast =
+                        "분리 창으로 돌아오지 못했습니다. 해제 버튼을 다시 눌러 주세요".into();
+                    return;
+                }
             }
         }
         self.cal.standing = None;
+    }
+    /// The standing calendar lost its place on the desktop (Explorer made a
+    /// new desktop layer, or the window went with the old one): it comes
+    /// back as a window and stands again by itself, a few times at most.
+    fn restand(&mut self, ctx: &egui::Context) {
+        self.restore_standing();
+        if self.cal.standing.is_some() {
+            return;
+        }
+        self.cal.restands = self.cal.restands.saturating_add(1);
+        if self.cal.restands <= 3 {
+            self.cal.stand_on_start = 10;
+        } else {
+            self.toast = "바탕화면이 바뀌어 스탠딩 캘린더를 분리 창으로 돌려놓았어요".into();
+        }
+        ctx.request_repaint();
     }
     fn standing_frame(&mut self, ctx: &egui::Context) {
         let Some(s) = self.cal.standing.as_mut() else {
@@ -486,6 +544,10 @@ impl App {
                 self.toast = "바탕화면 입력 감지를 시작하지 못해 분리 창으로 유지합니다".into();
                 ctx.request_repaint();
             }
+            return;
+        }
+        if s.click.as_ref().is_some_and(|c| c.lost()) {
+            self.restand(ctx);
             return;
         }
         if s.click.as_ref().is_some_and(|c| c.take()) {
@@ -901,6 +963,69 @@ mod standing_tests {
             click: None,
         });
         assert_eq!(app.schedule_target_at(cell.center(), 0.2), None);
+    }
+
+    #[test]
+    fn a_standing_calendar_whose_window_is_gone_comes_back_and_stands_again() {
+        let mut app = App::sample(chrono::NaiveDate::from_ymd_opt(2026, 11, 20).unwrap());
+        app.cal.state = DockState::Window;
+        let gone = || Standing {
+            // No window has this handle: gone with its desktop layer.
+            hwnd: 0,
+            rect: [0, 0, 860, 760],
+            outer: [0, 0, 860, 800],
+            button: [0; 4],
+            pinned: true,
+            wait: 0,
+            click: None,
+        };
+        let ctx = egui::Context::default();
+        for round in 1..=4u8 {
+            app.cal.standing = Some(gone());
+            let _ = ctx.run(egui::RawInput::default(), |ctx| app.calendar_dock(ctx));
+            assert!(
+                app.cal.standing.is_none(),
+                "never painted into the dead window"
+            );
+            assert!(!app.cal.recreate, "left out for one frame, then made anew");
+            assert_eq!(app.cal.state, DockState::Window);
+            assert_eq!(app.cal.restands, round);
+            // Stands again by itself three times; then it stays a window.
+            assert_eq!(app.cal.stand_on_start > 0, round <= 3);
+            app.cal.stand_on_start = 0;
+        }
+        // The main window's calendar button also gets a dead one back.
+        app.cal.standing = Some(gone());
+        app.show_calendar();
+        assert!(app.cal.standing.is_none());
+        assert!(app.cal.recreate);
+    }
+
+    #[test]
+    fn a_calendar_standing_at_quit_is_saved_as_standing() {
+        let mut app = App::sample(chrono::NaiveDate::from_ymd_opt(2026, 11, 20).unwrap());
+        app.cal.state = DockState::Window;
+        app.cal.standing = Some(Standing {
+            hwnd: 0,
+            rect: [0, 0, 860, 760],
+            outer: [0, 0, 860, 800],
+            button: [0; 4],
+            pinned: true,
+            wait: 0,
+            click: None,
+        });
+        app.release_standing();
+        assert!(app.cal.standing.is_none());
+        let mut s = crate::storage::SettingsRec::default();
+        app.cal.write_place(&mut s);
+        assert!(s.cal_standing, "stands again at the next start");
+        // A calendar that did not stand is not saved as standing.
+        let mut plain = App::sample(chrono::NaiveDate::from_ymd_opt(2026, 11, 20).unwrap());
+        plain.cal.state = DockState::Window;
+        plain.release_standing();
+        let mut s = crate::storage::SettingsRec::default();
+        plain.cal.write_place(&mut s);
+        assert!(!s.cal_standing);
     }
 
     #[test]

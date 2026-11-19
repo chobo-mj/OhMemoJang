@@ -59,11 +59,49 @@ pub fn unpin_from_desktop(hwnd: isize, rect: PxRect) -> bool {
     }
 }
 
+/// At quit: a pinned window is hidden and taken off the desktop layer
+/// before it is destroyed, so no picture of it stays on the wallpaper.
+pub fn let_go_of_desktop(hwnd: isize) {
+    #[cfg(windows)]
+    unsafe {
+        desk::let_go(hwnd)
+    };
+    #[cfg(not(windows))]
+    let _ = hwnd;
+}
+
+/// Whether the native window still exists (a window pinned under the
+/// desktop icons goes with the desktop when Explorer restarts).
+pub fn window_alive(hwnd: isize) -> bool {
+    #[cfg(windows)]
+    // SAFETY: a plain query; any handle value may be passed.
+    return hwnd != 0
+        && unsafe { windows_sys::Win32::UI::WindowsAndMessaging::IsWindow(hwnd as _) != 0 };
+    #[cfg(not(windows))]
+    {
+        let _ = hwnd;
+        false
+    }
+}
+
+/// Has the desktop draw `rect` (screen pixels) again on all its layers.
+pub fn refresh_desktop(rect: PxRect) {
+    #[cfg(windows)]
+    unsafe {
+        desk::refresh(rect)
+    };
+    #[cfg(not(windows))]
+    let _ = rect;
+}
+
 /// Watches, on a small background thread, for a click on `rect` while the
 /// desktop (not another window) is under the pointer. The standing calendar
 /// lives below the desktop icons and gets no input of its own.
 pub struct DesktopClick {
     hit: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The window is no longer where it was pinned: gone, moved out of its
+    /// desktop layer, or that layer hidden.
+    lost: std::sync::Arc<std::sync::atomic::AtomicBool>,
     rect: std::sync::Arc<std::sync::Mutex<PxRect>>,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     thread: u32,
@@ -73,10 +111,18 @@ impl DesktopClick {
     pub fn watch(hwnd: isize, rect: PxRect, ctx: egui::Context) -> Option<Self> {
         use std::sync::{atomic::AtomicBool, Arc, Mutex};
         let hit = Arc::new(AtomicBool::new(false));
+        let lost = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         let rect = Arc::new(Mutex::new(rect));
         #[cfg(windows)]
-        let thread = desk::watch(hwnd, rect.clone(), hit.clone(), stop.clone(), ctx)?;
+        let thread = desk::watch(desk::Watch {
+            hwnd,
+            rect: rect.clone(),
+            hit: hit.clone(),
+            lost: lost.clone(),
+            stop: stop.clone(),
+            ctx,
+        })?;
         #[cfg(not(windows))]
         let thread = {
             let _ = (hwnd, ctx);
@@ -84,10 +130,15 @@ impl DesktopClick {
         };
         Some(Self {
             hit,
+            lost,
             rect,
             stop,
             thread,
         })
+    }
+    /// The pinned window lost its place on the desktop (see [`Self::lost`]).
+    pub fn lost(&self) -> bool {
+        self.lost.load(std::sync::atomic::Ordering::Relaxed)
     }
     pub fn update(&self, rect: PxRect) {
         *self.rect.lock().unwrap_or_else(|e| e.into_inner()) = rect;
@@ -116,31 +167,64 @@ fn contains_point(rect: PxRect, x: i32, y: i32) -> bool {
     x >= rect[0] && x < rect[2] && y >= rect[1] && y < rect[3]
 }
 
+/// The mouse hook looks gone: the pointer moved since the last check but
+/// the hook saw no mouse event. Windows removes a low-level hook without a
+/// word when it once answers too slowly; the standing button then stopped
+/// answering for good.
+fn hook_seems_gone(pointer_moved: bool, calls_then: u32, calls_now: u32) -> bool {
+    pointer_moved && calls_then == calls_now
+}
+
+/// A pinned window lost its place: gone, out of the layer it was put in,
+/// or that layer hidden for two seconds.
+fn pin_lost(alive: bool, same_parent: bool, parent_hidden_ms: u32) -> bool {
+    !alive || !same_parent || parent_hidden_ms >= 2000
+}
+
 #[cfg(windows)]
 mod desk {
     use super::PxRect;
+    use std::cell::Cell;
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     };
     use windows_sys::Win32::{
-        Foundation::{GetLastError, SetLastError, BOOL, HWND, LPARAM, LRESULT, POINT, WPARAM},
-        Graphics::Gdi::{ClientToScreen, ScreenToClient},
+        Foundation::{
+            GetLastError, SetLastError, BOOL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+        },
+        Graphics::{
+            Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED},
+            Gdi::{
+                ClientToScreen, RedrawWindow, ScreenToClient, RDW_ALLCHILDREN, RDW_ERASE,
+                RDW_INVALIDATE,
+            },
+        },
         System::{LibraryLoader::GetModuleHandleW, Threading::GetCurrentThreadId},
+        UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK},
         UI::WindowsAndMessaging::{
             CallNextHookEx, EnumWindows, FindWindowExW, FindWindowW, GetAncestor, GetClassNameW,
-            GetDesktopWindow, GetMessageW, GetWindow, GetWindowLongW, IsChild, IsWindowVisible,
-            KillTimer, PeekMessageW, SendMessageTimeoutW, SetLayeredWindowAttributes, SetParent,
-            SetTimer, SetWindowLongW, SetWindowPos, SetWindowsHookExW, UnhookWindowsHookEx,
-            WindowFromPoint, GA_PARENT, GWL_EXSTYLE, GW_HWNDPREV, HWND_TOP, LWA_ALPHA, MSG,
-            MSLLHOOKSTRUCT, PM_NOREMOVE, SMTO_NORMAL, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE,
-            SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, WH_MOUSE_LL, WM_LBUTTONUP,
-            WM_TIMER, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
+            GetCursorPos, GetDesktopWindow, GetMessageW, GetTopWindow, GetWindow, GetWindowLongW,
+            GetWindowRect, IsChild, IsIconic, IsWindow, IsWindowVisible, KillTimer, PeekMessageW,
+            PostThreadMessageW, SendMessageTimeoutW, SetLayeredWindowAttributes, SetParent,
+            SetTimer, SetWindowLongW, SetWindowPos, SetWindowsHookExW, ShowWindow, ShowWindowAsync,
+            UnhookWindowsHookEx, WindowFromPoint, EVENT_SYSTEM_FOREGROUND, GA_PARENT, GA_ROOT,
+            GWL_EXSTYLE, GW_HWNDNEXT, GW_HWNDPREV, HHOOK, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST,
+            LWA_ALPHA, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, SMTO_NORMAL, SWP_ASYNCWINDOWPOS,
+            SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
+            SW_SHOWNOACTIVATE, WH_MOUSE_LL, WINEVENT_OUTOFCONTEXT, WM_APP, WM_LBUTTONUP, WM_TIMER,
+            WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
         },
     };
 
     fn wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(Some(0)).collect()
+    }
+
+    unsafe fn class_of(h: HWND) -> String {
+        let mut buf = [0u16; 64];
+        let n = GetClassNameW(h, buf.as_mut_ptr(), buf.len() as i32).max(0) as usize;
+        String::from_utf16_lossy(&buf[..n])
     }
 
     unsafe fn progman() -> HWND {
@@ -266,10 +350,14 @@ mod desk {
     unsafe fn desktop_slot(h: HWND, progman: HWND) -> (HWND, bool) {
         let mut n = GetWindow(progman, GW_HWNDPREV);
         while !n.is_null() && n != h {
-            let mut buf = [0u16; 16];
-            let len = GetClassNameW(n, buf.as_mut_ptr(), buf.len() as i32).max(0) as usize;
-            let worker = String::from_utf16_lossy(&buf[..len]) == "WorkerW";
-            if IsWindowVisible(n) != 0 && !worker {
+            // Always-on-top windows (the taskbar) are a band of their own:
+            // placed after one, the calendar would join it. Reaching them
+            // means no ordinary window is above the desktop (Win+D raised
+            // it): the calendar goes on top of the ordinary ones.
+            if GetWindowLongW(n, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST != 0 {
+                return (HWND_TOP, false);
+            }
+            if IsWindowVisible(n) != 0 && class_of(n) != "WorkerW" {
                 return (n, false);
             }
             n = GetWindow(n, GW_HWNDPREV);
@@ -279,6 +367,74 @@ mod desk {
         } else {
             (HWND_TOP, false)
         }
+    }
+
+    /// The window is on screen: shown, not minimized, not empty and not
+    /// cloaked (on another virtual desktop, say).
+    unsafe fn on_screen(n: HWND) -> bool {
+        if IsWindowVisible(n) == 0 || IsIconic(n) != 0 {
+            return false;
+        }
+        let mut r: RECT = std::mem::zeroed();
+        GetWindowRect(n, &mut r);
+        if r.right <= r.left || r.bottom <= r.top {
+            return false;
+        }
+        let mut cloaked = 0u32;
+        DwmGetWindowAttribute(
+            n,
+            DWMWA_CLOAKED as u32,
+            &mut cloaked as *mut u32 as *mut _,
+            std::mem::size_of::<u32>() as u32,
+        );
+        cloaked == 0
+    }
+
+    /// Win+D (show desktop) raised the desktop over every ordinary window:
+    /// Progman is the first ordinary window on screen from the top.
+    unsafe fn desktop_raised(h: HWND, progman: HWND) -> bool {
+        let mut n = GetTopWindow(std::ptr::null_mut());
+        let mut left = 4096;
+        while !n.is_null() && left > 0 {
+            if n == progman {
+                return true;
+            }
+            if n != h
+                && GetWindowLongW(n, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST == 0
+                && class_of(n) != "WorkerW"
+                && on_screen(n)
+            {
+                return false;
+            }
+            n = GetWindow(n, GW_HWNDNEXT);
+            left -= 1;
+        }
+        false
+    }
+
+    /// `h` is above the desktop window in the stacking order.
+    unsafe fn above(h: HWND, progman: HWND) -> bool {
+        let mut n = GetWindow(h, GW_HWNDNEXT);
+        while !n.is_null() {
+            if n == progman {
+                return true;
+            }
+            n = GetWindow(n, GW_HWNDNEXT);
+        }
+        false
+    }
+
+    /// The lowest always-on-top window (the calendar goes right below it,
+    /// so it stays under the taskbar and other always-on-top windows).
+    unsafe fn lowest_topmost(h: HWND, progman: HWND) -> HWND {
+        let mut n = GetWindow(progman, GW_HWNDPREV);
+        while !n.is_null() {
+            if n != h && GetWindowLongW(n, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST != 0 {
+                return n;
+            }
+            n = GetWindow(n, GW_HWNDPREV);
+        }
+        HWND_TOPMOST
     }
 
     unsafe fn below_visible_windows(h: HWND, progman: HWND) -> HWND {
@@ -317,12 +473,35 @@ mod desk {
         if !is_top_level(h) || GetWindowLongW(h, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW == 0 {
             return false;
         }
+        // Asynchronous calls only: this thread must never wait for the
+        // program's (busy) window thread.
+        if IsIconic(h) != 0 {
+            // Minimized (show desktop on some PCs): back without the focus.
+            ShowWindowAsync(h, SW_SHOWNOACTIVATE);
+        }
+        let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS;
+        let topmost = GetWindowLongW(h, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST != 0;
+        if !progman.is_null() && desktop_raised(h, progman) {
+            // Win+D raised the desktop, which is now the foreground window,
+            // over every window: no program in the background may put a
+            // window above it with `HWND_TOP` (the call is quietly ignored).
+            // Placed after the lowest always-on-top window, Windows puts it
+            // at the top of the ordinary windows instead, above the desktop
+            // (or, on some versions, among the always-on-top ones).
+            if !topmost && !above(h, progman) {
+                SetWindowPos(h, lowest_topmost(h, progman), 0, 0, 0, 0, flags);
+            }
+            return true;
+        }
+        if topmost {
+            SetWindowPos(h, HWND_NOTOPMOST, 0, 0, 0, 0, flags);
+        }
         let (after, placed) = if progman.is_null() {
             (h, true)
         } else {
             desktop_slot(h, progman)
         };
-        if !placed {
+        if !placed || topmost {
             SetWindowPos(
                 h,
                 after,
@@ -380,7 +559,10 @@ mod desk {
         if layer.is_null() {
             // Windows 11 24H2 itself does not show a window placed under
             // the icons: there it stays a top-level window above the desktop.
-            if !crate::system::standing_unsupported() && pin_under_icons(h, r) {
+            // (`OHMEMOJANG_STANDING_TOPLEVEL` tries that way on other PCs.)
+            let top_level_only = crate::system::standing_unsupported()
+                || std::env::var_os("OHMEMOJANG_STANDING_TOPLEVEL").is_some();
+            if !top_level_only && pin_under_icons(h, r) {
                 return true;
             }
             return pin_above_desktop(h, r);
@@ -417,6 +599,10 @@ mod desk {
         if is_top_level(h) {
             let style = GetWindowLongW(h, GWL_EXSTYLE) as u32;
             SetWindowLongW(h, GWL_EXSTYLE, (style & !WS_EX_TOOLWINDOW) as i32);
+            if style & WS_EX_TOPMOST != 0 {
+                // Let go while the desktop was raised (Win+D).
+                SetWindowPos(h, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+            }
             SetWindowPos(
                 h,
                 HWND_TOP,
@@ -428,10 +614,15 @@ mod desk {
             );
             return true;
         }
+        let mut stood: RECT = std::mem::zeroed();
+        GetWindowRect(h, &mut stood);
         SetLastError(0);
         if SetParent(h, std::ptr::null_mut()).is_null() && GetLastError() != 0 {
             return false;
         }
+        // Explorer does not always paint the wallpaper again where a child
+        // window was taken out: the calendar's last picture stayed there.
+        refresh([stood.left, stood.top, stood.right, stood.bottom]);
         // Layered only while under the icons.
         let style = GetWindowLongW(h, GWL_EXSTYLE) as u32;
         if style & WS_EX_LAYERED != 0 {
@@ -449,67 +640,154 @@ mod desk {
         true
     }
 
-    /// The desktop is under `p` (not some other window).
+    /// Redraws `r` (screen pixels) on every desktop layer: Progman with its
+    /// children and the top-level WorkerWs (the classic layout's wallpaper).
+    /// Asynchronous: Explorer paints it when it gets to it.
+    pub unsafe fn refresh(r: PxRect) {
+        unsafe extern "system" fn visit(h: HWND, data: LPARAM) -> BOOL {
+            let r = *(data as *const PxRect);
+            if matches!(class_of(h).as_str(), "WorkerW" | "Progman") {
+                let mut a = POINT { x: r[0], y: r[1] };
+                let mut b = POINT { x: r[2], y: r[3] };
+                ScreenToClient(h, &mut a);
+                ScreenToClient(h, &mut b);
+                let rc = RECT {
+                    left: a.x,
+                    top: a.y,
+                    right: b.x,
+                    bottom: b.y,
+                };
+                RedrawWindow(
+                    h,
+                    &rc,
+                    std::ptr::null_mut(),
+                    RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN,
+                );
+            }
+            1
+        }
+        EnumWindows(Some(visit), &r as *const PxRect as LPARAM);
+    }
+
+    pub unsafe fn let_go(hwnd: isize) {
+        let h = hwnd as HWND;
+        if IsWindow(h) == 0 {
+            return;
+        }
+        let mut stood: RECT = std::mem::zeroed();
+        GetWindowRect(h, &mut stood);
+        ShowWindow(h, SW_HIDE);
+        if !is_top_level(h) {
+            SetParent(h, std::ptr::null_mut());
+            refresh([stood.left, stood.top, stood.right, stood.bottom]);
+        }
+    }
+
+    /// The desktop is under `p` (not some other window): the calendar
+    /// itself, or any window of the desktop (icons, wallpaper layers, and
+    /// whatever else Explorer or a wallpaper tool keeps in them).
     unsafe fn desktop_at(p: POINT, calendar: HWND) -> bool {
         let top = WindowFromPoint(p);
-        if top == calendar || IsChild(calendar, top) != 0 {
+        if top.is_null() || top == calendar || IsChild(calendar, top) != 0 {
             return true;
         }
-        let mut buf = [0u16; 64];
-        let n = GetClassNameW(top, buf.as_mut_ptr(), buf.len() as i32).max(0) as usize;
-        let class = String::from_utf16_lossy(&buf[..n]);
-        matches!(
-            class.as_str(),
+        if matches!(
+            class_of(top).as_str(),
             "SysListView32" | "SHELLDLL_DefView" | "WorkerW" | "Progman"
-        ) || top.is_null()
+        ) {
+            return true;
+        }
+        matches!(
+            class_of(GetAncestor(top, GA_ROOT)).as_str(),
+            "WorkerW" | "Progman"
+        )
     }
 
-    struct Watch {
-        hwnd: isize,
-        rect: Arc<Mutex<PxRect>>,
-        hit: Arc<AtomicBool>,
-        ctx: eframe::egui::Context,
+    pub struct Watch {
+        pub hwnd: isize,
+        pub rect: Arc<Mutex<PxRect>>,
+        pub hit: Arc<AtomicBool>,
+        pub lost: Arc<AtomicBool>,
+        pub stop: Arc<AtomicBool>,
+        pub ctx: eframe::egui::Context,
     }
+
+    /// A left-button release seen by the hook (point in `wParam`/`lParam`).
+    const WM_DESKTOP_CLICK: u32 = WM_APP + 0x31;
+    /// Another window became the foreground one: the calendar's place is
+    /// checked at once (Win+D, or a window brought back after it).
+    const WM_DESKTOP_CHECK: u32 = WM_APP + 0x32;
+
+    unsafe extern "system" fn foreground_changed(
+        _: HWINEVENTHOOK,
+        _: u32,
+        _: HWND,
+        _: i32,
+        _: i32,
+        _: u32,
+        _: u32,
+    ) {
+        PostThreadMessageW(GetCurrentThreadId(), WM_DESKTOP_CHECK, 0, 0);
+    }
+    /// How often the watch checks the calendar's place and the hook: under
+    /// 0.25 s, so the calendar is back right after Win+D.
+    const TICK_MS: u32 = 150;
+
     thread_local! {
-        static WATCH: std::cell::RefCell<Option<Watch>> = const { std::cell::RefCell::new(None) };
+        /// Mouse events the hook has seen, to tell whether it still runs.
+        static HOOK_CALLS: Cell<u32> = const { Cell::new(0) };
     }
 
+    /// As short as can be: Windows silently removes a low-level hook that
+    /// once answers too slowly (while the system is busy, say). The click
+    /// itself is looked at in the thread's loop, after the hook returned.
     unsafe extern "system" fn hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
-        if code >= 0 && w as u32 == WM_LBUTTONUP {
-            let info = &*(l as *const MSLLHOOKSTRUCT);
-            WATCH.with(|slot| {
-                let watch = slot.borrow();
-                let Some(watch) = watch.as_ref() else {
-                    return;
-                };
-                let Ok(rect) = watch.rect.try_lock().map(|r| *r) else {
-                    return;
-                };
-                let h = watch.hwnd as HWND;
-                let mut origin = POINT { x: 0, y: 0 };
-                // Resolve the native client position at the instant of the click.
-                // Reparenting, title-bar changes and monitor positions cannot stale it.
-                if ClientToScreen(h, &mut origin) != 0
-                    && super::contains_point(rect, info.pt.x - origin.x, info.pt.y - origin.y)
-                    && desktop_at(info.pt, h)
-                {
-                    watch.hit.store(true, Ordering::Relaxed);
-                    watch.ctx.request_repaint();
-                }
-            });
+        if code >= 0 {
+            HOOK_CALLS.with(|c| c.set(c.get().wrapping_add(1)));
+            if w as u32 == WM_LBUTTONUP {
+                let info = &*(l as *const MSLLHOOKSTRUCT);
+                PostThreadMessageW(
+                    GetCurrentThreadId(),
+                    WM_DESKTOP_CLICK,
+                    info.pt.x as isize as WPARAM,
+                    info.pt.y as LPARAM,
+                );
+            }
         }
         CallNextHookEx(std::ptr::null_mut(), code, w, l)
     }
 
-    pub fn watch(
-        hwnd: isize,
-        rect: Arc<Mutex<PxRect>>,
-        hit: Arc<AtomicBool>,
-        stop: Arc<AtomicBool>,
-        ctx: eframe::egui::Context,
-    ) -> Option<u32> {
+    unsafe fn install_hook() -> HHOOK {
+        SetWindowsHookExW(
+            WH_MOUSE_LL,
+            Some(hook),
+            GetModuleHandleW(std::ptr::null()),
+            0,
+        )
+    }
+
+    unsafe fn cursor() -> (i32, i32) {
+        let mut p = POINT { x: 0, y: 0 };
+        GetCursorPos(&mut p);
+        (p.x, p.y)
+    }
+
+    /// The click at `pt` is on the standing button, with the desktop (not
+    /// another window) under the pointer.
+    unsafe fn on_button(watch: &Watch, pt: POINT) -> bool {
+        let rect = *watch.rect.lock().unwrap_or_else(|e| e.into_inner());
+        let h = watch.hwnd as HWND;
+        let mut origin = POINT { x: 0, y: 0 };
+        // Resolve the native client position at the instant of the click.
+        // Reparenting, title-bar changes and monitor positions cannot stale it.
+        ClientToScreen(h, &mut origin) != 0
+            && super::contains_point(rect, pt.x - origin.x, pt.y - origin.y)
+            && desktop_at(pt, h)
+    }
+
+    pub fn watch(watch: Watch) -> Option<u32> {
         let (ready, result) = std::sync::mpsc::sync_channel(1);
-        let cancel = stop.clone();
+        let cancel = watch.stop.clone();
         let thread_id = Arc::new(std::sync::atomic::AtomicU32::new(0));
         let started_thread = thread_id.clone();
         std::thread::Builder::new()
@@ -519,37 +797,117 @@ mod desk {
                 // Create the queue before publishing the thread id, so Drop cannot
                 // lose its quit message during a rapid unpin/pin transition.
                 PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_NOREMOVE);
-                WATCH.with(|slot| {
-                    *slot.borrow_mut() = Some(Watch {
-                        hwnd,
-                        rect,
-                        hit,
-                        ctx,
-                    })
-                });
-                let module = GetModuleHandleW(std::ptr::null());
-                let h = SetWindowsHookExW(WH_MOUSE_LL, Some(hook), module, 0);
-                if h.is_null() {
+                let mut hook = install_hook();
+                if hook.is_null() {
                     let _ = ready.send(None);
-                    WATCH.with(|slot| *slot.borrow_mut() = None);
                     return;
                 }
                 started_thread.store(GetCurrentThreadId(), Ordering::SeqCst);
                 let delivered = ready.send(Some(GetCurrentThreadId())).is_ok();
+                let me = watch.hwnd as HWND;
+                // The layer it was pinned to (the desktop window itself for
+                // the top-level way).
+                let parent = GetAncestor(me, GA_PARENT);
+                let top_level = parent == GetDesktopWindow();
                 // Keep the calendar in its place on the desktop from here, so
                 // the program does not have to redraw just to check it.
-                let timer = SetTimer(std::ptr::null_mut(), 0, 1000, None);
+                let timer = SetTimer(std::ptr::null_mut(), 0, TICK_MS, None);
+                let foreground = if top_level {
+                    SetWinEventHook(
+                        EVENT_SYSTEM_FOREGROUND,
+                        EVENT_SYSTEM_FOREGROUND,
+                        std::ptr::null_mut(),
+                        Some(foreground_changed),
+                        0,
+                        0,
+                        WINEVENT_OUTOFCONTEXT,
+                    )
+                } else {
+                    std::ptr::null_mut()
+                };
+                let mut pointer = cursor();
+                let mut calls = HOOK_CALLS.with(Cell::get);
+                let mut reinstalled: Option<std::time::Instant> = None;
+                let mut hidden_ms = 0u32;
+                let mut lost = false;
+                // A second look shortly after the foreground changed: Win+D
+                // raises the desktop a moment after making it the foreground.
+                let mut recheck = 0usize;
                 while delivered
-                    && !stop.load(Ordering::Relaxed)
+                    && !watch.stop.load(Ordering::Relaxed)
                     && GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0
                 {
-                    if msg.message == WM_TIMER && !stop.load(Ordering::Relaxed) {
-                        keep_on_desktop(hwnd);
+                    if watch.stop.load(Ordering::Relaxed) || lost {
+                        continue;
+                    }
+                    match msg.message {
+                        WM_DESKTOP_CLICK => {
+                            let pt = POINT {
+                                x: msg.wParam as isize as i32,
+                                y: msg.lParam as i32,
+                            };
+                            if on_button(&watch, pt) {
+                                watch.hit.store(true, Ordering::Relaxed);
+                                watch.ctx.request_repaint();
+                            }
+                        }
+                        WM_DESKTOP_CHECK => {
+                            if IsWindow(me) != 0 {
+                                keep_on_desktop(watch.hwnd);
+                            }
+                            if recheck != 0 {
+                                KillTimer(std::ptr::null_mut(), recheck);
+                            }
+                            recheck = SetTimer(std::ptr::null_mut(), 0, 50, None);
+                        }
+                        WM_TIMER if recheck != 0 && msg.wParam == recheck => {
+                            KillTimer(std::ptr::null_mut(), recheck);
+                            recheck = 0;
+                            if IsWindow(me) != 0 {
+                                keep_on_desktop(watch.hwnd);
+                            }
+                        }
+                        WM_TIMER => {
+                            let alive = IsWindow(me) != 0;
+                            let same_parent = alive && GetAncestor(me, GA_PARENT) == parent;
+                            hidden_ms = if same_parent && !top_level && IsWindowVisible(parent) == 0
+                            {
+                                hidden_ms.saturating_add(TICK_MS)
+                            } else {
+                                0
+                            };
+                            if super::pin_lost(alive, same_parent, hidden_ms) {
+                                // The program takes it back and stands it again.
+                                lost = true;
+                                watch.lost.store(true, Ordering::Relaxed);
+                                watch.ctx.request_repaint();
+                                continue;
+                            }
+                            keep_on_desktop(watch.hwnd);
+                            let now = (cursor(), HOOK_CALLS.with(Cell::get));
+                            let quiet = reinstalled.is_none_or(|t| t.elapsed().as_secs() >= 2);
+                            if quiet && super::hook_seems_gone(now.0 != pointer, calls, now.1) {
+                                if !hook.is_null() {
+                                    UnhookWindowsHookEx(hook);
+                                }
+                                hook = install_hook();
+                                reinstalled = Some(std::time::Instant::now());
+                            }
+                            (pointer, calls) = now;
+                        }
+                        _ => {}
                     }
                 }
                 KillTimer(std::ptr::null_mut(), timer);
-                UnhookWindowsHookEx(h);
-                WATCH.with(|slot| *slot.borrow_mut() = None);
+                if recheck != 0 {
+                    KillTimer(std::ptr::null_mut(), recheck);
+                }
+                if !foreground.is_null() {
+                    UnhookWinEvent(foreground);
+                }
+                if !hook.is_null() {
+                    UnhookWindowsHookEx(hook);
+                }
             })
             .ok()?;
         match result.recv_timeout(std::time::Duration::from_secs(1)) {
@@ -559,7 +917,7 @@ mod desk {
                 let id = thread_id.load(Ordering::SeqCst);
                 if id != 0 {
                     unsafe {
-                        windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW(
+                        PostThreadMessageW(
                             id,
                             windows_sys::Win32::UI::WindowsAndMessaging::WM_QUIT,
                             0,
@@ -717,6 +1075,34 @@ mod imp {
 
 #[cfg(test)]
 mod desktop_click_tests {
+    #[test]
+    fn a_hook_that_saw_nothing_while_the_pointer_moved_is_put_back() {
+        assert!(super::hook_seems_gone(true, 41, 41));
+        assert!(!super::hook_seems_gone(true, 41, 44), "it saw the moves");
+        assert!(!super::hook_seems_gone(false, 41, 41), "nothing moved");
+        assert!(
+            !super::hook_seems_gone(true, u32::MAX, 2),
+            "the count wrapped"
+        );
+    }
+
+    #[test]
+    fn a_pin_is_lost_when_the_window_or_its_layer_goes() {
+        assert!(!super::pin_lost(true, true, 0));
+        assert!(super::pin_lost(false, false, 0), "the window is gone");
+        assert!(super::pin_lost(true, false, 0), "taken out of its layer");
+        assert!(
+            !super::pin_lost(true, true, 1950),
+            "a short hide is waited out"
+        );
+        assert!(super::pin_lost(true, true, 2100), "the layer stayed hidden");
+    }
+
+    #[test]
+    fn a_closed_handle_is_no_live_window() {
+        assert!(!super::window_alive(0));
+    }
+
     #[test]
     fn hit_test_uses_current_client_origin_including_negative_monitors() {
         let rect = [180, 21, 228, 69];

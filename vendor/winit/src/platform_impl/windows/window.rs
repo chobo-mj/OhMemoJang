@@ -162,23 +162,20 @@ impl Window {
 
     #[inline]
     pub fn outer_position(&self) -> Result<PhysicalPosition<i32>, NotSupportedError> {
+        // OhMemoJang: a window destroyed from outside (a child of the
+        // desktop layer when Explorer restarts) reads as zero, no panic.
         util::WindowArea::Outer
             .get_rect(self.hwnd())
             .map(|rect| Ok(PhysicalPosition::new(rect.left, rect.top)))
-            .expect(
-                "Unexpected GetWindowRect failure; please report this error to \
-                 rust-windowing/winit",
-            )
+            .unwrap_or(Ok(PhysicalPosition::new(0, 0)))
     }
 
     #[inline]
     pub fn inner_position(&self) -> Result<PhysicalPosition<i32>, NotSupportedError> {
         let mut position: POINT = unsafe { mem::zeroed() };
         if unsafe { ClientToScreen(self.hwnd(), &mut position) } == false.into() {
-            panic!(
-                "Unexpected ClientToScreen failure: please report this error to \
-                 rust-windowing/winit"
-            )
+            // OhMemoJang: destroyed from outside.
+            return Ok(PhysicalPosition::new(0, 0));
         }
         Ok(PhysicalPosition::new(position.x, position.y))
     }
@@ -214,10 +211,8 @@ impl Window {
     pub fn inner_size(&self) -> PhysicalSize<u32> {
         let mut rect: RECT = unsafe { mem::zeroed() };
         if unsafe { GetClientRect(self.hwnd(), &mut rect) } == false.into() {
-            panic!(
-                "Unexpected GetClientRect failure: please report this error to \
-                 rust-windowing/winit"
-            )
+            // OhMemoJang: destroyed from outside.
+            return PhysicalSize::new(0, 0);
         }
         PhysicalSize::new((rect.right - rect.left) as u32, (rect.bottom - rect.top) as u32)
     }
@@ -229,7 +224,8 @@ impl Window {
             .map(|rect| {
                 PhysicalSize::new((rect.right - rect.left) as u32, (rect.bottom - rect.top) as u32)
             })
-            .unwrap()
+            // OhMemoJang: destroyed from outside.
+            .unwrap_or(PhysicalSize::new(0, 0))
     }
 
     #[inline]

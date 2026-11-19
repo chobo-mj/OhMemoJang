@@ -908,9 +908,19 @@ impl GlowWinitRunning<'_> {
                 );
                 if viewport_id == Some(ViewportId::ROOT) {
                     return EventResult::Exit;
-                } else {
-                    return EventResult::Wait;
                 }
+                // OhMemoJang: a window destroyed from outside (the standing
+                // calendar under the desktop icons goes when Explorer
+                // restarts) is let go at once, so it is never painted or
+                // measured again; egui makes it anew if it is still shown.
+                // A window eframe closed itself is no longer listed here.
+                if let Some(id) = viewport_id {
+                    glutin.viewports.remove(&id);
+                    glutin.viewport_from_window.remove(&window_id);
+                    glutin.window_from_viewport.remove(&id);
+                    self.integration.egui_ctx.request_repaint_of(ViewportId::ROOT);
+                }
+                return EventResult::Wait;
             }
 
             _ => {}
