@@ -254,6 +254,8 @@ impl App {
         let standing = self.cal.standing.is_some();
         let mut builder = egui::ViewportBuilder::default()
             .with_title("OhMemoJang · 캘린더")
+            // The taskbar shows the program's icon, not eframe's.
+            .with_icon(crate::app_icon::window())
             .with_inner_size([860., 760.])
             .with_min_inner_size([480., 420.])
             .with_decorations(!standing);

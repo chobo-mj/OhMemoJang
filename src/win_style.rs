@@ -336,7 +336,45 @@ mod desk {
         true
     }
 
+    /// Takes the window's button off the taskbar (`show` false) or puts it
+    /// back. Explorer keeps the button of a window moved under the desktop
+    /// icons, so it is taken off by hand.
+    pub fn taskbar_button(hwnd: isize, show: bool) {
+        use windows::Win32::System::Com::{
+            CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+        };
+        use windows::Win32::UI::Shell::{ITaskbarList, TaskbarList};
+        // SAFETY: COM calls on this (the UI) thread; the window handle is
+        // only passed on, and a gone window is an error Explorer ignores.
+        unsafe {
+            // Already initialized by the window system: the result is ignored.
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let Ok(list) =
+                CoCreateInstance::<_, ITaskbarList>(&TaskbarList, None, CLSCTX_INPROC_SERVER)
+            else {
+                return;
+            };
+            if list.HrInit().is_err() {
+                return;
+            }
+            let h = windows::Win32::Foundation::HWND(hwnd as *mut core::ffi::c_void);
+            let _ = if show {
+                list.AddTab(h)
+            } else {
+                list.DeleteTab(h)
+            };
+        }
+    }
+
     pub unsafe fn pin(hwnd: isize, r: PxRect) -> bool {
+        let pinned = pin_window(hwnd, r);
+        if pinned {
+            taskbar_button(hwnd, false);
+        }
+        pinned
+    }
+
+    unsafe fn pin_window(hwnd: isize, r: PxRect) -> bool {
         let layer = wallpaper_layer();
         let h = hwnd as HWND;
         if layer.is_null() {
@@ -367,6 +405,14 @@ mod desk {
     }
 
     pub unsafe fn unpin(hwnd: isize, r: PxRect) -> bool {
+        let back = unpin_window(hwnd, r);
+        if back {
+            taskbar_button(hwnd, true);
+        }
+        back
+    }
+
+    unsafe fn unpin_window(hwnd: isize, r: PxRect) -> bool {
         let h = hwnd as HWND;
         if is_top_level(h) {
             let style = GetWindowLongW(h, GWL_EXSTYLE) as u32;
