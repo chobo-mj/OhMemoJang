@@ -242,7 +242,7 @@ impl Worker {
         let Some(store) = &mut self.store else {
             return false;
         };
-        match store.insert(
+        match store.insert_unless_repeat(
             &item,
             &Policy {
                 retention_days: 0,

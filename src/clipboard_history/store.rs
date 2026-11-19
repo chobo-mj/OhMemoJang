@@ -27,6 +27,10 @@ impl Default for Policy {
     }
 }
 
+/// A capture with the newest item's text this soon after it is the same
+/// copy, written in two steps.
+const REPEAT_MS: i64 = 2000;
+
 pub struct FormatRow {
     pub key: String,
     pub derived: bool,
@@ -256,6 +260,70 @@ impl Store {
         Ok(id)
     }
 
+    /// Stores a capture unless it repeats an item already stored.
+    ///
+    /// Many programs announce one copy twice (two clipboard updates), and a
+    /// user may copy the same thing again. The same content as a stored
+    /// item only moves that item to the top. The same text with other
+    /// formats right after the newest item (a program finishing its write)
+    /// replaces it.
+    pub fn insert_unless_repeat(
+        &mut self,
+        item: &NewItem,
+        policy: &Policy,
+        now_ms: i64,
+    ) -> Result<i64, InsertError> {
+        let total: i64 = item.formats.iter().map(|f| f.data.len() as i64).sum();
+        let same: Vec<(i64, i64)> = {
+            let mut st = self.conn.prepare(
+                "SELECT id,captured_at FROM items
+                 WHERE kind=?1 AND total_bytes=?2 AND search_text=?3
+                 ORDER BY captured_at DESC, id DESC LIMIT 8",
+            )?;
+            let rows = st.query_map(params![item.kind, total, item.search_text], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        for (id, at) in same {
+            if self.same_formats(id, &item.formats)? {
+                self.conn.execute(
+                    "UPDATE items SET captured_at=?2 WHERE id=?1",
+                    params![id, at.max(item.captured_ms)],
+                )?;
+                return Ok(id);
+            }
+        }
+        let newest: Option<(i64, i64, String, String)> = self
+            .conn
+            .query_row(
+                "SELECT id,captured_at,kind,search_text FROM items
+                 ORDER BY captured_at DESC, id DESC LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()?;
+        if let Some((id, at, kind, text)) = newest {
+            if kind == item.kind
+                && !text.is_empty()
+                && text == item.search_text
+                && (0..=REPEAT_MS).contains(&(item.captured_ms - at))
+            {
+                self.delete(id)?;
+            }
+        }
+        self.insert(item, policy, now_ms)
+    }
+
+    fn same_formats(&self, id: i64, formats: &[FormatRow]) -> rusqlite::Result<bool> {
+        let stored = self.formats(id)?;
+        Ok(stored.len() == formats.len()
+            && stored
+                .iter()
+                .zip(formats)
+                .all(|((k, d), f)| *k == f.key && *d == f.data))
+    }
+
     /// Time, count, then capacity. Returns the number of deleted items.
     pub fn apply_retention(&mut self, policy: &Policy, now_ms: i64) -> rusqlite::Result<usize> {
         let tx = self.conn.transaction()?;
@@ -455,6 +523,69 @@ mod tests {
         .into_iter()
         .map(|m| m.id)
         .collect()
+    }
+
+    #[test]
+    fn a_copy_announced_twice_is_kept_once() {
+        let mut s = Store::memory();
+        let p = Policy::default();
+        let first = s
+            .insert_unless_repeat(&item(1000, "hello", 5), &p, 1000)
+            .unwrap();
+        let again = s
+            .insert_unless_repeat(&item(1003, "hello", 5), &p, 1003)
+            .unwrap();
+        assert_eq!(first, again);
+        assert_eq!(ids(&s), vec![first]);
+        // Copied again much later: still one item, moved to now.
+        s.insert(&item(2000, "other", 3), &p, 2000).unwrap();
+        let later = s
+            .insert_unless_repeat(&item(90_000, "hello", 5), &p, 90_000)
+            .unwrap();
+        assert_eq!(later, first);
+        assert_eq!(ids(&s)[0], first, "on top again");
+        assert_eq!(ids(&s).len(), 2);
+    }
+
+    #[test]
+    fn a_copy_finished_in_a_second_write_replaces_the_first() {
+        let mut s = Store::memory();
+        let p = Policy::default();
+        s.insert_unless_repeat(&item(1000, "cell", 4), &p, 1000)
+            .unwrap();
+        let mut richer = item(1500, "cell", 4);
+        richer.formats.push(FormatRow {
+            key: "html".into(),
+            derived: false,
+            data: b"<table>".to_vec(),
+        });
+        let id = s.insert_unless_repeat(&richer, &p, 1500).unwrap();
+        assert_eq!(ids(&s), vec![id]);
+        assert_eq!(s.formats(id).unwrap().len(), 2);
+        // The same text copied again later (other formats) is a new item.
+        s.insert_unless_repeat(&item(60_000, "cell", 4), &p, 60_000)
+            .unwrap();
+        assert_eq!(ids(&s).len(), 2);
+    }
+
+    #[test]
+    fn different_pictures_copied_quickly_are_both_kept() {
+        let mut s = Store::memory();
+        let p = Policy::default();
+        let pic = |ms, byte| NewItem {
+            kind: "image",
+            summary: String::new(),
+            search_text: String::new(),
+            formats: vec![FormatRow {
+                key: "png".into(),
+                derived: false,
+                data: vec![byte; 8],
+            }],
+            ..item(ms, "", 0)
+        };
+        s.insert_unless_repeat(&pic(1000, 1), &p, 1000).unwrap();
+        s.insert_unless_repeat(&pic(1100, 2), &p, 1100).unwrap();
+        assert_eq!(ids(&s).len(), 2);
     }
 
     #[test]

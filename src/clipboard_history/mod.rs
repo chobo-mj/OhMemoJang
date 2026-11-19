@@ -207,7 +207,8 @@ pub enum Event {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
-    /// The user turned collection on (it is off until explained and chosen).
+    /// Collection is on. On from the start; a settings file written before
+    /// 2.1 (no `default_on` line) is turned on once.
     pub enabled: bool,
     /// Survives restarts.
     pub paused: bool,
@@ -223,7 +224,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             paused: false,
             count_limit: false,
             max_items: 100,
@@ -265,6 +266,7 @@ max_items={}
 period_limit={}
 retention_days={}
 ignore_own_copy={}
+default_on=1
 ",
             self.enabled,
             self.paused,
@@ -277,6 +279,7 @@ ignore_own_copy={}
     }
     pub fn from_text(text: &str) -> Self {
         let mut s = Self::default();
+        let mut default_on = false;
         for line in text.lines() {
             let Some((k, v)) = line.split_once('=') else {
                 continue;
@@ -302,10 +305,21 @@ ignore_own_copy={}
                         .unwrap_or(s.retention_days)
                 }
                 "ignore_own_copy" => s.ignore_own_copy = v != "false",
+                "default_on" => default_on = true,
                 _ => {}
             }
         }
+        if !default_on {
+            // Written before collection was on by default: turned on once.
+            s.enabled = true;
+        }
         s
+    }
+    /// True for a settings file that is turned on by `from_text` this once.
+    fn needs_default_on(text: &str) -> bool {
+        !text
+            .lines()
+            .any(|l| l.trim_start().starts_with("default_on="))
     }
 }
 
@@ -381,9 +395,11 @@ impl ClipboardHistory {
     pub fn start(ctx: &egui::Context) -> Self {
         let dir = history_dir();
         let _ = std::fs::create_dir_all(&dir);
-        let settings = std::fs::read_to_string(dir.join("settings.txt"))
-            .map(|t| Settings::from_text(&t))
-            .unwrap_or_default();
+        let text = std::fs::read_to_string(dir.join("settings.txt")).ok();
+        let settings = text.as_deref().map(Settings::from_text).unwrap_or_default();
+        if text.as_deref().is_some_and(Settings::needs_default_on) {
+            let _ = std::fs::write(dir.join("settings.txt"), settings.to_text());
+        }
         let shared = Arc::new(Shared::new());
         shared.collecting.store(settings.collecting(), Relaxed);
         shared
@@ -621,7 +637,34 @@ mod tests {
         assert!(bad.enabled && !bad.paused && !bad.count_limit && bad.period_limit);
         assert_eq!(s.policy().retention_days, 0);
         assert!(s.policy().max_items > 1_000_000);
-        assert!(!Settings::default().collecting());
+        assert!(Settings::default().collecting(), "on by default");
+    }
+
+    #[test]
+    fn an_older_settings_file_is_turned_on_once() {
+        let old = "enabled=false
+paused=false
+max_items=100
+";
+        assert!(Settings::needs_default_on(old));
+        let s = Settings::from_text(old);
+        assert!(s.enabled, "turned on");
+        // Saved with the marker: turning it off again sticks.
+        let off = Settings {
+            enabled: false,
+            ..s
+        };
+        let text = off.to_text();
+        assert!(!Settings::needs_default_on(&text));
+        assert!(!Settings::from_text(&text).enabled);
+        // Paused stays paused.
+        assert!(
+            Settings::from_text(
+                "enabled=false
+paused=true"
+            )
+            .paused
+        );
     }
 
     #[test]

@@ -15,7 +15,7 @@ struct Page {
 
 /// Raised whenever the guide text changes; guide memos written for an older
 /// version are replaced the next time the program starts.
-pub const GUIDE_VERSION: u32 = 16;
+pub const GUIDE_VERSION: u32 = 17;
 
 const PAGES: &[Page] = &[
     Page {
@@ -147,8 +147,8 @@ const PAGES: &[Page] = &[
         title: "⑫ 클립보드 히스토리",
         image: Some(include_bytes!("../assets/guide/clipboard.jpg")),
         intro: "복사한 내용을 모아 두었다가 필요할 때 한 번 클릭으로 다시 꺼내 써요.",
-        body: "· 처음에는 꺼져 있어요. 왼쪽 메뉴의 ‘클립보드 히스토리’에서 설명을 읽고 ‘수집 시작’을 눌러야 켜져요.
-· 켜 두면 OhMemoJang이 실행 중일 때 복사한 텍스트·링크·표·이미지가 이 PC에 쌓여요. 인터넷으로 보내지 않아요.
+        body: "· 처음부터 켜져 있어요. OhMemoJang이 실행 중일 때 복사한 텍스트·링크·표·이미지가 이 PC에 쌓여요. 인터넷으로 보내지 않아요.
+· 같은 내용을 다시 복사하면 새로 쌓지 않고 그 항목을 맨 위로 올려요.
 · 목록의 항목을 한 번 클릭하면 다시 클립보드로 복사돼요. 그다음 원하는 곳에 Ctrl+V로 붙여 넣으면 돼요.
 · 위쪽 검색과 ‘전체·텍스트·링크·표·이미지’ 필터로 찾아요. 검색은 코멘트도 찾아요.
 · 각 줄은 내용 · 코멘트 · 압정 · 복사 · 삭제 순이에요. 코멘트 칸에 적고 다른 곳을 누르면 저장돼요. 압정을 누른 항목이 맨 위, 그다음 코멘트를 단 항목, 나머지는 복사한 순서예요. 압정을 누른 항목은 개수·기간·용량에 따른 자동 정리에서 빠져요.

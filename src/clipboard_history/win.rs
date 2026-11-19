@@ -80,6 +80,9 @@ mod imp {
         fmt: Fmt,
         /// Sequence number that was on the clipboard when collection began.
         ignore_seq: u32,
+        /// Sequence number of the last capture taken, so one change is
+        /// never read twice (a retry and a new notice for the same copy).
+        last_seq: u32,
         retry: usize,
     }
 
@@ -210,6 +213,7 @@ mod imp {
                 token: random_token(),
                 fmt,
                 ignore_seq: 0,
+                last_seq: 0,
                 retry: 0,
             })
         });
@@ -315,7 +319,7 @@ mod imp {
                 return;
             };
             let current = GetClipboardSequenceNumber();
-            if current != 0 && current == self.ignore_seq {
+            if current != 0 && (current == self.ignore_seq || current == self.last_seq) {
                 return;
             }
             if current != 0 && current == *own_sequence && self.shared.ignore_own_copy.load(Relaxed)
@@ -343,6 +347,7 @@ mod imp {
                     self.shared.counters.missed_locked.fetch_add(1, Relaxed);
                 }
                 Read::Got(formats, reduced) => {
+                    self.last_seq = current;
                     let captured_ms = chrono::Utc::now().timestamp_millis();
                     push_pending(
                         &self.shared,
