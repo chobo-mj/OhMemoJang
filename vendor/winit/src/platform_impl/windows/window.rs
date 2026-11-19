@@ -35,7 +35,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetSystemMenu, GetSystemMetrics, GetWindowPlacement, GetWindowTextLengthW,
     GetWindowTextW, IsWindowVisible, LoadCursorW, PeekMessageW, PostMessageW, RegisterClassExW,
     SetCursor, SetCursorPos, SetForegroundWindow, SetMenuDefaultItem, SetWindowDisplayAffinity,
-    SetWindowPlacement, SetWindowPos, SetWindowTextW, TrackPopupMenu, CS_HREDRAW, CS_VREDRAW,
+    SetWindowPlacement, SetWindowPos, SetWindowTextW, TrackPopupMenu, CS_HREDRAW, CS_OWNDC, CS_VREDRAW,
     CW_USEDEFAULT, FLASHWINFO, FLASHW_ALL, FLASHW_STOP, FLASHW_TIMERNOFG, FLASHW_TRAY,
     GWLP_HINSTANCE, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTLEFT, HTRIGHT, HTTOP,
     HTTOPLEFT, HTTOPRIGHT, MENU_ITEM_STATE, MFS_DISABLED, MFS_ENABLED, MF_BYCOMMAND, NID_READY,
@@ -1405,7 +1405,11 @@ unsafe fn init(
 unsafe fn register_window_class(class_name: &[u16]) {
     let class = WNDCLASSEXW {
         cbSize: mem::size_of::<WNDCLASSEXW>() as u32,
-        style: CS_HREDRAW | CS_VREDRAW,
+        // OhMemoJang: every window is drawn with OpenGL through one context
+        // made current on each window's DC in turn. A window of its own DC
+        // keeps that DC (and its pixel format) for the window's whole life;
+        // Intel's driver draws nothing into windows without it.
+        style: CS_HREDRAW | CS_VREDRAW | CS_OWNDC,
         lpfnWndProc: Some(super::event_loop::public_window_callback),
         cbClsExtra: 0,
         cbWndExtra: 0,

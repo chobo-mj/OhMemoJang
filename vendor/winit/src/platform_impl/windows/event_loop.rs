@@ -21,7 +21,7 @@ use windows_sys::Win32::Foundation::{
     GetLastError, FALSE, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WAIT_FAILED, WPARAM,
 };
 use windows_sys::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromRect, MonitorFromWindow, RedrawWindow, ScreenToClient,
+    GetMonitorInfoW, GetUpdateRect, MonitorFromRect, MonitorFromWindow, RedrawWindow, ScreenToClient,
     ValidateRect, MONITORINFO, MONITOR_DEFAULTTONULL, RDW_INTERNALPAINT, SC_SCREENSAVE,
 };
 use windows_sys::Win32::System::Ole::RevokeDragDrop;
@@ -963,6 +963,31 @@ fn create_event_target_window() -> HWND {
     }
 }
 
+/// OhMemoJang: windows Windows asked to paint again because what they showed
+/// is gone. eframe skips a frame that looks the same as the last one it
+/// painted; these windows must be painted anyway, or they stay white.
+static OS_DAMAGED: Mutex<Vec<HWND>> = Mutex::new(Vec::new());
+
+fn mark_os_damaged(window: HWND) {
+    if let Ok(mut list) = OS_DAMAGED.lock() {
+        if !list.contains(&window) {
+            list.push(window);
+        }
+    }
+}
+
+/// Whether Windows asked `window` to paint again since the last call.
+pub(crate) fn take_os_damaged(window: HWND) -> bool {
+    let Ok(mut list) = OS_DAMAGED.lock() else {
+        return false;
+    };
+    let Some(i) = list.iter().position(|w| *w == window) else {
+        return false;
+    };
+    list.swap_remove(i);
+    true
+}
+
 fn insert_event_target_window_data(
     thread_msg_target: HWND,
     event_loop_runner: EventLoopRunnerShared<UserEventPlaceholder>,
@@ -1274,6 +1299,12 @@ unsafe fn public_window_callback_inner(
         },
 
         WM_PAINT => {
+            // OhMemoJang: an update region means Windows lost what the window
+            // showed (shown again, display or DPI changed, DWM restarted). A
+            // redraw the program asked for (`RDW_INTERNALPAINT`) has none.
+            if unsafe { GetUpdateRect(window, ptr::null_mut(), FALSE) } != 0 {
+                mark_os_damaged(window);
+            }
             userdata.window_state_lock().redraw_requested =
                 userdata.event_loop_runner.should_buffer();
 

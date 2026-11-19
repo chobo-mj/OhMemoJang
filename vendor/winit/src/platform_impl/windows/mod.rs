@@ -9,6 +9,7 @@ pub(crate) use self::event_loop::{
 pub(crate) use self::icon::{SelectedCursor, WinIcon};
 pub(crate) use self::keyboard::{physicalkey_to_scancode, scancode_to_physicalkey};
 pub(crate) use self::monitor::{MonitorHandle, VideoModeHandle};
+pub(crate) use self::event_loop::take_os_damaged;
 pub(crate) use self::window::Window;
 
 pub(crate) use self::icon::WinCursor as PlatformCustomCursor;

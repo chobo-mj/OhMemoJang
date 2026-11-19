@@ -765,3 +765,10 @@ impl IconExtWindows for Icon {
         Ok(Icon { inner: win_icon })
     }
 }
+
+/// OhMemoJang: whether Windows asked the window `hwnd` to paint again since the
+/// last call, because what it showed is gone (as opposed to a redraw the
+/// program asked for).
+pub fn take_os_repaint(hwnd: isize) -> bool {
+    crate::platform_impl::take_os_damaged(hwnd as _)
+}

@@ -136,6 +136,21 @@ fn shown_state(info: &egui::ViewportInfo) -> ShownState {
 }
 
 /// A fingerprint of everything a frame draws.
+/// OhMemoJang: Windows asked this window to paint again because what it
+/// showed is gone (shown, display or DPI changed, DWM restarted). Such a
+/// frame is painted even when it looks the same as the last one; skipping it
+/// left the window white or black until something in it changed.
+fn os_repaint(window: &Window) -> bool {
+    #[cfg(target_os = "windows")]
+    if let Ok(handle) = window.window_handle() {
+        if let raw_window_handle::RawWindowHandle::Win32(h) = handle.as_raw() {
+            return winit::platform::windows::take_os_repaint(h.hwnd.get());
+        }
+    }
+    let _ = window;
+    false
+}
+
 fn frame_signature(
     primitives: &[egui::ClippedPrimitive],
     pixels_per_point: f32,
@@ -733,7 +748,9 @@ impl GlowWinitRunning<'_> {
         // timed refresh of every window at once made the screen stutter).
         let state = shown_state(&viewport.info);
         let shown_changed = viewport.shown.replace(state) != Some(state);
-        let unchanged = textures_delta.set.is_empty()
+        let os_damaged = os_repaint(&window);
+        let unchanged = !os_damaged
+            && textures_delta.set.is_empty()
             && textures_delta.free.is_empty()
             && viewport.actions_requested.is_empty()
             && !shown_changed
@@ -751,6 +768,19 @@ impl GlowWinitRunning<'_> {
                 &clipped_primitives,
                 &textures_delta,
             );
+            if log::log_enabled!(log::Level::Debug) {
+                use glow::HasContext as _;
+                static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                if N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 60 {
+                    #[allow(unsafe_code)]
+                    let err = unsafe { painter.gl().get_error() };
+                    log::debug!(
+                        "GLDIAG paint {viewport_id:?} size={screen_size_in_pixels:?} prims={} tex_set={} err=0x{err:x}",
+                        clipped_primitives.len(),
+                        textures_delta.set.len()
+                    );
+                }
+            }
         }
 
         {
@@ -1066,7 +1096,21 @@ impl GlutinWindowContext {
                 .build(
                     event_loop,
                     config_template_builder.clone(),
-                    |mut config_iterator| {
+                    |config_iterator| {
+                        let all: Vec<_> = config_iterator.collect();
+                        for c in &all {
+                            log::debug!(
+                                "config: hw={} alpha={} transp={} srgb={} samples={} color={:?} api={:?}",
+                                c.hardware_accelerated(),
+                                c.alpha_size(),
+                                c.supports_transparency().unwrap_or(false),
+                                c.srgb_capable(),
+                                c.num_samples(),
+                                c.color_buffer_type(),
+                                c.api(),
+                            );
+                        }
+                        let mut config_iterator = all.into_iter();
                         let config = config_iterator.next().expect(
                             "failed to find a matching configuration for creating glutin config",
                         );
@@ -1642,7 +1686,9 @@ fn render_immediate_viewport(
     });
     let state = shown_state(&viewport.info);
     let shown_changed = viewport.shown.replace(state) != Some(state);
+    let os_damaged = os_repaint(window);
     if !paint_once
+        && !os_damaged
         && !shown_changed
         && textures_delta.set.is_empty()
         && textures_delta.free.is_empty()
@@ -1681,6 +1727,20 @@ fn render_immediate_viewport(
         &clipped_primitives,
         &textures_delta,
     );
+    if log::log_enabled!(log::Level::Debug) {
+        use glow::HasContext as _;
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        if N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 80 {
+            #[allow(unsafe_code)]
+            let err = unsafe { painter.borrow().gl().get_error() };
+            log::debug!(
+                "GLDIAG imm {:?} size={screen_size_in_pixels:?} prims={} tex_set={} err=0x{err:x}",
+                viewport.ids.this,
+                clipped_primitives.len(),
+                textures_delta.set.len()
+            );
+        }
+    }
 
     {
         profiling::scope!("swap_buffers");

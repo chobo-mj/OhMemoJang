@@ -538,8 +538,18 @@ impl App {
                         ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Focus);
                         // The stickers to arrange start scattered, so the
                         // arrangement has something to tidy up.
+                        // Over the main window, so they stay on its monitor.
                         if STEPS[n].key == K::Arrange {
-                            let at = egui::pos2(260. + k as f32 * 170., 160. + k as f32 * 110.);
+                            let base = ctx
+                                .input(|i| {
+                                    i.raw
+                                        .viewports
+                                        .get(&crate::ui::main_viewport())
+                                        .and_then(|v| v.outer_rect)
+                                })
+                                .map_or(egui::Pos2::ZERO, |r| r.min);
+                            let at =
+                                base + egui::vec2(260. + k as f32 * 170., 160. + k as f32 * 110.);
                             ctx.send_viewport_cmd_to(id, egui::ViewportCommand::OuterPosition(at));
                         }
                     }
@@ -1065,9 +1075,15 @@ fn tip_window(
                     style_window(s.hwnd, None);
                     s.styled = true;
                 }
-                let w = (size.x * ppp) as i32;
-                let h = (size.y * ppp) as i32;
-                let at = tip_position(screen, targets, w, h);
+                // Within one monitor: the one with the lit parts (or the
+                // pointer), sized for that monitor's scale. Placed against
+                // the whole desktop, the tip could land in the gap between
+                // monitors of different sizes, or straddle two of different
+                // scales and jump back and forth between them.
+                let (area, scale) = monitor_near(targets).unwrap_or((screen, ppp));
+                let w = (size.x * scale) as i32;
+                let h = (size.y * scale) as i32;
+                let at = tip_position(area, targets, w, h);
                 // Follows the windows it points at. It goes above the dark
                 // screen, but not above menus opened later: those must stay
                 // usable.
@@ -1108,7 +1124,7 @@ fn tip_position(screen: [i32; 4], targets: &[[i32; 4]], w: i32, h: i32) -> (i32,
     let clamp_y = |y: i32| y.clamp(st + margin, (sb - h - margin).max(st));
     let clamp_x = |x: i32| x.clamp(sl + margin, (sr - w - margin).max(sl));
     if targets.is_empty() {
-        let c = primary_center(screen);
+        let c = ((screen[0] + screen[2]) / 2, (screen[1] + screen[3]) / 2);
         return (clamp_x(c.0 - w / 2), clamp_y(c.1 - h / 2));
     }
     let u = targets.iter().fold(targets[0], |a, r| {
@@ -1149,18 +1165,62 @@ fn tip_position(screen: [i32; 4], targets: &[[i32; 4]], w: i32, h: i32) -> (i32,
         .unwrap_or((clamp_x(sr - w - margin), clamp_y(sb - h - margin)))
 }
 
-fn primary_center(screen: [i32; 4]) -> (i32, i32) {
+/// The monitor with most of the lit parts (the one under the pointer when
+/// nothing is lit): its bounds in physical pixels and its scale.
+fn monitor_near(targets: &[[i32; 4]]) -> Option<([i32; 4], f32)> {
     #[cfg(windows)]
     unsafe {
-        use windows_sys::Win32::UI::WindowsAndMessaging::{
-            GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN,
+        use windows_sys::Win32::Foundation::{POINT, RECT};
+        use windows_sys::Win32::Graphics::Gdi::{
+            GetMonitorInfoW, MonitorFromPoint, MonitorFromRect, MONITORINFO,
+            MONITOR_DEFAULTTONEAREST,
         };
-        let (w, h) = (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
-        if w > 0 && h > 0 {
-            return (w / 2, h / 2);
+        use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+        let monitor = if let Some(first) = targets.first() {
+            let u = targets.iter().fold(*first, |a, r| {
+                [
+                    a[0].min(r[0]),
+                    a[1].min(r[1]),
+                    a[2].max(r[2]),
+                    a[3].max(r[3]),
+                ]
+            });
+            let r = RECT {
+                left: u[0],
+                top: u[1],
+                right: u[2],
+                bottom: u[3],
+            };
+            MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST)
+        } else {
+            let mut p = POINT { x: 0, y: 0 };
+            GetCursorPos(&mut p);
+            MonitorFromPoint(p, MONITOR_DEFAULTTONEAREST)
+        };
+        if monitor.is_null() {
+            return None;
         }
+        let mut info: MONITORINFO = std::mem::zeroed();
+        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        if GetMonitorInfoW(monitor, &mut info) == 0 {
+            return None;
+        }
+        let m = info.rcMonitor;
+        let (mut dx, mut dy) = (0u32, 0u32);
+        let scale = if GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dx, &mut dy) == 0 && dx > 0
+        {
+            dx as f32 / 96.
+        } else {
+            return None;
+        };
+        Some(([m.left, m.top, m.right, m.bottom], scale))
     }
-    ((screen[0] + screen[2]) / 2, (screen[1] + screen[3]) / 2)
+    #[cfg(not(windows))]
+    {
+        let _ = targets;
+        None
+    }
 }
 
 #[cfg(windows)]
@@ -1943,6 +2003,17 @@ fn journal_demo(p: &egui::Painter, rect: egui::Rect, t: f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn the_tip_goes_by_one_monitor_at_its_scale() {
+        // Whatever this PC has: a real monitor with a sane scale.
+        if let Some((r, scale)) = monitor_near(&[[10, 10, 50, 50]]) {
+            assert!(r[2] > r[0] && r[3] > r[1]);
+            assert!((0.5..=5.).contains(&scale));
+            let (x, y) = tip_position(r, &[[r[0] + 10, r[1] + 10, r[0] + 60, r[1] + 60]], 400, 300);
+            assert!(x >= r[0] && x + 400 <= r[2] && y >= r[1] && y + 300 <= r[3]);
+        }
+        assert!(monitor_near(&[]).is_none_or(|(r, s)| r[2] > r[0] && s > 0.));
+    }
     fn app() -> App {
         let mut a = App::sample(Local::now().date_naive());
         a.start_fresh();

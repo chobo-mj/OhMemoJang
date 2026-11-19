@@ -2901,6 +2901,7 @@ dependencies = [
  "global-hotkey",
  "ico",
  "image",
+ "log",
  "memmap2",
  "rfd",
  "rusqlite",

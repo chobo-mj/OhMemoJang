@@ -85,7 +85,8 @@ struct App {
     active: usize,
     sidebar: bool,
     sidebar_width: f32,
-    sidebar_dragging: bool,
+    /// Width before the sidebar edge drag began, while it is being dragged.
+    sidebar_drag: Option<f32>,
     split: bool,
     dark: bool,
     search: String,
@@ -169,6 +170,9 @@ struct App {
 const COMPACT_ICON: f32 = 38.;
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        if let Some(gl) = &cc.gl {
+            system::log_gl(gl);
+        }
         let mut fonts = egui::FontDefinitions::default();
         // Font files are mapped, not read: each file is shared by the faces
         // that come from it and only the parts in use occupy memory.
@@ -267,7 +271,7 @@ impl App {
             active: 0,
             sidebar: true,
             sidebar_width: 236.,
-            sidebar_dragging: false,
+            sidebar_drag: None,
             split: true,
             dark: false,
             search: String::new(),
@@ -816,36 +820,33 @@ impl App {
         if self.sidebar {
             let left = ctx.screen_rect().left();
             let edge = left + self.sidebar_width;
-            for event in ctx.input(|i| i.events.clone()) {
-                match event {
-                    egui::Event::PointerButton {
-                        pos,
-                        button: egui::PointerButton::Primary,
-                        pressed: true,
-                        ..
-                    } if (pos.x - edge).abs() <= 6. => self.sidebar_dragging = true,
-                    egui::Event::PointerMoved(pos) if self.sidebar_dragging => {
-                        self.sidebar_width = (pos.x - left).clamp(64., 360.)
-                    }
-                    egui::Event::PointerButton {
-                        pos,
-                        button: egui::PointerButton::Primary,
-                        pressed: false,
-                        ..
-                    } if self.sidebar_dragging => {
-                        self.sidebar_width = (pos.x - left).clamp(64., 360.);
-                        self.prefs.sidebar_width = self.sidebar_width;
-                        self.sidebar_dragging = false;
-                    }
-                    _ => {}
+            // Only a free edge can be grabbed: not under a popup, menu or
+            // tip, and not while a card or sticker is being dragged.
+            let free = |pos: egui::Pos2| {
+                ctx.dragged_id().is_none()
+                    && ctx
+                        .layer_id_at(pos)
+                        .is_none_or(|l| l.order == egui::Order::Background)
+            };
+            let (events, focused) = ctx.input(|i| (i.events.clone(), i.focused));
+            if let Some(width) = sidebar_edge_step(
+                &mut self.sidebar_drag,
+                self.sidebar_width,
+                left,
+                &events,
+                focused,
+                free,
+            ) {
+                self.sidebar_width = width.0;
+                if width.1 {
+                    self.prefs.sidebar_width = width.0;
                 }
             }
-            if self.sidebar_dragging
-                || ctx.input(|i| {
-                    i.pointer
-                        .hover_pos()
-                        .is_some_and(|p| (p.x - edge).abs() <= 6.)
-                })
+            // `free` reads the context: never inside `ctx.input` (its lock
+            // is held there, and taking it again hangs the program).
+            let hover = ctx.input(|i| i.pointer.hover_pos());
+            if self.sidebar_drag.is_some()
+                || hover.is_some_and(|p| (p.x - edge).abs() <= 6. && free(p))
             {
                 ctx.set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
             }
@@ -1402,8 +1403,61 @@ fn shorten(s: &str, n: usize) -> String {
         s
     }
 }
+/// One frame of dragging the sidebar's right edge. `drag` holds the width
+/// from before the drag. Returns the new width and whether to save it.
+///
+/// A drag whose release never arrives (another window took the mouse or the
+/// focus, the pointer was lost) puts the width back instead of leaving the
+/// edge stuck to the pointer, where the next click anywhere would fold the
+/// menu down to its narrowest.
+fn sidebar_edge_step(
+    drag: &mut Option<f32>,
+    width: f32,
+    left: f32,
+    events: &[egui::Event],
+    focused: bool,
+    free: impl Fn(egui::Pos2) -> bool,
+) -> Option<(f32, bool)> {
+    let edge = left + width;
+    let mut out = None;
+    for event in events {
+        match event {
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                ..
+            } if drag.is_none() && (pos.x - edge).abs() <= 6. && free(*pos) => *drag = Some(width),
+            egui::Event::PointerMoved(pos) if drag.is_some() => {
+                out = Some(((pos.x - left).clamp(64., 360.), false))
+            }
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                ..
+            } if drag.is_some() => {
+                *drag = None;
+                out = Some(((pos.x - left).clamp(64., 360.), true));
+            }
+            egui::Event::PointerGone | egui::Event::WindowFocused(false) => {
+                if let Some(from) = drag.take() {
+                    out = Some((from, false));
+                }
+            }
+            _ => {}
+        }
+    }
+    if !focused {
+        if let Some(from) = drag.take() {
+            out = Some((from, false));
+        }
+    }
+    out
+}
 fn main() -> eframe::Result {
     system::log_crashes();
+    system::gl_log_init();
     let by_windows = std::env::args().any(|x| x == "--tray");
     // A second launch only brings the running copy's main window back.
     if !tray::single_instance() {
@@ -1447,4 +1501,93 @@ fn main() -> eframe::Result {
         quit::QUIT.terminate();
     }
     result
+}
+
+#[cfg(test)]
+mod sidebar_edge_tests {
+    use super::*;
+    fn press(x: f32, down: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos: egui::pos2(x, 300.),
+            button: egui::PointerButton::Primary,
+            pressed: down,
+            modifiers: Default::default(),
+        }
+    }
+    fn moved(x: f32) -> egui::Event {
+        egui::Event::PointerMoved(egui::pos2(x, 300.))
+    }
+    #[test]
+    fn dragging_the_edge_sets_and_saves_the_width() {
+        let mut drag = None;
+        let free = |_| true;
+        assert_eq!(
+            sidebar_edge_step(&mut drag, 236., 0., &[press(238., true)], true, free),
+            None
+        );
+        assert_eq!(drag, Some(236.));
+        let out = sidebar_edge_step(&mut drag, 236., 0., &[moved(300.)], true, free);
+        assert_eq!(
+            out,
+            Some((300., false)),
+            "follows the pointer, not saved yet"
+        );
+        let out = sidebar_edge_step(&mut drag, 300., 0., &[press(310., false)], true, free);
+        assert_eq!(out, Some((310., true)), "saved on release");
+        assert_eq!(drag, None);
+    }
+    #[test]
+    fn a_release_that_never_comes_puts_the_width_back() {
+        // The menu folded to its narrowest when the release went to another
+        // window: the edge stayed on the pointer until the next click.
+        for lost in [egui::Event::WindowFocused(false), egui::Event::PointerGone] {
+            let mut drag = None;
+            let free = |_| true;
+            sidebar_edge_step(&mut drag, 236., 0., &[press(236., true)], true, free);
+            sidebar_edge_step(&mut drag, 236., 0., &[moved(80.)], true, free);
+            let out =
+                sidebar_edge_step(&mut drag, 80., 0., std::slice::from_ref(&lost), true, free);
+            assert_eq!(out, Some((236., false)), "{lost:?}");
+            assert_eq!(drag, None);
+            // A later click far left does nothing.
+            let out = sidebar_edge_step(
+                &mut drag,
+                236.,
+                0.,
+                &[press(20., true), press(20., false)],
+                true,
+                free,
+            );
+            assert_eq!(out, None);
+        }
+        let mut drag = None;
+        sidebar_edge_step(&mut drag, 236., 0., &[press(236., true)], true, |_| true);
+        let out = sidebar_edge_step(&mut drag, 236., 0., &[moved(70.)], false, |_| true);
+        assert_eq!(out, Some((236., false)), "the window lost the focus");
+    }
+    #[test]
+    fn the_edge_is_not_grabbed_under_a_popup_or_away_from_it() {
+        let mut drag = None;
+        assert_eq!(
+            sidebar_edge_step(&mut drag, 236., 0., &[press(238., true)], true, |_| false),
+            None
+        );
+        assert_eq!(drag, None);
+        assert_eq!(
+            sidebar_edge_step(&mut drag, 236., 0., &[press(250., true)], true, |_| true),
+            None
+        );
+        assert_eq!(drag, None);
+        // Narrowest and widest stay in range.
+        sidebar_edge_step(&mut drag, 236., 0., &[press(236., true)], true, |_| true);
+        let out = sidebar_edge_step(
+            &mut drag,
+            236.,
+            0.,
+            &[moved(5.), press(900., false)],
+            true,
+            |_| true,
+        );
+        assert_eq!(out, Some((360., true)));
+    }
 }

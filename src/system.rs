@@ -234,6 +234,50 @@ fn log_dir() -> Option<std::path::PathBuf> {
 }
 
 /// Adds a line to a small log in the logs folder, keeping its last 200 lines.
+/// Which graphics driver draws the windows, one line per start in
+/// `logs\gl.log`: the first thing to look at when windows come up white.
+pub fn log_gl(gl: &eframe::glow::Context) {
+    use eframe::glow::HasContext as _;
+    // SAFETY: called on the thread that owns the current GL context, while
+    // it is current (eframe hands it to the app at creation).
+    let (vendor, renderer, version) = unsafe {
+        (
+            gl.get_parameter_string(eframe::glow::VENDOR),
+            gl.get_parameter_string(eframe::glow::RENDERER),
+            gl.get_parameter_string(eframe::glow::VERSION),
+        )
+    };
+    log_line("gl.log", &format!("{vendor} | {renderer} | {version}"));
+}
+
+/// Diagnostic: with `OHMEMOJANG_GL_LOG=<file>` set, eframe/egui_glow debug
+/// messages (GL renderer, chosen pixel format) go to that file.
+pub fn gl_log_init() {
+    struct FileLog(std::sync::Mutex<std::fs::File>);
+    impl log::Log for FileLog {
+        fn enabled(&self, m: &log::Metadata) -> bool {
+            m.level() <= log::Level::Debug
+        }
+        fn log(&self, r: &log::Record) {
+            if self.enabled(r.metadata()) {
+                use std::io::Write;
+                if let Ok(mut f) = self.0.lock() {
+                    let _ = writeln!(f, "{} {}: {}", r.level(), r.target(), r.args());
+                }
+            }
+        }
+        fn flush(&self) {}
+    }
+    let Some(path) = std::env::var_os("OHMEMOJANG_GL_LOG") else {
+        return;
+    };
+    let Ok(f) = std::fs::File::create(path) else {
+        return;
+    };
+    if log::set_boxed_logger(Box::new(FileLog(std::sync::Mutex::new(f)))).is_ok() {
+        log::set_max_level(log::LevelFilter::Debug);
+    }
+}
 pub fn log_line(file: &str, line: &str) {
     let Some(dir) = log_dir() else { return };
     let _ = std::fs::create_dir_all(&dir);
