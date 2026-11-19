@@ -416,3 +416,13 @@
 - 수정: 두 곳(`assign_dropped_date`, 일정 창 저장)에서 그 초기화를 없앴다. 끌어 놓은 메모 자체는 원래대로 다룬다.
 - 테스트: `a_deadline_drop_brings_out_no_other_sticker`.
 - 확인 못 함: 시험용 프로필에서 목록→캘린더 끌기로는 재현되지 않았다. 사용자 환경('매일 오늘 메모' 켬, Shift 끌기)에서 확인이 필요하다.
+
+## 2.1 작업 4: 일정 목록에 끌어 놓으면 이날까지 업무가 풀림
+
+- 요청: 캘린더 분리창 오른쪽 일정 목록으로 '이날까지 할일' 스티커를 끌면 이날까지 할일이 해제된다. 해제되지 않아야 한다.
+- 원인: 끌어 놓기는 모두 `assign_dropped_date`를 지나고, 거기서 `deadline = shift`로 정했다. Shift 없이 놓으면 언제나 풀렸다.
+- 수정:
+  - 날짜 목록(달력 칸이 아닌 곳)에 놓으면 원래 '이날까지 업무'를 유지한다. Shift면 전처럼 이날까지 업무가 된다.
+  - 달력 칸에 Shift 없이 놓으면 전처럼 당일 일정이 된다(사용자가 고른 동작).
+  - 끌어 놓기 선택창('당일 일정' / '이날까지 업무')은 고른 대로 정한다. 날짜를 넣는 부분을 `set_dropped_date`로 나눠 선택창이 바로 부른다.
+- 테스트: `a_deadline_memo_put_on_a_day_list_stays_a_deadline`, `choosing_a_plain_schedule_in_the_drop_dialog_ends_the_deadline`.

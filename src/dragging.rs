@@ -55,8 +55,21 @@ impl App {
             self.desktop.focus_dialog = true;
             return;
         }
+        // Put on a day's list (not a calendar grid), a '이날까지 업무' memo
+        // stays one: only Shift on the grid decides that.
+        let deadline = shift || (!calendar && self.data.notes[note].deadline);
+        self.set_dropped_date(note, date, deadline, occurrence);
+    }
+    /// Give the memo `date`, as a '이날까지 업무' when `deadline`.
+    fn set_dropped_date(
+        &mut self,
+        note: usize,
+        date: NaiveDate,
+        deadline: bool,
+        occurrence: Option<NaiveDate>,
+    ) {
         let n = &mut self.data.notes[note];
-        let start = if shift {
+        let start = if deadline {
             date
         } else {
             match (n.date, occurrence) {
@@ -64,17 +77,21 @@ impl App {
                 _ => date,
             }
         };
-        if shift || n.deadline || occurrence.is_none() {
+        if deadline || n.deadline || occurrence.is_none() {
             n.duration = 1;
         }
-        n.deadline = shift;
+        n.deadline = deadline;
         n.move_start(start);
         self.day = date;
         self.toast = format!(
             "{} → {}{}",
             n.title,
             date,
-            if shift { " · 이날까지 업무" } else { "" }
+            if deadline {
+                " · 이날까지 업무"
+            } else {
+                ""
+            }
         );
         // The day's stickers ('매일 오늘 메모') are not opened again here:
         // that would bring out every memo due today, not only this one.
@@ -111,7 +128,11 @@ impl App {
         );
         if let Some(deadline) = choice {
             self.pending_date_drop = None;
-            self.assign_dropped_date(note, date, deadline, false, None);
+            // The choice made here stands, even for a memo that was a
+            // '이날까지 업무' before.
+            if note < self.data.notes.len() {
+                self.set_dropped_date(note, date, deadline, None);
+            }
         } else if !open || cancel {
             self.pending_date_drop = None;
         }
@@ -566,6 +587,34 @@ mod tests {
             a.studio.windows.values().filter(|w| w.open).count(),
             open_before
         );
+    }
+    #[test]
+    fn a_deadline_memo_put_on_a_day_list_stays_a_deadline() {
+        let day = NaiveDate::from_ymd_opt(2026, 11, 17).unwrap();
+        let mut a = App::sample(day);
+        a.data.notes[1].date = Some(day);
+        a.data.notes[1].deadline = true;
+        let later = day + chrono::Duration::days(2);
+        // The calendar window's day list (no Shift).
+        a.assign_dropped_date(1, later, false, false, None);
+        assert!(a.data.notes[1].deadline, "still '이날까지 업무'");
+        assert_eq!(a.data.notes[1].deadline_date(), Some(later));
+        // On the grid without Shift it becomes a plain schedule, as before.
+        a.prefs.drop_schedule_choice = false;
+        a.assign_dropped_date(1, day, false, true, None);
+        assert!(!a.data.notes[1].deadline);
+    }
+    #[test]
+    fn choosing_a_plain_schedule_in_the_drop_dialog_ends_the_deadline() {
+        let day = NaiveDate::from_ymd_opt(2026, 11, 17).unwrap();
+        let mut a = App::sample(day);
+        a.data.notes[1].date = Some(day);
+        a.data.notes[1].deadline = true;
+        a.prefs.drop_schedule_choice = true;
+        a.assign_dropped_date(1, day, false, true, None);
+        assert_eq!(a.pending_date_drop, Some((1, day)), "the dialog asks");
+        a.set_dropped_date(1, day, false, None);
+        assert!(!a.data.notes[1].deadline, "'당일 일정' was chosen");
     }
     #[test]
     fn fast_drag_in_one_frame_moves_date_and_preserves_original_note() {
