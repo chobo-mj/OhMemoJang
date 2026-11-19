@@ -667,7 +667,7 @@ impl App {
                 self.day = day;
             }
             // Dragging over days marks a stretch for a several-day schedule.
-            if r.drag_started() {
+            if r.drag_started() && self.stand_allows(crate::calendar_dock::StandFeature::Range) {
                 self.range_drag = Some((day, day));
             }
             if let Some((from, _)) = self.range_drag {
@@ -756,7 +756,9 @@ impl App {
                     tone.faint.gamma_multiply(0.75),
                 );
             }
-            if ui.rect_contains_pointer(rect) {
+            if ui.rect_contains_pointer(rect)
+                && self.stand_allows(crate::calendar_dock::StandFeature::NewMemo)
+            {
                 let plus =
                     Rect::from_min_size(rect.right_top() + Vec2::new(-26., 5.), Vec2::splat(22.));
                 // Solid under the + so it stands out over the lunar date.
@@ -929,8 +931,9 @@ impl App {
                 .strong()
                 .size(20.),
             );
+            let new_memo = self.stand_allows(crate::calendar_dock::StandFeature::NewMemo);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("+ 이 날짜에 스티커").clicked() {
+                if new_memo && ui.button("+ 이 날짜에 스티커").clicked() {
                     self.new_sticker_on(self.day);
                 }
             });
@@ -1205,6 +1208,7 @@ impl App {
         open_left: bool,
         open_right: bool,
     ) {
+        let band_on = self.stand_allows(crate::calendar_dock::StandFeature::Band);
         let n = &self.data.notes[i];
         let done = days.iter().all(|&d| n.done_on(Some(d)));
         let fill = if self.dark {
@@ -1216,10 +1220,18 @@ impl App {
             .interact(
                 rect,
                 ui.id().with(("band", i, days[0])),
-                Sense::click_and_drag(),
+                if band_on {
+                    Sense::click_and_drag()
+                } else {
+                    Sense::hover()
+                },
             )
-            .on_hover_text(&n.title)
-            .on_hover_cursor(egui::CursorIcon::PointingHand);
+            .on_hover_text(&n.title);
+        let response = if band_on {
+            response.on_hover_cursor(egui::CursorIcon::PointingHand)
+        } else {
+            response
+        };
         let r = |open: bool| if open { 4 } else { 0 };
         ui.painter().rect_filled(
             rect,
@@ -1275,6 +1287,10 @@ impl App {
             galley,
             INK,
         );
+        if !band_on {
+            // The standing calendar, with memo bands not turned on.
+            return;
+        }
         // The day under the pointer is the occurrence a click or drag uses.
         let day = response
             .interact_pointer_pos()

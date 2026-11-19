@@ -35,6 +35,13 @@ pub struct Prefs {
     pub cal_side_page: bool,
     /// A copied table is pasted as tab separated text, not as a table.
     pub paste_table_text: bool,
+    /// The standing calendar takes input (it then sits above the desktop
+    /// icons), for the features chosen below.
+    pub stand_input: bool,
+    pub stand_new_memo: bool,
+    pub stand_range: bool,
+    pub stand_drop: bool,
+    pub stand_band: bool,
 }
 
 impl Default for Prefs {
@@ -57,6 +64,11 @@ impl Default for Prefs {
             cal_side_work: true,
             cal_side_page: false,
             paste_table_text: false,
+            stand_input: false,
+            stand_new_memo: true,
+            stand_range: true,
+            stand_drop: true,
+            stand_band: true,
         }
     }
 }
@@ -65,7 +77,7 @@ impl Prefs {
     pub fn to_text(&self) -> String {
         let hidden: Vec<String> = self.hidden_pages.iter().map(|p| p.to_string()).collect();
         format!(
-            "sidebar_width={}\ndrop_schedule_choice={}\nclose_completed_sticker={}\nrearrange_completed_stickers={}\nstart_page={}\nhidden_pages={}\ncal_theme={}\ncal_font={}\ncal_hide_done={}\ncal_strike={}\ncal_weeks={}\ndata_path={}\nfirst_run_done={}\ntray_hint_done={}\ncal_side_work={}\ncal_side_page={}\npaste_table_text={}\n",
+            "sidebar_width={}\ndrop_schedule_choice={}\nclose_completed_sticker={}\nrearrange_completed_stickers={}\nstart_page={}\nhidden_pages={}\ncal_theme={}\ncal_font={}\ncal_hide_done={}\ncal_strike={}\ncal_weeks={}\ndata_path={}\nfirst_run_done={}\ntray_hint_done={}\ncal_side_work={}\ncal_side_page={}\npaste_table_text={}\nstand_input={}\nstand_new_memo={}\nstand_range={}\nstand_drop={}\nstand_band={}\n",
             self.sidebar_width,
             self.drop_schedule_choice,
             self.close_completed_sticker,
@@ -83,6 +95,11 @@ impl Prefs {
             self.cal_side_work,
             self.cal_side_page,
             self.paste_table_text,
+            self.stand_input,
+            self.stand_new_memo,
+            self.stand_range,
+            self.stand_drop,
+            self.stand_band,
         )
     }
     /// Unknown keys and bad values fall back to the defaults.
@@ -119,6 +136,11 @@ impl Prefs {
                 "cal_side_work" => p.cal_side_work = value == "true",
                 "cal_side_page" => p.cal_side_page = value == "true",
                 "paste_table_text" => p.paste_table_text = value == "true",
+                "stand_input" => p.stand_input = value == "true",
+                "stand_new_memo" => p.stand_new_memo = value == "true",
+                "stand_range" => p.stand_range = value == "true",
+                "stand_drop" => p.stand_drop = value == "true",
+                "stand_band" => p.stand_band = value == "true",
                 _ => {}
             }
         }

@@ -38,12 +38,13 @@ pub type PxRect = [i32; 4];
 
 /// Put window `hwnd` on the desktop wallpaper layer at `rect`: below the
 /// desktop icons, so clicks go to the desktop and icons can sit on top.
-pub fn pin_to_desktop(hwnd: isize, rect: PxRect) -> bool {
+/// `over_icons`: above the icons instead, so the window takes input.
+pub fn pin_to_desktop(hwnd: isize, rect: PxRect, over_icons: bool) -> bool {
     #[cfg(windows)]
-    return unsafe { desk::pin(hwnd, rect) };
+    return unsafe { desk::pin(hwnd, rect, over_icons) };
     #[cfg(not(windows))]
     {
-        let _ = (hwnd, rect);
+        let _ = (hwnd, rect, over_icons);
         false
     }
 }
@@ -108,7 +109,7 @@ pub struct DesktopClick {
 }
 
 impl DesktopClick {
-    pub fn watch(hwnd: isize, rect: PxRect, ctx: egui::Context) -> Option<Self> {
+    pub fn watch(hwnd: isize, rect: PxRect, ctx: egui::Context, over_icons: bool) -> Option<Self> {
         use std::sync::{atomic::AtomicBool, Arc, Mutex};
         let hit = Arc::new(AtomicBool::new(false));
         let lost = Arc::new(AtomicBool::new(false));
@@ -117,6 +118,7 @@ impl DesktopClick {
         #[cfg(windows)]
         let thread = desk::watch(desk::Watch {
             hwnd,
+            over_icons,
             rect: rect.clone(),
             hit: hit.clone(),
             lost: lost.clone(),
@@ -125,7 +127,7 @@ impl DesktopClick {
         })?;
         #[cfg(not(windows))]
         let thread = {
-            let _ = (hwnd, ctx);
+            let _ = (hwnd, ctx, over_icons);
             0
         };
         Some(Self {
@@ -318,6 +320,54 @@ mod desk {
         true
     }
 
+    /// The window holding the desktop icons (`SHELLDLL_DefView`): Progman on
+    /// the newer layout, a top-level WorkerW on the classic one.
+    unsafe fn icon_host() -> HWND {
+        let progman = progman();
+        if !progman.is_null() && !icon_layer(progman).is_null() {
+            return progman;
+        }
+        let mut host: HWND = std::ptr::null_mut();
+        unsafe extern "system" fn visit(h: HWND, data: LPARAM) -> BOOL {
+            if !icon_layer(h).is_null() {
+                *(data as *mut HWND) = h;
+                return 0;
+            }
+            1
+        }
+        EnumWindows(Some(visit), &mut host as *mut HWND as LPARAM);
+        host
+    }
+
+    /// The window becomes the top child of the window holding the icons:
+    /// over them, so it takes the pointer (the icons there are covered).
+    unsafe fn pin_over_icons(h: HWND, r: PxRect) -> bool {
+        let host = icon_host();
+        if host.is_null() {
+            return false;
+        }
+        let style = GetWindowLongW(h, GWL_EXSTYLE) as u32;
+        SetWindowLongW(h, GWL_EXSTYLE, (style | WS_EX_LAYERED) as i32);
+        SetLayeredWindowAttributes(h, 0, 255, LWA_ALPHA);
+        SetLastError(0);
+        if SetParent(h, host).is_null() && GetLastError() != 0 {
+            SetWindowLongW(h, GWL_EXSTYLE, style as i32);
+            return false;
+        }
+        let mut p = POINT { x: r[0], y: r[1] };
+        ScreenToClient(host, &mut p);
+        SetWindowPos(
+            h,
+            HWND_TOP,
+            p.x,
+            p.y,
+            r[2] - r[0],
+            r[3] - r[1],
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+        true
+    }
+
     /// Without the classic layout the window stays a top-level window, just
     /// above the desktop (Progman) in the stacking order: below every other
     /// window, out of the taskbar and Alt+Tab, and shown on every Windows
@@ -448,9 +498,24 @@ mod desk {
 
     /// Keeps a window pinned in the top-level way right above the desktop.
     /// Returns whether it is pinned that way (and so needs this called again).
-    pub unsafe fn keep_on_desktop(hwnd: isize) -> bool {
+    pub unsafe fn keep_on_desktop(hwnd: isize, over_icons: bool) -> bool {
         let h = hwnd as HWND;
         let progman = progman();
+        if over_icons && !is_top_level(h) {
+            // Over the icons: kept the top child of their window.
+            if !GetWindow(h, GW_HWNDPREV).is_null() {
+                SetWindowPos(
+                    h,
+                    HWND_TOP,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
+                );
+            }
+            return true;
+        }
         if !progman.is_null() && GetAncestor(h, GA_PARENT) == progman {
             // Under the icons: keep it right behind them if Explorer
             // reordered its children (after Win+D, for instance).
@@ -545,8 +610,15 @@ mod desk {
         }
     }
 
-    pub unsafe fn pin(hwnd: isize, r: PxRect) -> bool {
-        let pinned = pin_window(hwnd, r);
+    pub unsafe fn pin(hwnd: isize, r: PxRect, over_icons: bool) -> bool {
+        let top_level_only = crate::system::standing_unsupported()
+            || std::env::var_os("OHMEMOJANG_STANDING_TOPLEVEL").is_some();
+        // The top-level way (24H2) takes input as it is.
+        let pinned = if over_icons && !top_level_only {
+            pin_over_icons(hwnd as HWND, r) || pin_window(hwnd, r)
+        } else {
+            pin_window(hwnd, r)
+        };
         if pinned {
             taskbar_button(hwnd, false);
         }
@@ -705,6 +777,7 @@ mod desk {
 
     pub struct Watch {
         pub hwnd: isize,
+        pub over_icons: bool,
         pub rect: Arc<Mutex<PxRect>>,
         pub hit: Arc<AtomicBool>,
         pub lost: Arc<AtomicBool>,
@@ -853,7 +926,7 @@ mod desk {
                         }
                         WM_DESKTOP_CHECK => {
                             if IsWindow(me) != 0 {
-                                keep_on_desktop(watch.hwnd);
+                                keep_on_desktop(watch.hwnd, watch.over_icons);
                             }
                             if recheck != 0 {
                                 KillTimer(std::ptr::null_mut(), recheck);
@@ -864,7 +937,7 @@ mod desk {
                             KillTimer(std::ptr::null_mut(), recheck);
                             recheck = 0;
                             if IsWindow(me) != 0 {
-                                keep_on_desktop(watch.hwnd);
+                                keep_on_desktop(watch.hwnd, watch.over_icons);
                             }
                         }
                         WM_TIMER => {
@@ -883,7 +956,7 @@ mod desk {
                                 watch.ctx.request_repaint();
                                 continue;
                             }
-                            keep_on_desktop(watch.hwnd);
+                            keep_on_desktop(watch.hwnd, watch.over_icons);
                             let now = (cursor(), HOOK_CALLS.with(Cell::get));
                             let quiet = reinstalled.is_none_or(|t| t.elapsed().as_secs() >= 2);
                             if quiet && super::hook_seems_gone(now.0 != pointer, calls, now.1) {

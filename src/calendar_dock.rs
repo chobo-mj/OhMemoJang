@@ -85,6 +85,21 @@ struct Standing {
     /// Frames to wait for the title bar to go before moving to the desktop.
     wait: u8,
     click: Option<crate::win_style::DesktopClick>,
+    /// Pinned over the desktop icons, taking input (설정 › 캘린더).
+    over_icons: bool,
+}
+
+/// What the standing calendar can let through (설정 › 캘린더 › 스탠딩 캘린더).
+#[derive(Clone, Copy, Debug)]
+pub enum StandFeature {
+    /// A date's + button: a new memo on that day.
+    NewMemo,
+    /// Dragging over dates: a schedule of several days.
+    Range,
+    /// A sticker dropped on a date becomes a schedule.
+    Drop,
+    /// Clicking or right-clicking a memo's band.
+    Band,
 }
 
 pub struct Dock {
@@ -246,6 +261,26 @@ fn px(r: Rect, ppp: f32) -> PxRect {
 }
 
 impl App {
+    /// Whether `f` works on the standing calendar: only when turned on in
+    /// settings, as chosen there. Everywhere else always.
+    pub fn stand_feature_on(&self, f: StandFeature) -> bool {
+        if !self.cal.standing_active() {
+            return true;
+        }
+        let p = &self.prefs;
+        p.stand_input
+            && match f {
+                StandFeature::NewMemo => p.stand_new_memo,
+                StandFeature::Range => p.stand_range,
+                StandFeature::Drop => p.stand_drop,
+                StandFeature::Band => p.stand_band,
+            }
+    }
+    /// [`Self::stand_feature_on`] for what is being drawn: only the
+    /// calendar window's own grid is the standing calendar.
+    pub fn stand_allows(&self, f: StandFeature) -> bool {
+        !self.cal.painting || self.stand_feature_on(f)
+    }
     /// Show the calendar window (from the main window or the shortcut).
     pub fn show_calendar(&mut self) {
         self.restore_standing();
@@ -261,6 +296,19 @@ impl App {
             .is_some_and(|s| s.pinned && !crate::win_style::window_alive(s.hwnd))
         {
             self.restand(ctx);
+        }
+        // The input option changed while standing: it stands again the
+        // new way (over or under the desktop icons).
+        if self
+            .cal
+            .standing
+            .as_ref()
+            .is_some_and(|s| s.pinned && s.over_icons != self.prefs.stand_input)
+        {
+            self.restore_standing();
+            if self.cal.standing.is_none() {
+                self.cal.stand_on_start = 3;
+            }
         }
         if std::mem::take(&mut self.cal.recreate) {
             // Left out for this frame: egui lets the old window go.
@@ -382,6 +430,7 @@ impl App {
                             pinned: false,
                             wait: 3,
                             click: None,
+                            over_icons: self.prefs.stand_input,
                         });
                     }
                 }
@@ -531,12 +580,13 @@ impl App {
                 ctx.request_repaint_after(std::time::Duration::from_millis(16));
                 return;
             }
-            s.pinned = crate::win_style::pin_to_desktop(s.hwnd, s.rect);
+            s.pinned = crate::win_style::pin_to_desktop(s.hwnd, s.rect, s.over_icons);
             if !s.pinned {
                 self.cal.standing = None;
                 return;
             }
-            s.click = crate::win_style::DesktopClick::watch(s.hwnd, s.button, ctx.clone());
+            s.click =
+                crate::win_style::DesktopClick::watch(s.hwnd, s.button, ctx.clone(), s.over_icons);
             // Paint it once more where it now stands.
             ctx.request_repaint();
             if s.click.is_none() {
@@ -899,6 +949,7 @@ mod standing_tests {
             pinned: false,
             wait: 3,
             click: None,
+            over_icons: false,
         });
         let ctx = egui::Context::default();
         let mut button = Rect::NOTHING;
@@ -961,6 +1012,7 @@ mod standing_tests {
             pinned: true,
             wait: 0,
             click: None,
+            over_icons: false,
         });
         assert_eq!(app.schedule_target_at(cell.center(), 0.2), None);
     }
@@ -978,6 +1030,7 @@ mod standing_tests {
             pinned: true,
             wait: 0,
             click: None,
+            over_icons: false,
         };
         let ctx = egui::Context::default();
         for round in 1..=4u8 {
@@ -1013,6 +1066,7 @@ mod standing_tests {
             pinned: true,
             wait: 0,
             click: None,
+            over_icons: false,
         });
         app.release_standing();
         assert!(app.cal.standing.is_none());
@@ -1026,6 +1080,61 @@ mod standing_tests {
         let mut s = crate::storage::SettingsRec::default();
         plain.cal.write_place(&mut s);
         assert!(!s.cal_standing);
+    }
+
+    #[test]
+    fn the_standing_calendar_lets_through_only_what_is_turned_on() {
+        let mut app = App::sample(chrono::NaiveDate::from_ymd_opt(2026, 11, 20).unwrap());
+        let all = [
+            StandFeature::NewMemo,
+            StandFeature::Range,
+            StandFeature::Drop,
+            StandFeature::Band,
+        ];
+        // Not standing: everything works.
+        assert!(all.iter().all(|&f| app.stand_feature_on(f)));
+        app.cal.standing = Some(Standing {
+            hwnd: 0,
+            rect: [0, 0, 860, 760],
+            outer: [0, 0, 860, 800],
+            button: [0; 4],
+            pinned: true,
+            wait: 0,
+            click: None,
+            over_icons: false,
+        });
+        // Off by default: nothing.
+        assert!(!app.prefs.stand_input);
+        assert!(all.iter().all(|&f| !app.stand_feature_on(f)));
+        // Turned on: all four by default, each one can be left out.
+        app.prefs.stand_input = true;
+        assert!(all.iter().all(|&f| app.stand_feature_on(f)));
+        app.prefs.stand_drop = false;
+        assert!(!app.stand_feature_on(StandFeature::Drop));
+        assert!(app.stand_feature_on(StandFeature::Band));
+        // Only the calendar window's grid is the standing calendar.
+        app.prefs.stand_input = false;
+        app.cal.painting = false;
+        assert!(
+            app.stand_allows(StandFeature::NewMemo),
+            "the main window's calendar"
+        );
+        app.cal.painting = true;
+        assert!(!app.stand_allows(StandFeature::NewMemo));
+        // A sticker dropped on it is a schedule only when chosen.
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 11, 20).unwrap();
+        let cell = Rect::from_min_max(Pos2::new(200., 10.), Pos2::new(300., 100.));
+        app.cal_cells.insert(
+            egui::ViewportId::from_hash_of("calendar"),
+            (0., vec![(cell, day)]),
+        );
+        assert_eq!(app.schedule_target_at(cell.center(), 0.2), None);
+        app.prefs.stand_input = true;
+        app.prefs.stand_drop = true;
+        assert_eq!(
+            app.schedule_target_at(cell.center(), 0.2),
+            Some((day, true))
+        );
     }
 
     #[test]

@@ -1401,6 +1401,21 @@ impl App {
                     "메모 끌어 놓기 시 이날까지 업무 선택창 띄우기",
                     "캘린더에서만 표시 · Shift 드래그는 선택창 없이 이날까지 업무로 지정",
                 );
+                section(ui, "스탠딩 캘린더");
+                toggle_row(
+                    ui,
+                    &mut self.prefs.stand_input,
+                    "스탠딩 상태에서 기능 활성화하기",
+                    "바탕화면에 고정된 캘린더에서도 아래 기능을 써요 · 캘린더 자리의 바탕화면 아이콘은 가려져요",
+                );
+                if self.prefs.stand_input {
+                    ui.indent("stand_features", |ui| {
+                        ui.checkbox(&mut self.prefs.stand_new_memo, "날짜의 + 버튼으로 새 메모");
+                        ui.checkbox(&mut self.prefs.stand_range, "날짜를 끌어 기간 일정 만들기");
+                        ui.checkbox(&mut self.prefs.stand_drop, "스티커를 끌어 놓아 일정 등록");
+                        ui.checkbox(&mut self.prefs.stand_band, "메모 막대 클릭 · 우클릭");
+                    });
+                }
             }
             4 => {
                 section(ui, "알림 소리");
