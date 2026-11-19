@@ -120,6 +120,8 @@ struct App {
     alarms: alarm::Alarms,
     /// Autostart value last written to Windows (`None` before the first check).
     autostart_applied: Option<bool>,
+    /// When to say that Windows started the program (`--tray`).
+    start_notice_at: Option<f64>,
     /// The tray icon; while it is there, closing the main window hides it.
     tray: tray::Tray,
     /// The main window is shown (hidden in the tray otherwise).
@@ -231,8 +233,11 @@ impl App {
         a.prefs_saved = a.prefs.clone();
         a.tray = tray::Tray::new(&cc.egui_ctx);
         // Started with Windows: stay in the tray, stickers on the desktop.
-        a.main_open = !(a.tray.active() && std::env::args().any(|x| x == "--tray")
-            || toast::launch_answer().is_some());
+        let by_windows = a.tray.active() && std::env::args().any(|x| x == "--tray");
+        a.main_open = !(by_windows || toast::launch_answer().is_some_and(|x| toast::is_alarm(&x)));
+        if by_windows {
+            a.start_notice_at = Some(4.);
+        }
         a.hotkeys = GlobalHotKeyManager::new().ok();
         wake::set(&cc.egui_ctx);
         if a.desktop.toast_center {
@@ -285,6 +290,7 @@ impl App {
             saving: storage::Saving::default(),
             alarms: alarm::Alarms::default(),
             autostart_applied: None,
+            start_notice_at: None,
             tray: tray::Tray::default(),
             main_open: true,
             tray_notice: None,
@@ -589,6 +595,7 @@ impl eframe::App for App {
         }
         self.auto_relock();
         self.apply_autostart();
+        self.start_notice(ctx);
         self.autosave(ctx.input(|i| i.time), false);
         // Sleep until something is due: an alarm, an automatic lock, a
         // pending save, the next housekeeping. Input wakes the program anyway.
@@ -1340,6 +1347,23 @@ impl App {
             }
         }
     }
+    /// Started by Windows: a notification says the program is in the tray
+    /// (a few seconds in, so Windows does not drop it as the first one).
+    fn start_notice(&mut self, ctx: &egui::Context) {
+        let Some(due) = self.start_notice_at else {
+            return;
+        };
+        let now = ctx.input(|i| i.time);
+        if now < due {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(due - now));
+            return;
+        }
+        self.start_notice_at = None;
+        let _ = toast::notice(
+            "OhMemoJang이 시작되었어요",
+            "트레이의 OhMemoJang 아이콘을 누르면 메인 창이 열려요",
+        );
+    }
     /// Save changed settings, and leave a page whose menu was hidden.
     fn keep_prefs(&mut self) {
         self.prefs.cal_theme = self.cal.theme;
@@ -1379,9 +1403,18 @@ fn shorten(s: &str, n: usize) -> String {
     }
 }
 fn main() -> eframe::Result {
+    system::log_crashes();
+    let by_windows = std::env::args().any(|x| x == "--tray");
     // A second launch only brings the running copy's main window back.
     if !tray::single_instance() {
+        if by_windows {
+            system::log_line("start.log", "Windows 시작: 이미 실행 중");
+        }
         return Ok(());
+    }
+    if by_windows {
+        // Shows whether Windows started the program at sign-in at all.
+        system::log_line("start.log", "Windows 시작: 트레이로 실행");
     }
     system::migrate_old_data_dirs();
     // The root window is an invisible, never-minimized host. Every visible
@@ -1405,6 +1438,9 @@ fn main() -> eframe::Result {
         },
         Box::new(|cc| Ok(Box::new(App::new(cc)))),
     );
+    if let Err(e) = &result {
+        system::log_line("crash.log", &format!("창을 만들지 못함: {e}"));
+    }
     // After a quit everything is saved and every window is gone: end the
     // process now instead of waiting for it to be taken down piece by piece.
     if quit::QUIT.requested() {

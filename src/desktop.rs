@@ -95,7 +95,7 @@ impl Default for Desktop {
             row_spacing: 1,
             opacity: 100.,
             image_scale: 3,
-            autostart: false,
+            autostart: true,
             taskbar: false,
             retention: 1,
             auto_lock: 1,
@@ -1049,8 +1049,14 @@ impl App {
                     ui,
                     &mut self.desktop.autostart,
                     "Windows 시작 시 자동 실행",
-                    "트레이에서 시작하고, 열어 둔 스티커 메모가 제자리에 다시 뜹니다",
+                    "트레이에서 시작하고, 열어 둔 스티커 메모와 캘린더가 제자리에 다시 뜹니다",
                 );
+                if self.desktop.autostart && crate::system::autostart_turned_off_in_windows() {
+                    hint(
+                        ui,
+                        "⚠ Windows에서 꺼져 있어요 · Windows 설정 › 앱 › 시작 프로그램에서 OhMemoJang을 켜 주세요",
+                    );
+                }
                 section(ui, "첫 화면");
                 ui.horizontal_wrapped(|ui| {
                     for (page, name, _) in crate::PAGES {

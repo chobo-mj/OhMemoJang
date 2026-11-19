@@ -66,8 +66,8 @@ pub fn take_queued() -> bool {
     let _ = std::fs::remove_file(&path);
     let mut any = false;
     for line in text.lines().filter(|l| !l.trim().is_empty()) {
-        answer(line.trim());
-        any = true;
+        // A press on the start notice only shows the main window.
+        any |= answer(line.trim());
     }
     any
 }
@@ -77,10 +77,25 @@ pub fn take_answers() -> Vec<Answer> {
     std::mem::take(&mut *ANSWERS.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
-pub fn answer(arguments: &str) {
+/// True for an alarm button's link (not the start notice's "show").
+pub fn is_alarm(arguments: &str) -> bool {
+    parse(arguments).is_some()
+}
+/// Takes a press; false when it is no alarm answer (the start notice).
+pub fn answer(arguments: &str) -> bool {
+    match parse(arguments) {
+        Some(a) => {
+            ANSWERS.lock().unwrap_or_else(|e| e.into_inner()).push(a);
+            crate::wake::now();
+            true
+        }
+        None => false,
+    }
+}
+fn parse(arguments: &str) -> Option<Answer> {
     let arguments = arguments.strip_prefix(SCHEME).unwrap_or(arguments);
     // "<what>:<memo>" or "<what>:<memo><which alarm>" (m, p, x).
-    let parsed = arguments.split_once(':').and_then(|(what, token)| {
+    arguments.split_once(':').and_then(|(what, token)| {
         let digits: String = token.chars().take_while(char::is_ascii_digit).collect();
         let note: usize = digits.parse().ok()?;
         let letter = token[digits.len()..].chars().next();
@@ -90,11 +105,7 @@ pub fn answer(arguments: &str) {
             "done" => Answer::Done(note, letter),
             _ => return None,
         })
-    });
-    if let Some(a) = parsed {
-        ANSWERS.lock().unwrap_or_else(|e| e.into_inner()).push(a);
-        crate::wake::now();
-    }
+    })
 }
 
 /// Characters XML would read as markup.
@@ -363,6 +374,25 @@ mod imp {
         Ok(())
     }
 
+    /// A plain notice (no buttons). Pressing it opens the main window.
+    pub fn notice(title: &str, body: &str) -> Result<(), String> {
+        if !prepare() {
+            return Err("알림 등록 실패".into());
+        }
+        let err = |e: windows::core::Error| e.message().to_string();
+        let doc = XmlDocument::new().map_err(err)?;
+        doc.LoadXml(&HSTRING::from(format!(
+            r#"<toast launch="{SCHEME}show:" activationType="protocol"><visual><binding template="ToastGeneric"><text>{}</text><text>{}</text></binding></visual><audio silent="true"/></toast>"#,
+            escape(title),
+            escape(body)
+        )))
+        .map_err(err)?;
+        let toast = ToastNotification::CreateToastNotification(&doc).map_err(err)?;
+        let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_ID))
+            .map_err(err)?;
+        notifier.Show(&toast).map_err(err)
+    }
+
     /// Take a memo's alarm notification out of the notification center.
     pub fn remove(note: usize) {
         if READY.lock().map(|r| *r != Some(true)).unwrap_or(true) {
@@ -387,12 +417,21 @@ mod imp {
         Err("Windows only".into())
     }
     pub fn remove(_: usize) {}
+    pub fn notice(_: &str, _: &str) -> Result<(), String> {
+        Err("Windows only".into())
+    }
 }
 
-pub use imp::{prepare, remove, show};
+pub use imp::{notice, prepare, remove, show};
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_start_notice_link_is_no_alarm_answer() {
+        assert!(!super::is_alarm("ohmemojang:show:"));
+        assert!(super::is_alarm("ohmemojang:open:3m"));
+        assert!(!super::answer("ohmemojang:show:"));
+    }
     use super::*;
     #[test]
     fn notification_text_is_escaped_and_buttons_carry_the_memo() {

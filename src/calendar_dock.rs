@@ -118,6 +118,9 @@ pub struct Dock {
     /// pane on the right. Kept as a fraction (not pixels) so the split stays
     /// proportional as the window is resized.
     split_frac: f32,
+    /// Frames until the calendar, standing at the last quit, stands on the
+    /// desktop again (0: nothing pending).
+    stand_on_start: u8,
 }
 
 impl Dock {
@@ -151,6 +154,7 @@ impl Default for Dock {
             drew_pinned: false,
             horizontal: false,
             split_frac: 1. / 3.,
+            stand_on_start: 0,
         }
     }
 }
@@ -163,6 +167,52 @@ impl Dock {
         } else {
             None
         }
+    }
+    /// Where the calendar was, for the next start.
+    pub fn write_place(&self, s: &mut crate::storage::SettingsRec) {
+        s.cal_state = match self.state {
+            DockState::Hidden => 0,
+            DockState::Window => 1,
+            DockState::Box => 2,
+        };
+        let at = if self.state == DockState::Box {
+            self.open_at.or(self.window_at)
+        } else {
+            self.window_at.or(self.open_at)
+        };
+        s.cal_window = at.map_or([0.; 4], |(p, v)| [p.x, p.y, v.x, v.y]);
+        s.cal_box_at = self.box_at.map(|p| [p.x, p.y]);
+        s.cal_standing =
+            self.state == DockState::Window && (self.standing.is_some() || self.stand_on_start > 0);
+    }
+    /// The calendar comes back the way it was at the last quit.
+    pub fn read_place(&mut self, s: &crate::storage::SettingsRec) {
+        let [x, y, w, h] = s.cal_window;
+        if w >= 200. && h >= 200. && x.is_finite() && y.is_finite() {
+            let at = (Pos2::new(x, y), Vec2::new(w, h));
+            self.window_at = Some(at);
+            self.open_at = Some(at);
+        }
+        if let Some([x, y]) = s.cal_box_at.filter(|p| p.iter().all(|v| v.is_finite())) {
+            self.box_at = Some(Pos2::new(x, y));
+        }
+        self.state = match s.cal_state {
+            1 => DockState::Window,
+            2 => {
+                self.box_spawn = self
+                    .box_at
+                    .or(self.window_at.map(|(p, _)| p))
+                    .unwrap_or(self.box_spawn);
+                DockState::Box
+            }
+            _ => DockState::Hidden,
+        };
+        // A few frames after the window is up, as if its button was pressed.
+        self.stand_on_start = if s.cal_standing && self.state == DockState::Window {
+            10
+        } else {
+            0
+        };
     }
     /// Minimize the calendar window into its color box.
     fn minimize_to_box(&mut self) {
@@ -280,6 +330,14 @@ impl App {
                     });
                 if !standing && self.calendar_view_menu(ctx) {
                     stand = true;
+                }
+                if self.cal.stand_on_start > 0 && !standing {
+                    self.cal.stand_on_start -= 1;
+                    if self.cal.stand_on_start == 0 && outer.is_some() && inner.is_some() {
+                        stand = true;
+                    } else {
+                        ctx.request_repaint_after(std::time::Duration::from_millis(50));
+                    }
                 }
                 // The calendar keeps its current place on the desktop, so
                 // the stand button's screen rect is known from here. Either

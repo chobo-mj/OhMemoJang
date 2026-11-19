@@ -264,6 +264,16 @@ pub struct SettingsRec {
     pub show_done: bool,
     pub cal_box_color: [u8; 4],
     pub cal_box_size: f32,
+    /// Saved by 2.1 or later: autostart was turned on once for saves
+    /// written before it was on by default.
+    pub autostart_v21: bool,
+    /// The calendar at quit: 0 closed, 1 window, 2 color box.
+    pub cal_state: u8,
+    /// Calendar window position and size (x, y, w, h); w 0: none yet.
+    pub cal_window: [f32; 4],
+    pub cal_box_at: Option<[f32; 2]>,
+    /// The calendar stood on the desktop at quit.
+    pub cal_standing: bool,
 }
 
 impl Default for SettingsRec {
@@ -306,6 +316,11 @@ impl Default for SettingsRec {
             show_done: false,
             cal_box_color: color(PALETTE[6]),
             cal_box_size: 56.,
+            autostart_v21: false,
+            cal_state: 0,
+            cal_window: [0.; 4],
+            cal_box_at: None,
+            cal_standing: false,
         };
         s.read_desktop(&d);
         s
@@ -912,6 +927,8 @@ impl App {
         settings.show_done = self.extra.show_done;
         settings.cal_box_color = color(self.cal.box_color);
         settings.cal_box_size = self.cal.box_size;
+        settings.autostart_v21 = true;
+        self.cal.write_place(&mut settings);
         Saved {
             version: 2,
             notes: vec![],
@@ -1074,6 +1091,11 @@ impl App {
         if st.cal_box_size >= 32. {
             self.cal.box_size = st.cal_box_size.min(200.);
         }
+        if !st.autostart_v21 {
+            // Saved before autostart was on by default: turned on once.
+            self.desktop.autostart = true;
+        }
+        self.cal.read_place(st);
         self.studio.windows.clear();
         // Memo windows left open (stickers on the desktop) come back.
         for r in &s.session {
@@ -1725,6 +1747,50 @@ mod tests {
                 .unwrap()
                 .deadline
         );
+    }
+    #[test]
+    fn autostart_is_turned_on_once_for_older_saves_and_the_calendar_comes_back() {
+        let dir = std::env::temp_dir().join(format!(
+            "ohmemojang-store-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let day = NaiveDate::from_ymd_opt(2026, 11, 11).unwrap();
+        let mut a = App::sample(day);
+        a.desktop.autostart = false;
+        let mut old = a.snapshot(&dir);
+        // A save written before 2.1 has no `autostart_v21`.
+        old.settings.autostart_v21 = false;
+        let mut b = App::sample(day);
+        b.restore(&old);
+        assert!(b.desktop.autostart, "turned on once");
+        // Turned off again after that, it stays off.
+        b.desktop.autostart = false;
+        let new = b.snapshot(&dir);
+        assert!(new.settings.autostart_v21);
+        let mut c = App::sample(day);
+        c.restore(&new);
+        assert!(!c.desktop.autostart);
+        // The calendar window, standing at quit, comes back standing.
+        c.cal.read_place(&SettingsRec {
+            cal_state: 1,
+            cal_window: [120., 80., 860., 760.],
+            cal_standing: true,
+            ..SettingsRec::default()
+        });
+        assert!(c.cal.state == crate::calendar_dock::DockState::Window);
+        let mut s = SettingsRec::default();
+        c.cal.write_place(&mut s);
+        assert_eq!(s.cal_state, 1);
+        assert_eq!(s.cal_window, [120., 80., 860., 760.]);
+        assert!(s.cal_standing, "still pending: kept for the next start");
+        // A closed calendar stays closed; a bad size is ignored.
+        c.cal.read_place(&SettingsRec {
+            cal_state: 0,
+            cal_window: [0., 0., 10., 10.],
+            ..SettingsRec::default()
+        });
+        assert!(c.cal.state == crate::calendar_dock::DockState::Hidden);
     }
     #[test]
     fn memos_wiki_settings_and_pictures_survive_saving() {

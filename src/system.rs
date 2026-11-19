@@ -135,6 +135,14 @@ pub fn set_autostart(on: bool) -> Result<(), String> {
         let name = wide("OhMemoJang");
         let old_name = wide("OmniMemoJang");
         let mut h: HKEY = std::ptr::null_mut();
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        if on && runs_from_temp(&exe) {
+            // Opened straight from the zip: that folder is gone later.
+            return Err(
+                "압축 파일 안에서 실행 중이라 자동 실행을 켤 수 없어요 · 압축을 푼 뒤 실행해 주세요"
+                    .into(),
+            );
+        }
         // SAFETY: plain registry calls on a key this function opens and closes.
         unsafe {
             if RegOpenKeyExW(HKEY_CURRENT_USER, key.as_ptr(), 0, KEY_SET_VALUE, &mut h) != 0 {
@@ -143,7 +151,6 @@ pub fn set_autostart(on: bool) -> Result<(), String> {
             // The entry the program had under its old name must not start it twice.
             RegDeleteValueW(h, old_name.as_ptr());
             let result = if on {
-                let exe = std::env::current_exe().map_err(|e| e.to_string())?;
                 // Started by Windows: straight to the tray, stickers on the desktop.
                 let value = wide(&format!("\"{}\" --tray", exe.display()));
                 RegSetValueExW(
@@ -175,6 +182,101 @@ pub fn set_autostart(on: bool) -> Result<(), String> {
         let _ = on;
         Ok(())
     }
+}
+
+/// True for a program started from the temporary folder (a zip opened in
+/// Explorer runs its files from there).
+pub fn runs_from_temp(exe: &std::path::Path) -> bool {
+    let Some(temp) = std::env::var_os("TEMP").or_else(|| std::env::var_os("TMP")) else {
+        return false;
+    };
+    let lower = |p: &std::path::Path| p.to_string_lossy().to_lowercase().replace('/', "\\");
+    let temp = lower(std::path::Path::new(&temp));
+    !temp.is_empty() && lower(exe).starts_with(&format!("{}\\", temp.trim_end_matches('\\')))
+}
+
+/// True when the program's start-up entry is turned off in Windows (Task
+/// Manager or 설정 › 앱 › 시작 프로그램): Windows then skips it at sign-in.
+pub fn autostart_turned_off_in_windows() -> bool {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Registry::{
+            RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_BINARY,
+        };
+        let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+        let key = wide(r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run");
+        let name = wide("OhMemoJang");
+        let mut data = [0u8; 12];
+        let mut size = data.len() as u32;
+        // SAFETY: reads at most `size` bytes into `data`; no pointer is kept.
+        let r = unsafe {
+            RegGetValueW(
+                HKEY_CURRENT_USER,
+                key.as_ptr(),
+                name.as_ptr(),
+                RRF_RT_REG_BINARY,
+                std::ptr::null_mut(),
+                data.as_mut_ptr().cast(),
+                &mut size,
+            )
+        };
+        // The first byte is even when enabled (2, 6) and odd when turned off (3, 7).
+        r == 0 && size > 0 && data[0] & 1 == 1
+    }
+    #[cfg(not(windows))]
+    false
+}
+
+/// `%LOCALAPPDATA%\OhMemoJang\logs`
+fn log_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("LOCALAPPDATA")
+        .map(|d| std::path::PathBuf::from(d).join("OhMemoJang").join("logs"))
+}
+
+/// Adds a line to a small log in the logs folder, keeping its last 200 lines.
+pub fn log_line(file: &str, line: &str) {
+    let Some(dir) = log_dir() else { return };
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join(file);
+    let old = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut lines: Vec<&str> = old.lines().collect();
+    let skip = lines.len().saturating_sub(199);
+    lines.drain(..skip);
+    let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+    let text = format!(
+        "{}{}{stamp} {line}\n",
+        lines.join("\n"),
+        if lines.is_empty() { "" } else { "\n" }
+    );
+    let _ = std::fs::write(&path, text);
+}
+
+/// A crash is written to `logs\crash.log` before the program ends, so a
+/// start that fails without a window (at sign-in, say) can be told apart.
+pub fn log_crashes() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let place = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_default();
+        let message = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_default();
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        log_line(
+            "crash.log",
+            &format!(
+                "{} {place} {message} (args: {})",
+                env!("CARGO_PKG_VERSION"),
+                args.join(" ")
+            ),
+        );
+        previous(info);
+    }));
 }
 
 /// The Windows notification sound.
@@ -277,6 +379,19 @@ pub fn windows_build() -> u32 {
 
 #[cfg(test)]
 mod standing_tests {
+    #[test]
+    fn a_program_run_from_the_temp_folder_is_told_apart() {
+        let Some(temp) = std::env::var_os("TEMP").or_else(|| std::env::var_os("TMP")) else {
+            return;
+        };
+        let temp = std::path::PathBuf::from(temp);
+        assert!(super::runs_from_temp(
+            &temp.join("Temp1_OhMemoJang.zip").join("OhMemoJang.exe")
+        ));
+        assert!(!super::runs_from_temp(std::path::Path::new(
+            r"C:\Users\u\AppData\Local\Programs\OhMemoJang\OhMemoJang.exe"
+        )));
+    }
     #[test]
     fn only_windows_11_24h2_lacks_the_standing_calendar() {
         use super::standing_unsupported_on as no;

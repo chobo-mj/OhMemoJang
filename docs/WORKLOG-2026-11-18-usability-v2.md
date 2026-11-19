@@ -461,3 +461,25 @@
 - 테스트: `text_around_a_copied_table_keeps_its_order`, `a_paste_after_a_lost_ime_commit_still_makes_a_table`, `a_paste_in_the_same_frame_as_an_ime_commit_waits_a_frame`, `tables_paste_as_tab_separated_text_when_chosen`, `text_table_text_html_splits_in_order`, `a_plain_table_or_plain_text_is_not_split`.
 - 확인(시험용 프로필): PowerShell로 '앞 문단 / 2×2 표 / 뒤 문단' CF_HTML을 클립보드에 올리고 스티커에 Ctrl+V 했다. 글, 표, 글 순서로 붙었고 Ctrl+Z 한 번에 빈 메모로 돌아갔다. 설정에서 '텍스트(탭 구분)'를 고르자 표가 탭 글자로 붙었다. 시험 뒤 설정을 '표'로 되돌리고 클립보드 글자를 되돌렸다.
 - 확인 못 함: 엑셀 실물 복사, 한글 입력 직후 Ctrl+V(IME 커밋과 같은 프레임)는 화면으로 재현하지 않았다(테스트로만 확인).
+
+## 2.1 작업 7: Windows 시작 시 자동 실행
+
+- 요청: 24H2에서 자동 실행이 안 된다(트레이 아이콘도 없었음). 기본 켬, 기존 사용자도 한 번 켠다. 실행되면 트레이 + 시작 알림, 메인 창은 열지 않는다. 스탠딩 캘린더와 꺼내 둔 스티커는 종료 전 상태대로 떠야 한다.
+- 조사:
+  - 등록 방식은 HKCU `Run` 값 `"<exe>" --tray`다. 코드에 24H2만 다른 부분은 찾지 못했다. 이 PC(25H2)에서는 값이 바르게 써진다.
+  - 아이콘조차 없었다면 Windows가 실행하지 않았거나, 실행 직후 창 없이 끝난 것이다. 지금까지는 둘을 구별할 기록이 없었다.
+  - 짚이는 원인: (1) 압축 파일을 탐색기에서 연 채 실행하면 exe가 임시 폴더에서 돌고, 나중에 그 폴더가 지워져 등록된 경로가 사라진다. (2) 작업 관리자·설정의 '시작 프로그램'에서 꺼져 있으면 Windows가 건너뛴다. (3) 로그인 직후 초기화 중 비정상 종료.
+- 수정:
+  - `system::log_crashes`: 패닉을 `%LOCALAPPDATA%\OhMemoJang\logs\crash.log`에 남긴다(버전, 위치, 메시지, 인수). 창 생성 실패(`run_native` 오류)도 남긴다.
+  - `--tray`로 시작하면 `logs\start.log`에 한 줄을 남긴다(이미 실행 중일 때도). 로그는 200줄만 둔다.
+  - 임시 폴더에서 실행 중이면 자동 실행을 켜지 않고 '압축을 푼 뒤 실행해 주세요'를 알린다(`runs_from_temp`).
+  - `StartupApproved\Run`의 OhMemoJang 값이 꺼짐(첫 바이트 홀수)이면 설정 › 일반에 경고를 보인다(`autostart_turned_off_in_windows`). 사용자의 Windows 설정은 바꾸지 않는다.
+  - 기본 켬: `Desktop::default().autostart = true`. 저장에 `autostart_v21`이 없으면(2.1 이전) 한 번 켠다. 켜진 값은 시작할 때 Run에 다시 쓰여 exe 경로를 따라간다.
+  - 시작 알림: `--tray`로 시작하고 4초 뒤 '시작되었어요' 알림(`toast::notice`). 누르면 `ohmemojang:show:`로 메인 창이 열린다(알람 응답으로 오인하지 않게 `toast::is_alarm`).
+  - 캘린더 복원: 저장에 캘린더 상태(닫힘/창/색상 상자), 창 위치·크기, 상자 위치, 스탠딩 여부를 넣었다(`Dock::write_place`/`read_place`). 스탠딩이었다면 창이 뜨고 10프레임 뒤 스탠딩 버튼을 누른 것처럼 다시 고정한다. 스티커는 원래도 복원된다.
+- 테스트: `autostart_is_turned_on_once_for_older_saves_and_the_calendar_comes_back`, `a_program_run_from_the_temp_folder_is_told_apart`, `the_start_notice_link_is_no_alarm_answer`.
+- 확인(시험용 프로필):
+  - 실행하자 Run에 `OhMemoJang`이 써지고 옛 개발용 `OmniMemoJang`이 지워졌다.
+  - 캘린더 분리창을 스탠딩으로 고정한 뒤 프로세스를 끝내고 `--tray`로 다시 켰다. 메인 창은 열리지 않았고, 스티커와 스탠딩 캘린더가 같은 자리에 돌아왔다. start.log에 줄이 생겼다.
+- 확인 못 함: 실제 로그인 시 실행(24H2 포함), 시작 알림 팝업(화면에서 보지 못함).
+- 참고: 이 PC의 Run 값은 지금 `targetelease\ohmemojang.exe`를 가리킨다(실제 데이터 앱도 이 exe로 실행 중이라 다음 로그인 때 자동으로 켜진다).
