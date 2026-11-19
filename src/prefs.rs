@@ -33,6 +33,8 @@ pub struct Prefs {
     /// grid (side by side): in 내 작업실 (on by default) and in the 캘린더 page.
     pub cal_side_work: bool,
     pub cal_side_page: bool,
+    /// A copied table is pasted as tab separated text, not as a table.
+    pub paste_table_text: bool,
 }
 
 impl Default for Prefs {
@@ -54,6 +56,7 @@ impl Default for Prefs {
             tray_hint_done: false,
             cal_side_work: true,
             cal_side_page: false,
+            paste_table_text: false,
         }
     }
 }
@@ -62,7 +65,7 @@ impl Prefs {
     pub fn to_text(&self) -> String {
         let hidden: Vec<String> = self.hidden_pages.iter().map(|p| p.to_string()).collect();
         format!(
-            "sidebar_width={}\ndrop_schedule_choice={}\nclose_completed_sticker={}\nrearrange_completed_stickers={}\nstart_page={}\nhidden_pages={}\ncal_theme={}\ncal_font={}\ncal_hide_done={}\ncal_strike={}\ncal_weeks={}\ndata_path={}\nfirst_run_done={}\ntray_hint_done={}\ncal_side_work={}\ncal_side_page={}\n",
+            "sidebar_width={}\ndrop_schedule_choice={}\nclose_completed_sticker={}\nrearrange_completed_stickers={}\nstart_page={}\nhidden_pages={}\ncal_theme={}\ncal_font={}\ncal_hide_done={}\ncal_strike={}\ncal_weeks={}\ndata_path={}\nfirst_run_done={}\ntray_hint_done={}\ncal_side_work={}\ncal_side_page={}\npaste_table_text={}\n",
             self.sidebar_width,
             self.drop_schedule_choice,
             self.close_completed_sticker,
@@ -79,6 +82,7 @@ impl Prefs {
             self.tray_hint_done,
             self.cal_side_work,
             self.cal_side_page,
+            self.paste_table_text,
         )
     }
     /// Unknown keys and bad values fall back to the defaults.
@@ -114,6 +118,7 @@ impl Prefs {
                 "tray_hint_done" => p.tray_hint_done = value == "true",
                 "cal_side_work" => p.cal_side_work = value == "true",
                 "cal_side_page" => p.cal_side_page = value == "true",
+                "paste_table_text" => p.paste_table_text = value == "true",
                 _ => {}
             }
         }

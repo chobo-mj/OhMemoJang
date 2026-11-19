@@ -1083,6 +1083,16 @@ impl App {
                     ui,
                     "체크한 메뉴를 왼쪽 메뉴창에서 숨깁니다 · 내 작업실은 숨길 수 없습니다",
                 );
+                section(ui, "표 붙여넣기");
+                let mut as_text = usize::from(self.prefs.paste_table_text);
+                if segmented(ui, &mut as_text, &["표", "텍스트(탭 구분)"]) {
+                    self.prefs.paste_table_text = as_text == 1;
+                    crate::composer::set_paste_tables_as_text(self.prefs.paste_table_text);
+                }
+                hint(
+                    ui,
+                    "엑셀 · 웹에서 복사한 표를 메모에 붙일 때의 모양입니다 · 텍스트는 칸 사이를 탭으로 나눕니다",
+                );
                 section(ui, "휴지통 보관 기간");
                 segmented(
                     ui,

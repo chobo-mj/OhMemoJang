@@ -765,6 +765,181 @@ fn layout_rows(trs: &[scraper::ElementRef], css: &Css, first_offset: usize) -> (
     }
     (lcs, trs.len())
 }
+/// One part of pasted HTML: running text or a table, in document order.
+pub enum Piece {
+    Text(String),
+    Table(Table),
+}
+impl std::fmt::Debug for Piece {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Piece::Text(t) => write!(f, "Text({t:?})"),
+            Piece::Table(t) => write!(f, "Table({}x{})", t.cells.len(), t.cells[0].len()),
+        }
+    }
+}
+
+/// Clipboard HTML that holds text around its tables (a web page or a
+/// document with "text, table, text"), split in order. `None` when there is
+/// no text outside the tables, or no table of more than one cell: such a
+/// paste is a plain table or plain text.
+pub fn pieces_from_html(html: &str) -> Option<Vec<Piece>> {
+    use scraper::{node::Node, ElementRef, Html};
+    let lower = html.to_ascii_lowercase();
+    if !lower.contains("<table") {
+        return None;
+    }
+    // CF_HTML marks the copied part; the rest is page context.
+    let fragment = match (
+        lower.find("<!--startfragment-->"),
+        lower.find("<!--endfragment-->"),
+    ) {
+        (Some(a), Some(b)) if a + 20 <= b => &html[a + 20..b],
+        _ => html,
+    };
+    // The style block (Excel and Word keep cell looks in classes there).
+    let mut style = String::new();
+    let mut from = 0;
+    while let Some(a) = lower[from..].find("<style") {
+        let a = from + a;
+        let Some(end) = lower[a..].find("</style>") else {
+            break;
+        };
+        style.push_str(&html[a..a + end + 8]);
+        from = a + end + 8;
+    }
+    struct Walk {
+        pieces: Vec<Piece>,
+        text: String,
+        style: String,
+    }
+    impl Walk {
+        fn line_break(&mut self) {
+            if !self.text.is_empty() && !self.text.ends_with('\n') {
+                self.text.push('\n');
+            }
+        }
+        fn flush(&mut self) {
+            let t = std::mem::take(&mut self.text);
+            if !t.trim().is_empty() {
+                self.pieces.push(Piece::Text(t));
+            }
+        }
+        fn visit(&mut self, node: ego_tree::NodeRef<Node>) {
+            match node.value() {
+                Node::Text(t) => {
+                    let mut last_space = self.text.is_empty()
+                        || self.text.ends_with(' ')
+                        || self.text.ends_with('\n');
+                    for ch in t.chars() {
+                        if ch.is_whitespace() {
+                            if !last_space {
+                                self.text.push(' ');
+                                last_space = true;
+                            }
+                        } else {
+                            self.text.push(ch);
+                            last_space = false;
+                        }
+                    }
+                }
+                Node::Element(e) => {
+                    let name = e.name();
+                    match name {
+                        "script" | "style" | "head" | "title" | "meta" | "link" => {}
+                        "br" => {
+                            // Trailing spaces before the break go.
+                            while self.text.ends_with(' ') {
+                                self.text.pop();
+                            }
+                            self.text.push('\n');
+                        }
+                        "table" => {
+                            let Some(el) = ElementRef::wrap(node) else {
+                                return;
+                            };
+                            let table = table_from_html(&format!("{}{}", self.style, el.html()))
+                                .filter(|t| t.cells.len() > 1 || t.cells[0].len() > 1);
+                            match table {
+                                Some(t) => {
+                                    self.flush();
+                                    self.pieces.push(Piece::Table(t));
+                                }
+                                // A one-cell (layout) table is only a box of text.
+                                None => node.children().for_each(|c| self.visit(c)),
+                            }
+                        }
+                        _ => {
+                            let block = matches!(
+                                name,
+                                "p" | "div"
+                                    | "li"
+                                    | "ul"
+                                    | "ol"
+                                    | "h1"
+                                    | "h2"
+                                    | "h3"
+                                    | "h4"
+                                    | "h5"
+                                    | "h6"
+                                    | "pre"
+                                    | "blockquote"
+                                    | "section"
+                                    | "article"
+                                    | "header"
+                                    | "footer"
+                                    | "tr"
+                                    | "hr"
+                            );
+                            if block {
+                                self.line_break();
+                            }
+                            node.children().for_each(|c| self.visit(c));
+                            if block {
+                                self.line_break();
+                            }
+                        }
+                    }
+                }
+                _ => node.children().for_each(|c| self.visit(c)),
+            }
+        }
+    }
+    let doc = Html::parse_fragment(fragment);
+    let mut walk = Walk {
+        pieces: vec![],
+        text: String::new(),
+        style,
+    };
+    walk.visit(doc.tree.root());
+    walk.flush();
+    let has_table = walk.pieces.iter().any(|p| matches!(p, Piece::Table(_)));
+    let has_text = walk.pieces.iter().any(|p| matches!(p, Piece::Text(_)));
+    if !(has_table && has_text) {
+        return None;
+    }
+    // Tidy the text: no spaces at line ends, at most one blank line, and a
+    // table always on a line of its own.
+    let n = walk.pieces.len();
+    for (i, p) in walk.pieces.iter_mut().enumerate() {
+        if let Piece::Text(t) = p {
+            let mut lines: Vec<&str> = t.split('\n').map(|l| l.trim_matches(' ')).collect();
+            lines.dedup_by(|a, b| a.is_empty() && b.is_empty());
+            let mut s = lines.join("\n").replace('\u{a0}', " ");
+            let first = i == 0;
+            let last = i + 1 == n;
+            let body = s.trim_matches('\n').to_owned();
+            s = format!(
+                "{}{}{}",
+                if first { "" } else { "\n" },
+                body,
+                if last { "" } else { "\n" }
+            );
+            *t = s;
+        }
+    }
+    Some(walk.pieces)
+}
 
 /// Tab separated text with Excel's quoting. A quoted value may hold tabs,
 /// line breaks and doubled quotes. A trailing line break ends the last row.
@@ -1118,6 +1293,30 @@ pub fn is_valid(t: &Table) -> bool {
         }
     }
     owner.iter().flatten().all(|&n| n == 1)
+}
+
+#[cfg(test)]
+mod piece_tests {
+    use super::*;
+    #[test]
+    fn text_table_text_html_splits_in_order() {
+        let html = "Version:0.9\r\nStartHTML:1\r\n<html><head><style>td{}</style></head>\
+            <body><!--StartFragment--><p>앞  글</p>\
+            <table><tr><td>a</td><td>b</td></tr><tr><td>c</td><td>d</td></tr></table>\
+            <div>뒤<br>글</div><!--EndFragment--></body></html>";
+        let p = pieces_from_html(html).unwrap();
+        assert_eq!(p.len(), 3);
+        assert!(matches!(&p[0], Piece::Text(t) if t == "앞 글\n"), "{p:?}");
+        assert!(matches!(&p[1], Piece::Table(t) if t.cells.len() == 2 && t.cells[0].len() == 2));
+        assert!(matches!(&p[2], Piece::Text(t) if t == "\n뒤\n글"), "{p:?}");
+    }
+    #[test]
+    fn a_plain_table_or_plain_text_is_not_split() {
+        assert!(pieces_from_html("<table><tr><td>a</td><td>b</td></tr></table>").is_none());
+        assert!(pieces_from_html("<p>글만</p>").is_none());
+        // A one-cell layout table is text.
+        assert!(pieces_from_html("<p>x</p><table><tr><td>y</td></tr></table>").is_none());
+    }
 }
 
 #[cfg(test)]

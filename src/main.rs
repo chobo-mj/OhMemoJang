@@ -224,6 +224,7 @@ impl App {
         let mut a = Self::sample(Local::now().date_naive());
         a.clipboard = clipboard_history::ClipboardHistory::start(&cc.egui_ctx);
         a.prefs = prefs::Prefs::load();
+        composer::set_paste_tables_as_text(a.prefs.paste_table_text);
         a.sidebar_width = a.prefs.sidebar_width;
         a.cal.theme = a.prefs.cal_theme;
         a.load_or_start();

@@ -441,3 +441,23 @@
 - 테스트: `a_copy_announced_twice_is_kept_once`, `a_copy_finished_in_a_second_write_replaces_the_first`, `different_pictures_copied_quickly_are_both_kept`, `an_older_settings_file_is_turned_on_once`.
 - 확인(시험용 프로필): 같은 글자를 두 번 연달아, 다른 글자 뒤에 한 번 더 복사했다. 저장은 한 건이었고 맨 위에 있었다. 시험 뒤 클립보드 글자를 되돌렸다.
 - 확인 못 함: 사용자가 겪은 프로그램(크롬·엑셀 등)에서의 중복은 이 PC에서 따로 재현하지 않았다.
+
+## 2.1 작업 6: 표 붙여넣기 양식, 엑셀 표가 글자로 붙는 문제
+
+- 요청:
+  - 설정 › 일반에 표 붙여넣기 양식(표 / 텍스트) 옵션. 기본은 표다. 텍스트는 칸을 탭으로 나눈 글자로 붙인다.
+  - 엑셀 표가 가끔 표가 아니라 CSV 같은 글자로 붙었다. 그때 새 메모를 열어 붙이면 표로 붙었다. 글+표+글을 복사해 붙일 때도 표로 붙을 때와 글자로 붙을 때가 있었다.
+- 원인(코드로 찾은 것):
+  - 표로 바꾸는 처리는 `focused && !doc.ime && !had_preedit`일 때만 돈다. 메모마다 있는 조합 중 표시(`doc.ime`)가 커밋 없이 켜진 채 남으면, 그 메모에서는 모든 붙여넣기가 글자로 들어간다. 새 메모는 이 표시가 꺼져 있어 표로 붙는다. 사용자가 본 증상과 맞는다.
+  - 한글을 치고 바로 Ctrl+V를 누르면 IME 커밋과 붙여넣기가 한 프레임에 올 수 있다. 그 프레임도 표 변환을 건너뛴다.
+  - 글+표+글 HTML은 가장 큰 표 하나만 붙이고 앞뒤 글은 버렸다. HTML을 못 읽은 때는 글 전체가 탭 표로 바뀌었다.
+- 수정:
+  - 붙여넣기가 오면 `doc.ime`를 끈다(IME는 Ctrl+V 전에 커밋한다).
+  - 같은 프레임에 IME 조합·커밋 이벤트가 있으면 붙여넣기를 한 프레임 미룬다(`hold_paste_during_ime`, 최대 3프레임, 포커스를 잃고 5프레임이 지나면 버림).
+  - `table_edit::pieces_from_html`: CF_HTML의 StartFragment~EndFragment를 문서 순서대로 걸어 글과 표(칸 2개 이상)로 나눈다. 한 칸짜리 배치용 표는 글로 본다. 엑셀·워드 스타일 블록은 표마다 넘긴다. 표는 늘 한 줄을 차지하게 앞뒤에 줄바꿈을 둔다.
+  - `insert_pieces`: 선택 범위를 지우고 글과 표를 차례로 넣는다. 표마다 실행 취소 한 단계이고, 첫 표의 단계는 붙여넣기 전 글로 되돌린다.
+  - 설정 `paste_table_text`(prefs). 켜면 표 변환을 하지 않아 TextEdit가 탭 구분 글자를 넣는다. 표 칸 안에서 붙이는 것은 그대로 칸을 채운다.
+- 가이드: 설정 페이지의 일반 항목을 실제 화면에 맞게 고치고 표 붙여넣기 설명을 더했다(GUIDE_VERSION 17에 포함).
+- 테스트: `text_around_a_copied_table_keeps_its_order`, `a_paste_after_a_lost_ime_commit_still_makes_a_table`, `a_paste_in_the_same_frame_as_an_ime_commit_waits_a_frame`, `tables_paste_as_tab_separated_text_when_chosen`, `text_table_text_html_splits_in_order`, `a_plain_table_or_plain_text_is_not_split`.
+- 확인(시험용 프로필): PowerShell로 '앞 문단 / 2×2 표 / 뒤 문단' CF_HTML을 클립보드에 올리고 스티커에 Ctrl+V 했다. 글, 표, 글 순서로 붙었고 Ctrl+Z 한 번에 빈 메모로 돌아갔다. 설정에서 '텍스트(탭 구분)'를 고르자 표가 탭 글자로 붙었다. 시험 뒤 설정을 '표'로 되돌리고 클립보드 글자를 되돌렸다.
+- 확인 못 함: 엑셀 실물 복사, 한글 입력 직후 Ctrl+V(IME 커밋과 같은 프레임)는 화면으로 재현하지 않았다(테스트로만 확인).

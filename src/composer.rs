@@ -1109,6 +1109,16 @@ fn content_impl(
             .iter()
             .any(|e| matches!(e, egui::Event::Ime(egui::ImeEvent::Preedit(_))))
     });
+    if focused {
+        hold_paste_during_ime(ui, id.with("held_paste"));
+        if ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_)))) {
+            // A paste means no composition is open (the IME commits before
+            // Ctrl+V), so a composing flag left by a lost commit ends here.
+            // Left on, it kept every later paste in this memo from turning
+            // a copied table into a table.
+            doc.ime = false;
+        }
+    }
     let editing = focused || hover;
     doc.editing = editing;
     if focused && !doc.ime && !had_preedit {
@@ -1204,13 +1214,38 @@ fn content_impl(
         });
         let mut table_pasted = false;
         let text_pasted = paste.is_some();
-        if let Some(paste) = paste.filter(|t| t.len() < 1024 * 1024) {
+        // '표 붙여넣기: 텍스트' (설정 › 일반) leaves a copied table as tab
+        // separated text, the way the TextEdit pastes it.
+        let paste = paste
+            .filter(|t| t.len() < 1024 * 1024)
+            .filter(|_| !paste_tables_as_text());
+        let html = paste.as_ref().and_then(|_| clipboard_html_source());
+        // Text around a table (a web page, a document) keeps its order:
+        // text, then the table, then text.
+        if let Some(pieces) = html
+            .as_deref()
+            .and_then(crate::table_edit::pieces_from_html)
+        {
+            pending_cursor = Some(insert_pieces(
+                doc,
+                old_range.clone(),
+                pieces,
+                &before,
+                &spans_before,
+                now,
+            ));
+            table_undo_done = true;
+            ui.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Paste(_))));
+            table_pasted = true;
+        } else if let Some(paste) = paste {
             // The clipboard's real `<table>` markup is read first: its rows,
             // columns and merged cells are exact. One cell is just text.
             // Without markup, tab separated text is split with Excel's
             // quoting (a quoted cell may hold tabs and line breaks).
-            let html_table =
-                clipboard_html_table().filter(|t| t.cells.len() > 1 || t.cells[0].len() > 1);
+            let html_table = html
+                .as_deref()
+                .and_then(Table::from_html)
+                .filter(|t| t.cells.len() > 1 || t.cells[0].len() > 1);
             let table =
                 html_table.or_else(|| paste.contains('\t').then(|| Table::from_tsv(&paste)));
             if let Some(table) = table {
@@ -3768,14 +3803,130 @@ fn copy_range(t: &Table, rng: crate::table_edit::Rng, status: &mut String) {
 /// block holds the fill, text color and alignment Excel puts in classes);
 /// the fragment arboard hands over has no style block.
 fn clipboard_html_table() -> Option<Table> {
-    crate::clipboard_html::read()
-        .and_then(|h| Table::from_html(&h))
-        .or_else(|| {
-            crate::clipboard_copy::Clipboard::new()
-                .ok()
-                .and_then(|mut c| c.get().html().ok())
-                .and_then(|h| Table::from_html(&h))
+    clipboard_html_source().and_then(|h| Table::from_html(&h))
+}
+/// The clipboard's HTML: the whole CF_HTML when it can be read, else the
+/// fragment arboard hands over.
+fn clipboard_html_source() -> Option<String> {
+    #[cfg(test)]
+    return tests::CLIPBOARD_HTML.with(|h| h.borrow().clone());
+    #[cfg(not(test))]
+    crate::clipboard_html::read().or_else(|| {
+        crate::clipboard_copy::Clipboard::new()
+            .ok()
+            .and_then(|mut c| c.get().html().ok())
+    })
+}
+/// '표 붙여넣기' in 설정 › 일반: on, a copied table is pasted as tab
+/// separated text instead of a table.
+#[cfg(not(test))]
+static PASTE_TABLES_AS_TEXT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(test)]
+thread_local! {
+    // Tests run in parallel: each keeps its own choice.
+    static PASTE_TABLES_AS_TEXT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+pub fn set_paste_tables_as_text(on: bool) {
+    #[cfg(not(test))]
+    PASTE_TABLES_AS_TEXT.store(on, std::sync::atomic::Ordering::Relaxed);
+    #[cfg(test)]
+    PASTE_TABLES_AS_TEXT.with(|c| c.set(on));
+}
+fn paste_tables_as_text() -> bool {
+    #[cfg(not(test))]
+    return PASTE_TABLES_AS_TEXT.load(std::sync::atomic::Ordering::Relaxed);
+    #[cfg(test)]
+    PASTE_TABLES_AS_TEXT.with(|c| c.get())
+}
+/// Ctrl+V right after Korean typing can arrive in the same frame as the
+/// IME's commit. The paste then waits a frame (three at most), so the commit
+/// lands first and a copied table still becomes a table.
+fn hold_paste_during_ime(ui: &mut egui::Ui, key: Id) {
+    let pass = ui.ctx().cumulative_pass_nr();
+    let mut tries = 0;
+    if let Some((text, n, at)) = ui.data_mut(|d| d.remove_temp::<(String, u8, u64)>(key)) {
+        // A paste left waiting while the memo lost focus is dropped.
+        if pass.saturating_sub(at) <= 5 {
+            ui.input_mut(|i| i.events.push(egui::Event::Paste(text)));
+            tries = n;
+        }
+    }
+    let ime = ui.input(|i| {
+        i.events.iter().any(|e| {
+            matches!(
+                e,
+                egui::Event::Ime(egui::ImeEvent::Preedit(_) | egui::ImeEvent::Commit(_))
+            )
         })
+    });
+    if !ime || tries >= 3 {
+        return;
+    }
+    let taken = ui.input_mut(|i| {
+        let at = i
+            .events
+            .iter()
+            .position(|e| matches!(e, egui::Event::Paste(_)))?;
+        match i.events.remove(at) {
+            egui::Event::Paste(t) => Some(t),
+            _ => None,
+        }
+    });
+    if let Some(text) = taken {
+        ui.data_mut(|d| d.insert_temp(key, (text, tries + 1, pass)));
+        ui.ctx().request_repaint();
+    }
+}
+/// Puts pasted text and tables in place of `range`, in order, and returns
+/// the cursor after them. Each table is one undo step; undoing the first
+/// brings back the text as it was before the paste.
+fn insert_pieces(
+    doc: &mut Document,
+    range: Range<usize>,
+    pieces: Vec<crate::table_edit::Piece>,
+    before: &str,
+    spans_before: &[Span],
+    now: f64,
+) -> usize {
+    use crate::table_edit::Piece;
+    let active = doc.active;
+    let mut at = range.start;
+    replace_chars(&mut doc.tabs[active].body, range, "");
+    let (mut first, mut after_table) = (true, false);
+    for piece in pieces {
+        match piece {
+            Piece::Text(t) => {
+                replace_chars(&mut doc.tabs[active].body, at..at, &t);
+                at += t.chars().count();
+                after_table = false;
+            }
+            Piece::Table(table) => {
+                if after_table {
+                    replace_chars(&mut doc.tabs[active].body, at..at, "\n");
+                    at += 1;
+                }
+                let text = if first {
+                    before.to_owned()
+                } else {
+                    doc.tabs[active].body.clone()
+                };
+                at = doc.tabs[active].insert_table(at..at, table);
+                if let Some(Block::Table(t)) = doc.tabs[active].blocks.last() {
+                    let entry = UndoKind::TableInserted {
+                        tab: active,
+                        id: t.id,
+                        text,
+                        spans: spans_before.to_vec(),
+                    };
+                    doc.undo.push("표 붙여넣기", entry, now);
+                }
+                first = false;
+                after_table = true;
+            }
+        }
+    }
+    at
 }
 fn clipboard_table(event_text: Option<&str>) -> Option<Table> {
     let html = clipboard_html_table();
@@ -5212,6 +5363,9 @@ mod tests {
         /// Stands in for the clipboard's picture (`None`: no image, or text).
         pub(super) static CLIPBOARD_PICTURE: std::cell::RefCell<Option<Picture>> =
             const { std::cell::RefCell::new(None) };
+        /// Stands in for the clipboard's HTML (`None`: no HTML).
+        pub(super) static CLIPBOARD_HTML: std::cell::RefCell<Option<String>> =
+            const { std::cell::RefCell::new(None) };
     }
     #[test]
     fn remap_cursor_moves_to_the_cut_point_when_a_leading_prefix_is_removed() {
@@ -6186,6 +6340,7 @@ mod inline_picture_tests {
 }
 #[cfg(test)]
 mod inline_table_tests {
+    use super::tests::CLIPBOARD_HTML;
     use super::*;
     #[test]
     fn pasted_table_sits_in_the_text_and_follows_deletion() {
@@ -6225,6 +6380,108 @@ mod inline_table_tests {
                 show(ui, body, doc, "tbl_ui_test");
             });
         });
+    }
+    /// A memo whose body has the keyboard focus, after two frames.
+    fn focused_memo(body: &str) -> (egui::Context, Document, String) {
+        let ctx = egui::Context::default();
+        let mut doc = Document::default();
+        let mut body = body.to_owned();
+        let end = body.chars().count();
+        doc.requested_selection = Some(end..end);
+        ui_frame(&ctx, &mut doc, &mut body, vec![], 0.);
+        ui_frame(&ctx, &mut doc, &mut body, vec![], 0.2);
+        (ctx, doc, body)
+    }
+    fn tables_in(doc: &Document) -> usize {
+        doc.tabs[0]
+            .blocks
+            .iter()
+            .filter(|b| matches!(b, Block::Table(t) if doc.tabs[0].shows(b) && t.positioned))
+            .count()
+    }
+    #[test]
+    fn text_around_a_copied_table_keeps_its_order() {
+        let (ctx, mut doc, mut body) = focused_memo("메모 ");
+        CLIPBOARD_HTML.with(|h| {
+            *h.borrow_mut() = Some(
+                "<p>앞 문단</p><table><tr><td>가</td><td>나</td></tr>\
+                 <tr><td>다</td><td>라</td></tr></table><p>뒤 문단</p>"
+                    .into(),
+            )
+        });
+        let plain = "앞 문단\n가\t나\n다\t라\n뒤 문단".to_owned();
+        ui_frame(
+            &ctx,
+            &mut doc,
+            &mut body,
+            vec![egui::Event::Paste(plain)],
+            0.4,
+        );
+        CLIPBOARD_HTML.with(|h| *h.borrow_mut() = None);
+        assert_eq!(tables_in(&doc), 1, "one table");
+        let text = strip_pictures(&doc.tabs[0].body);
+        assert_eq!(
+            text, "메모 앞 문단\n\n뒤 문단",
+            "text before and after, in order"
+        );
+        let at = doc.tabs[0].body.chars().position(is_picture).unwrap();
+        let before: String = doc.tabs[0].body.chars().take(at).collect();
+        assert!(before.ends_with("앞 문단\n"));
+        doc.undo().unwrap();
+        assert_eq!(doc.tabs[0].body, "메모 ");
+    }
+    #[test]
+    fn a_paste_after_a_lost_ime_commit_still_makes_a_table() {
+        let (ctx, mut doc, mut body) = focused_memo("");
+        // A composition that never got its commit (the memo lost focus).
+        doc.ime = true;
+        let tsv = "가\t나\n다\t라".to_owned();
+        ui_frame(
+            &ctx,
+            &mut doc,
+            &mut body,
+            vec![egui::Event::Paste(tsv)],
+            0.4,
+        );
+        assert_eq!(tables_in(&doc), 1);
+        assert!(!doc.ime);
+    }
+    #[test]
+    fn a_paste_in_the_same_frame_as_an_ime_commit_waits_a_frame() {
+        let (ctx, mut doc, mut body) = focused_memo("");
+        let tsv = "가\t나\n다\t라".to_owned();
+        ui_frame(
+            &ctx,
+            &mut doc,
+            &mut body,
+            vec![
+                egui::Event::Ime(egui::ImeEvent::Commit("한".into())),
+                egui::Event::Paste(tsv),
+            ],
+            0.4,
+        );
+        ui_frame(&ctx, &mut doc, &mut body, vec![], 0.5);
+        assert_eq!(tables_in(&doc), 1, "the held paste became a table");
+        assert!(
+            !strip_pictures(&doc.tabs[0].body).contains('\t'),
+            "no tab separated text"
+        );
+    }
+    #[test]
+    fn tables_paste_as_tab_separated_text_when_chosen() {
+        let (ctx, mut doc, mut body) = focused_memo("");
+        set_paste_tables_as_text(true);
+        let tsv = "가\t나\n다\t라".to_owned();
+        ui_frame(
+            &ctx,
+            &mut doc,
+            &mut body,
+            vec![egui::Event::Paste(tsv)],
+            0.4,
+        );
+        set_paste_tables_as_text(false);
+        assert_eq!(tables_in(&doc), 0);
+        assert!(body.contains("가\t나"), "{body:?}");
     }
     #[test]
     fn body_selection_survives_menu_copy_event() {
