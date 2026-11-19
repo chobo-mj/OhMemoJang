@@ -76,9 +76,8 @@ impl App {
             date,
             if shift { " · 이날까지 업무" } else { "" }
         );
-        if shift && self.desktop.daily_today {
-            self.desktop.daily_shown = None;
-        }
+        // The day's stickers ('매일 오늘 메모') are not opened again here:
+        // that would bring out every memo due today, not only this one.
     }
     pub fn date_drop_dialog(&mut self, ctx: &egui::Context) {
         let Some((note, date)) = self.pending_date_drop else {
@@ -548,6 +547,25 @@ mod tests {
         simulate(&mut a, Pos2::new(30., 30.), Pos2::new(230., 30.));
         assert_eq!(a.pending_date_drop, Some((0, day)));
         assert_eq!(a.schedule_drop_serial, 1);
+    }
+    #[test]
+    fn a_deadline_drop_brings_out_no_other_sticker() {
+        let day = NaiveDate::from_ymd_opt(2026, 11, 17).unwrap();
+        let mut a = App::sample(day);
+        a.desktop.daily_today = true;
+        a.desktop.daily_shown = Some(day);
+        let open_before = a.studio.windows.values().filter(|w| w.open).count();
+        a.assign_dropped_date(1, day, true, true, None);
+        assert!(a.data.notes[1].deadline);
+        assert_eq!(
+            a.desktop.daily_shown,
+            Some(day),
+            "today's stickers are not brought out again"
+        );
+        assert_eq!(
+            a.studio.windows.values().filter(|w| w.open).count(),
+            open_before
+        );
     }
     #[test]
     fn fast_drag_in_one_frame_moves_date_and_preserves_original_note() {

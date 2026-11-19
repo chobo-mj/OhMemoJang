@@ -291,9 +291,6 @@ impl App {
             }
             n.repeat = s.rule();
             n.recurring = !n.repeat.is_none();
-            if n.deadline && self.desktop.daily_today {
-                self.desktop.daily_shown = None;
-            }
             open = false;
         }
         if clear {
