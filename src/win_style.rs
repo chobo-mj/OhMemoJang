@@ -233,9 +233,9 @@ mod desk {
             UnhookWindowsHookEx, WindowFromPoint, EVENT_SYSTEM_FOREGROUND, GA_PARENT, GA_ROOT,
             GWL_EXSTYLE, GW_HWNDNEXT, GW_HWNDPREV, HHOOK, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST,
             LWA_ALPHA, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, SMTO_NORMAL, SWP_ASYNCWINDOWPOS,
-            SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
-            SW_SHOWNOACTIVATE, WH_MOUSE_LL, WINEVENT_OUTOFCONTEXT, WM_APP, WM_LBUTTONUP, WM_TIMER,
-            WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+            SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
+            SW_HIDE, SW_SHOWNOACTIVATE, WH_MOUSE_LL, WINEVENT_OUTOFCONTEXT, WM_APP, WM_LBUTTONUP,
+            WM_TIMER, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
         },
     };
 
@@ -733,15 +733,17 @@ mod desk {
             );
             return true;
         }
+        let parent = GetAncestor(h, GA_PARENT);
         let mut stood: RECT = std::mem::zeroed();
-        GetWindowRect(h, &mut stood);
+        let has_rect = GetWindowRect(h, &mut stood) != 0;
+        // Remove the desktop surface before changing parents. On the classic
+        // desktop Explorer can otherwise keep the last composited picture.
+        ShowWindow(h, SW_HIDE);
         SetLastError(0);
         if SetParent(h, std::ptr::null_mut()).is_null() && GetLastError() != 0 {
+            ShowWindow(h, SW_SHOWNOACTIVATE);
             return false;
         }
-        // Explorer does not always paint the wallpaper again where a child
-        // window was taken out: the calendar's last picture stayed there.
-        refresh([stood.left, stood.top, stood.right, stood.bottom]);
         // Layered only while under the icons.
         let style = GetWindowLongW(h, GWL_EXSTYLE) as u32;
         if style & WS_EX_LAYERED != 0 {
@@ -754,9 +756,34 @@ mod desk {
             r[1],
             r[2] - r[0],
             r[3] - r[1],
-            SWP_NOZORDER | SWP_SHOWWINDOW,
+            SWP_NOZORDER | SWP_SHOWWINDOW | SWP_FRAMECHANGED,
         );
+        if has_rect {
+            let rect = [stood.left, stood.top, stood.right, stood.bottom];
+            redraw_layer(parent, rect);
+            refresh(rect);
+        }
         true
+    }
+
+    unsafe fn redraw_layer(h: HWND, r: PxRect) {
+        let mut a = POINT { x: r[0], y: r[1] };
+        let mut b = POINT { x: r[2], y: r[3] };
+        if h.is_null() || ScreenToClient(h, &mut a) == 0 || ScreenToClient(h, &mut b) == 0 {
+            return;
+        }
+        let rc = RECT {
+            left: a.x,
+            top: a.y,
+            right: b.x,
+            bottom: b.y,
+        };
+        RedrawWindow(
+            h,
+            &rc,
+            std::ptr::null_mut(),
+            RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN,
+        );
     }
 
     /// Redraws `r` (screen pixels) on every desktop layer: Progman with its
@@ -766,22 +793,7 @@ mod desk {
         unsafe extern "system" fn visit(h: HWND, data: LPARAM) -> BOOL {
             let r = *(data as *const PxRect);
             if matches!(class_of(h).as_str(), "WorkerW" | "Progman") {
-                let mut a = POINT { x: r[0], y: r[1] };
-                let mut b = POINT { x: r[2], y: r[3] };
-                ScreenToClient(h, &mut a);
-                ScreenToClient(h, &mut b);
-                let rc = RECT {
-                    left: a.x,
-                    top: a.y,
-                    right: b.x,
-                    bottom: b.y,
-                };
-                RedrawWindow(
-                    h,
-                    &rc,
-                    std::ptr::null_mut(),
-                    RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN,
-                );
+                redraw_layer(h, r);
             }
             1
         }
