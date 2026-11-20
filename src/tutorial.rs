@@ -287,8 +287,6 @@ pub struct Live {
     entered_at: f64,
     /// How many memos there were then (the ones made since are new).
     notes_at: usize,
-    /// The sticker of the step was put beside the calendar window.
-    placed: bool,
 }
 
 impl App {
@@ -461,6 +459,11 @@ impl App {
         self.open_sticker(i, self.data.notes[i].date);
         if let Some(w) = self.studio.windows.get_mut(&i) {
             w.sticker();
+            let offset = match role {
+                Role::Arrange(k) => Vec2::splat((k as f32 - 1.) * 52.),
+                _ => Vec2::ZERO,
+            };
+            w.center_for_tutorial(offset);
         }
         if focus_body {
             let len = self.data.notes[i].body.chars().count();
@@ -532,8 +535,6 @@ impl App {
                 if key != K::DockShift {
                     self.close_role(Role::DockDeadline);
                 }
-                // "다시 보여 주기" puts it beside the window again.
-                self.tutorial_live.placed = false;
                 match key {
                     K::DockDrag => self.open_role(ctx, Role::DockDrag, false),
                     K::DockShift => self.open_role(ctx, Role::DockDeadline, false),
@@ -597,8 +598,16 @@ impl App {
             })
             .collect()
     }
-    /// The schedule made by dragging over days in step `n` goes under the
-    /// tutorial project, so erasing the practice memos at the end takes it.
+    pub(crate) fn tutorial_range_active(&self) -> bool {
+        self.extra
+            .tutorial
+            .checked_sub(STEP0)
+            .and_then(|step| STEPS.get(step as usize))
+            .is_some_and(|step| step.key == K::Range)
+    }
+
+    /// File the practice range under the tutorial project so it can be
+    /// cleaned up with the other examples at the end.
     fn file_range_notes(&mut self, n: usize) {
         if STEPS[n].key != K::Range {
             return;
@@ -662,52 +671,19 @@ impl App {
                     done_at: None,
                     entered_at: now,
                     notes_at: self.data.notes.len(),
-                    placed: false,
                 };
                 self.enter_step(ctx, n);
             }
             // Memo windows just opened come up in front of the main window
             // (a window that does not exist yet misses a single request).
             if now - self.tutorial_live.entered_at < 0.8 {
-                for (k, spot) in self.step_spots(n).into_iter().enumerate() {
+                for spot in self.step_spots(n) {
                     if let Spot::Note(i) = spot {
-                        let id = crate::studio::viewport(i);
-                        ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Focus);
-                        // The stickers to arrange start scattered, so the
-                        // arrangement has something to tidy up.
-                        // Over the main window, so they stay on its monitor.
-                        if STEPS[n].key == K::Arrange {
-                            let base = ctx
-                                .input(|i| {
-                                    i.raw
-                                        .viewports
-                                        .get(&crate::ui::main_viewport())
-                                        .and_then(|v| v.outer_rect)
-                                })
-                                .map_or(egui::Pos2::ZERO, |r| r.min);
-                            let at =
-                                base + egui::vec2(260. + k as f32 * 170., 160. + k as f32 * 110.);
-                            ctx.send_viewport_cmd_to(id, egui::ViewportCommand::OuterPosition(at));
-                        }
+                        ctx.send_viewport_cmd_to(
+                            crate::studio::viewport(i),
+                            egui::ViewportCommand::Focus,
+                        );
                     }
-                }
-            }
-            // The sticker to drop sits beside the calendar window, not
-            // under it: once both windows are there.
-            let role = match STEPS[n].key {
-                K::DockDrag => Some(Role::DockDrag),
-                K::DockShift => Some(Role::DockDeadline),
-                _ => None,
-            };
-            if let Some(i) = role
-                .filter(|_| !self.tutorial_live.placed)
-                .and_then(|r| self.role(r))
-            {
-                let id = crate::studio::viewport(i);
-                if let Some(at) = beside_calendar(ctx, id) {
-                    ctx.send_viewport_cmd_to(id, egui::ViewportCommand::OuterPosition(at));
-                    ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Focus);
-                    self.tutorial_live.placed = true;
                 }
             }
             if self.tutorial_live.done_at.is_none() && self.step_done(n) {
@@ -936,29 +912,6 @@ impl App {
         });
         cmd
     }
-}
-
-/// Where sticker `id` goes to sit beside the calendar window: on its left
-/// when there is room on the screens, else on its right.
-fn beside_calendar(ctx: &egui::Context, id: egui::ViewportId) -> Option<egui::Pos2> {
-    let (cal, sticker) = ctx.input(|i| {
-        let r = |v| i.raw.viewports.get(&v).and_then(|v| v.outer_rect);
-        (r(egui::ViewportId::from_hash_of("calendar")), r(id))
-    });
-    // A window not there yet would miss the request.
-    let (cal, w) = (cal?, sticker?.width());
-    let left = virtual_screen()[0] as f32 / ctx.pixels_per_point();
-    Some(beside(cal, w, left))
-}
-
-fn beside(cal: egui::Rect, w: f32, screen_left: f32) -> egui::Pos2 {
-    let gap = 12.;
-    let x = if cal.min.x - gap - w >= screen_left {
-        cal.min.x - gap - w
-    } else {
-        cal.max.x + gap
-    };
-    egui::pos2(x, cal.min.y + 40.)
 }
 
 /// Add an example memo; its index.
@@ -2366,15 +2319,28 @@ mod tests {
         assert!(a.role(Role::DockDeadline).is_some());
     }
     #[test]
-    fn the_sticker_to_drop_sits_beside_the_calendar_window() {
-        let cal = egui::Rect::from_min_max(egui::pos2(500., 100.), egui::pos2(900., 600.));
-        // Room on the left.
-        assert_eq!(beside(cal, 300., 0.), egui::pos2(188., 140.));
-        // None: on the right.
-        assert_eq!(beside(cal, 600., 0.), egui::pos2(912., 140.));
-        // A screen on the left of the main one counts.
-        assert_eq!(beside(cal, 600., -1920.), egui::pos2(-112., 140.));
+    fn an_example_sticker_leaves_its_saved_position_when_the_tour_reopens_it() {
+        let mut a = app();
+        a.tutorial_start();
+        a.desktop.new_right = true;
+        a.prefs.sticker_reopen_position = 2;
+        let note = a.role(Role::Practice).unwrap();
+        a.studio.open(note, None);
+        let w = a.studio.windows.get_mut(&note).unwrap();
+        w.last_pos = Some(egui::pos2(24., 36.));
+        w.open = false;
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            a.open_role(ctx, Role::Practice, true)
+        });
+        let w = &a.studio.windows[&note];
+        assert!(w.open && w.mode == crate::studio::Mode::Sticker);
+        assert!(
+            w.place.is_none(),
+            "the old position cannot override the tutorial center"
+        );
     }
+
     #[test]
     fn a_tour_from_an_older_version_gets_the_calendar_window_memos_once() {
         let mut a = app();

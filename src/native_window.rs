@@ -447,6 +447,17 @@ pub fn work_area(ctx: &egui::Context) -> Option<Rect> {
             .map(|size| Rect::from_min_size(Pos2::ZERO, size))
     })
 }
+/// The work area of another viewport's monitor, in this viewport's points.
+pub fn work_area_of(ctx: &egui::Context, id: egui::ViewportId) -> Option<Rect> {
+    let zoom = ctx.zoom_factor();
+    let center = ctx.input(|i| {
+        let viewport = i.raw.viewports.get(&id)?;
+        let rect = viewport.outer_rect.or(viewport.inner_rect)?;
+        Some(rect.center() * (viewport.native_pixels_per_point.unwrap_or(1.) * zoom))
+    })? / ctx.pixels_per_point();
+    monitors(ctx).into_iter().find(|area| area.contains(center))
+}
+
 /// Work areas of all monitors in points, in the order Windows reports them
 /// (the primary monitor first). Empty where monitors cannot be listed.
 pub fn monitors(ctx: &egui::Context) -> Vec<Rect> {

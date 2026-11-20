@@ -45,6 +45,7 @@ pub struct Window {
     applied: Option<(Mode, bool)>,
     focus: bool,
     center: bool,
+    tutorial_center: Option<Vec2>,
     reopening: bool,
     help: bool,
     native: crate::native_window::State,
@@ -140,6 +141,7 @@ impl Window {
             applied: None,
             focus: true,
             center: true,
+            tutorial_center: None,
             reopening: false,
             help: false,
             native: Default::default(),
@@ -173,6 +175,14 @@ impl Window {
             closed: !self.open,
         }
     }
+    pub(crate) fn center_for_tutorial(&mut self, offset: Vec2) {
+        self.tutorial_center = Some(offset);
+        self.center = true;
+        self.place = None;
+        self.fit_place = false;
+        self.reopening = false;
+    }
+
     /// Whether the window has been somewhere on screen (reopening puts it
     /// back there).
     pub fn has_place(&self) -> bool {
@@ -1630,6 +1640,13 @@ impl App {
     pub fn new_sticker_on(&mut self, day: NaiveDate) -> usize {
         let i = self.new_sticker();
         self.data.notes[i].date = Some(day);
+        if self.tutorial_range_active() {
+            self.studio
+                .windows
+                .get_mut(&i)
+                .unwrap()
+                .center_for_tutorial(Vec2::ZERO);
+        }
         self.drafts.push(i);
         i
     }
@@ -1893,6 +1910,7 @@ impl App {
                         }
                     }
                 }
+                let tutorial_center = w.tutorial_center.take();
                 let reopen_position = if std::mem::take(&mut w.reopening) && mode == Mode::Sticker {
                     self.prefs.sticker_reopen_position
                 } else {
@@ -1904,7 +1922,9 @@ impl App {
                 }
                 if changed || w.center || reopen_position != 0 {
                     // A new window opens on the monitor chosen in the settings.
-                    let chosen = if w.center || reopen_position != 0 {
+                    let chosen = if tutorial_center.is_some() {
+                        crate::native_window::work_area_of(ctx, main_viewport())
+                    } else if w.center || reopen_position != 0 {
                         self.desktop
                             .new_monitor
                             .and_then(|m| crate::native_window::monitors(ctx).get(m).copied())
@@ -1912,7 +1932,9 @@ impl App {
                         None
                     };
                     if let Some(area) = chosen.or_else(|| crate::native_window::work_area(ctx)) {
-                        let position = if matches!(reopen_position, 1 | 2)
+                        let position = if let Some(offset) = tutorial_center {
+                            area.center() - size * 0.5 + offset
+                        } else if matches!(reopen_position, 1 | 2)
                             || (reopen_position == 0 && w.center && self.desktop.new_right)
                         {
                             let others: Vec<Rect> = self
