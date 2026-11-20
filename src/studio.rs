@@ -296,6 +296,14 @@ pub struct Studio {
     /// When the main window was last built in full, and `lists::CHANGES` then.
     pub(crate) main_drawn: Option<(f64, u64)>,
     pub(crate) main_focused: bool,
+    #[cfg(windows)]
+    desktop_watch: Option<crate::win_style::ForegroundWatch>,
+    #[cfg(windows)]
+    desktop_entered: Option<f64>,
+    #[cfg(windows)]
+    desktop_stickers: Vec<isize>,
+    #[cfg(windows)]
+    desktop_promoted: Vec<isize>,
     /// The "글꼴" dialog of a memo window.
     pub font_dialog: Option<FontDialog>,
 }
@@ -1683,6 +1691,60 @@ impl App {
             crate::win_style::stack_below(main, &memos);
         }
     }
+    #[cfg(not(windows))]
+    pub fn keep_open_stickers_on_desktop(&mut self, _: &egui::Context) {}
+
+    #[cfg(windows)]
+    pub fn keep_open_stickers_on_desktop(&mut self, ctx: &egui::Context) {
+        use crate::win_style::*;
+
+        let windows = self.memo_windows();
+        if windows.is_empty() || !self.prefs.keep_stickers_on_desktop {
+            self.studio.desktop_watch = None;
+            self.studio.desktop_entered = None;
+            self.studio.desktop_stickers.clear();
+            for hwnd in self.studio.desktop_promoted.drain(..) {
+                if windows.contains(&hwnd) {
+                    release_desktop_sticker(hwnd);
+                }
+            }
+            return;
+        }
+        self.studio
+            .desktop_watch
+            .get_or_insert_with(ForegroundWatch::start);
+        if let Some(desktop) = desktop_foreground() {
+            let now = ctx.input(|i| i.time);
+            let entered = *self.studio.desktop_entered.get_or_insert(now);
+            self.studio.desktop_promoted.retain(|h| windows.contains(h));
+            self.studio.desktop_stickers.retain(|h| windows.contains(h));
+            if desktop_is_raised(desktop, &windows) {
+                for &hwnd in &self.studio.desktop_stickers {
+                    if keep_desktop_sticker(desktop, hwnd)
+                        && !self.studio.desktop_promoted.contains(&hwnd)
+                    {
+                        self.studio.desktop_promoted.push(hwnd);
+                    }
+                }
+            }
+            // Explorer can change the stacking order just after taking focus.
+            if now - entered < 0.3 {
+                ctx.request_repaint_after(std::time::Duration::from_millis(75));
+            }
+        } else {
+            self.studio.desktop_entered = None;
+            for hwnd in self.studio.desktop_promoted.drain(..) {
+                if windows.contains(&hwnd) {
+                    release_desktop_sticker(hwnd);
+                }
+            }
+            self.studio.desktop_stickers = windows
+                .into_iter()
+                .filter(|&h| is_desktop_sticker_visible(h))
+                .collect();
+        }
+    }
+
     pub fn render_note_windows(&mut self, root: &egui::Context) {
         self.drop_blank_drafts();
         crate::magnet::configure(self.desktop.magnet, self.desktop.magnet_pt);

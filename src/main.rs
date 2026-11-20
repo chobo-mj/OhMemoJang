@@ -565,6 +565,7 @@ impl eframe::App for App {
         self.swatch_probe_window(ctx);
         self.apply_arrangement(ctx);
         self.detached_note(ctx);
+        self.keep_open_stickers_on_desktop(ctx);
         self.finish_completed_stickers(ctx);
         self.global_dialogs(ctx);
         self.extra_windows(ctx);

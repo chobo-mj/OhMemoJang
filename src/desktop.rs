@@ -1295,6 +1295,12 @@ impl App {
                 settings_group(ui, "스티커 동작", |ui| {
                     toggle_row(
                         ui,
+                        &mut self.prefs.keep_stickers_on_desktop,
+                        "Win+D로 바탕화면을 볼 때 스티커 표시 유지",
+                        "바탕화면 보기 전에 열려 있던 스티커만 표시합니다",
+                    );
+                    toggle_row(
+                        ui,
                         &mut self.desktop.taskbar,
                         "메모창을 작업표시줄에 표시",
                         "끄면 새로 여는 스티커 메모 창이 작업표시줄에 나타나지 않습니다",

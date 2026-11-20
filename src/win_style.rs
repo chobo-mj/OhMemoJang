@@ -42,6 +42,32 @@ pub fn stack_below(main: isize, windows: &[isize]) {
     let _ = (main, windows);
 }
 
+/// Observes foreground changes so that idle stickers can sleep between events.
+#[cfg(windows)]
+pub struct ForegroundWatch(windows_sys::Win32::UI::Accessibility::HWINEVENTHOOK);
+
+#[cfg(windows)]
+impl ForegroundWatch {
+    pub fn start() -> Self {
+        Self(desk::watch_foreground())
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ForegroundWatch {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe { windows_sys::Win32::UI::Accessibility::UnhookWinEvent(self.0) };
+        }
+    }
+}
+
+#[cfg(windows)]
+pub use desk::{
+    desktop_foreground, desktop_is_raised, is_desktop_sticker_visible, keep_desktop_sticker,
+    release_desktop_sticker,
+};
+
 /// Native handle of the window `ctx` draws as [`shape`] found it (no search).
 pub fn shaped_hwnd(ctx: &egui::Context) -> Option<isize> {
     #[cfg(windows)]
@@ -226,16 +252,17 @@ mod desk {
         UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK},
         UI::WindowsAndMessaging::{
             CallNextHookEx, EnumWindows, FindWindowExW, FindWindowW, GetAncestor, GetClassNameW,
-            GetCursorPos, GetDesktopWindow, GetMessageW, GetTopWindow, GetWindow, GetWindowLongW,
-            GetWindowRect, IsChild, IsIconic, IsWindow, IsWindowVisible, KillTimer, PeekMessageW,
-            PostThreadMessageW, SendMessageTimeoutW, SetLayeredWindowAttributes, SetParent,
-            SetTimer, SetWindowLongW, SetWindowPos, SetWindowsHookExW, ShowWindow, ShowWindowAsync,
-            UnhookWindowsHookEx, WindowFromPoint, EVENT_SYSTEM_FOREGROUND, GA_PARENT, GA_ROOT,
-            GWL_EXSTYLE, GW_HWNDNEXT, GW_HWNDPREV, HHOOK, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST,
-            LWA_ALPHA, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, SMTO_NORMAL, SWP_ASYNCWINDOWPOS,
-            SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
-            SW_HIDE, SW_SHOWNOACTIVATE, WH_MOUSE_LL, WINEVENT_OUTOFCONTEXT, WM_APP, WM_LBUTTONUP,
-            WM_TIMER, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+            GetCursorPos, GetDesktopWindow, GetForegroundWindow, GetMessageW, GetTopWindow,
+            GetWindow, GetWindowLongW, GetWindowRect, IsChild, IsIconic, IsWindow, IsWindowVisible,
+            KillTimer, PeekMessageW, PostThreadMessageW, SendMessageTimeoutW,
+            SetLayeredWindowAttributes, SetParent, SetTimer, SetWindowLongW, SetWindowPos,
+            SetWindowsHookExW, ShowWindow, ShowWindowAsync, UnhookWindowsHookEx, WindowFromPoint,
+            EVENT_SYSTEM_FOREGROUND, GA_PARENT, GA_ROOT, GWL_EXSTYLE, GW_HWNDNEXT, GW_HWNDPREV,
+            HHOOK, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, LWA_ALPHA, MSG, MSLLHOOKSTRUCT,
+            PM_NOREMOVE, SMTO_NORMAL, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+            SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE,
+            WH_MOUSE_LL, WINEVENT_OUTOFCONTEXT, WM_APP, WM_LBUTTONUP, WM_TIMER, WS_EX_LAYERED,
+            WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
         },
     };
 
@@ -603,6 +630,104 @@ mod desk {
     /// Takes the window's button off the taskbar (`show` false) or puts it
     /// back. Explorer keeps the button of a window moved under the desktop
     /// icons, so it is taken off by hand.
+    pub fn watch_foreground() -> HWINEVENTHOOK {
+        unsafe extern "system" fn changed(
+            _: HWINEVENTHOOK,
+            _: u32,
+            _: HWND,
+            _: i32,
+            _: i32,
+            _: u32,
+            _: u32,
+        ) {
+            crate::wake::now();
+        }
+        unsafe {
+            SetWinEventHook(
+                EVENT_SYSTEM_FOREGROUND,
+                EVENT_SYSTEM_FOREGROUND,
+                std::ptr::null_mut(),
+                Some(changed),
+                0,
+                0,
+                WINEVENT_OUTOFCONTEXT,
+            )
+        }
+    }
+
+    pub fn desktop_foreground() -> Option<isize> {
+        unsafe {
+            let h = GetForegroundWindow();
+            matches!(class_of(h).as_str(), "Progman" | "WorkerW").then_some(h as isize)
+        }
+    }
+
+    pub fn desktop_is_raised(desktop: isize, stickers: &[isize]) -> bool {
+        unsafe {
+            let mut h = GetTopWindow(std::ptr::null_mut());
+            while !h.is_null() {
+                if h as isize == desktop {
+                    return true;
+                }
+                if GetWindowLongW(h, GWL_EXSTYLE) as u32 & (WS_EX_TOPMOST | WS_EX_TOOLWINDOW) == 0
+                    && !stickers.contains(&(h as isize))
+                    && class_of(h) != "WorkerW"
+                    && on_screen(h)
+                {
+                    return false;
+                }
+                h = GetWindow(h, GW_HWNDNEXT);
+            }
+            false
+        }
+    }
+
+    pub fn is_desktop_sticker_visible(hwnd: isize) -> bool {
+        unsafe { on_screen(hwnd as HWND) }
+    }
+
+    /// Show an already-open sticker with no focus change. Returns whether it
+    /// acquired a temporary topmost style that the caller must remove.
+    pub fn keep_desktop_sticker(desktop: isize, hwnd: isize) -> bool {
+        unsafe {
+            let h = hwnd as HWND;
+            let desktop = desktop as HWND;
+            if IsWindow(h) == 0 {
+                return false;
+            }
+            if IsIconic(h) != 0 || IsWindowVisible(h) == 0 {
+                ShowWindow(h, SW_SHOWNOACTIVATE);
+            }
+            let topmost = GetWindowLongW(h, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST != 0;
+            if !topmost && !above(h, desktop) {
+                SetWindowPos(
+                    h,
+                    lowest_topmost(h, desktop),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                );
+            }
+            !topmost && GetWindowLongW(h, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST != 0
+        }
+    }
+
+    pub fn release_desktop_sticker(hwnd: isize) {
+        unsafe {
+            SetWindowPos(
+                hwnd as HWND,
+                HWND_NOTOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+    }
+
     pub fn stack_below(main: isize, windows: &[isize]) {
         unsafe {
             let mut order = Vec::with_capacity(windows.len());
