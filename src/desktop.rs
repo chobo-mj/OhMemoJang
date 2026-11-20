@@ -1245,8 +1245,8 @@ impl App {
                     toggle_row(
                         ui,
                         &mut self.desktop.memo_front,
-                        "메인 창을 누르면 메모를 앞으로",
-                        "메인 창 안을 누르면 스티커와 접은 메모가 메인 창 앞에 와요 · 작업표시줄에서 고르면 메인 창이 앞에",
+                        "메인 창을 열면 스티커도 앞으로",
+                        "스티커와 접은 메모가 메인 창 바로 뒤에 모입니다 · 항상 위로 고정한 메모는 그대로 표시합니다",
                     );
                     section(ui, "새 메모 기본 색");
                     let mut mode = self.desktop.cycle_color as usize;

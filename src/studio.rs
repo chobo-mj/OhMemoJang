@@ -295,6 +295,7 @@ pub struct Studio {
     pub drag: Option<StickerDrag>,
     /// When the main window was last built in full, and `lists::CHANGES` then.
     pub(crate) main_drawn: Option<(f64, u64)>,
+    pub(crate) main_focused: bool,
     /// The "글꼴" dialog of a memo window.
     pub font_dialog: Option<FontDialog>,
 }
@@ -1667,12 +1668,11 @@ impl App {
             .filter_map(|w| w.hwnd)
             .collect()
     }
-    /// A click inside the main window brings the stickers and folded memos
-    /// in front of it, in their order. Picked from the taskbar (no click
-    /// inside), the main window stays in front. The calendar window is no
-    /// memo and stays where it is.
+    /// On activation, group the open stickers immediately below the main window.
     pub fn memos_to_front(&mut self, ctx: &egui::Context) {
-        if !self.desktop.memo_front || !ctx.input(|i| i.pointer.any_pressed()) {
+        let (focused, clicked) = ctx.input(|i| (i.focused, i.pointer.any_pressed()));
+        let was_focused = std::mem::replace(&mut self.studio.main_focused, focused);
+        if !self.desktop.memo_front || !focused || (was_focused && !clicked) {
             return;
         }
         let memos = self.memo_windows();
@@ -1680,7 +1680,7 @@ impl App {
             return;
         }
         if let Some(main) = crate::win_style::hwnd(ctx) {
-            crate::win_style::raise_over(main, &memos);
+            crate::win_style::stack_below(main, &memos);
         }
     }
     pub fn render_note_windows(&mut self, root: &egui::Context) {

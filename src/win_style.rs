@@ -33,12 +33,11 @@ pub fn hwnd(ctx: &egui::Context) -> Option<isize> {
     }
 }
 
-/// Puts those of `windows` that are behind `main` just in front of it, in
-/// the order they had; ones already in front of it (and topmost ones) stay
-/// where they are. Nothing is activated.
-pub fn raise_over(main: isize, windows: &[isize]) {
+/// Stack the ordinary windows immediately below the main window in their
+/// current order, without activating them.
+pub fn stack_below(main: isize, windows: &[isize]) {
     #[cfg(windows)]
-    desk::raise_over(main, windows);
+    desk::stack_below(main, windows);
     #[cfg(not(windows))]
     let _ = (main, windows);
 }
@@ -604,43 +603,29 @@ mod desk {
     /// Takes the window's button off the taskbar (`show` false) or puts it
     /// back. Explorer keeps the button of a window moved under the desktop
     /// icons, so it is taken off by hand.
-    pub fn raise_over(main: isize, windows: &[isize]) {
-        if main == 0 || windows.is_empty() {
-            return;
-        }
-        // SAFETY: plain Win32 calls; gone handles only make them fail.
+    pub fn stack_below(main: isize, windows: &[isize]) {
         unsafe {
-            let main = main as HWND;
-            // Those behind the main window, from the top down.
-            let mut behind = Vec::new();
-            let mut h = GetWindow(main, GW_HWNDNEXT);
-            while !h.is_null() && behind.len() < windows.len() {
-                if windows.contains(&(h as isize)) {
-                    behind.push(h);
+            let mut order = Vec::with_capacity(windows.len());
+            let mut h = GetTopWindow(std::ptr::null_mut());
+            while !h.is_null() && order.len() < windows.len() {
+                if windows.contains(&(h as isize))
+                    && GetWindowLongW(h, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST == 0
+                    && IsIconic(h) == 0
+                {
+                    order.push(h);
                 }
                 h = GetWindow(h, GW_HWNDNEXT);
             }
-            for h in behind {
-                // `SetWindowPos` puts a window behind the one it is given:
-                // behind the window just above the main one, so in front of
-                // the main one. Behind a topmost one it would go up there.
-                let above = GetWindow(main, GW_HWNDPREV);
-                let after = if above.is_null()
-                    || GetWindowLongW(above, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST != 0
+
+            let mut after = main as HWND;
+            let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+            for h in order {
+                if GetWindow(after, GW_HWNDNEXT) != h
+                    && SetWindowPos(h, after, 0, 0, 0, 0, flags) == 0
                 {
-                    HWND_TOP
-                } else {
-                    above
-                };
-                SetWindowPos(
-                    h,
-                    after,
-                    0,
-                    0,
-                    0,
-                    0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                );
+                    continue;
+                }
+                after = h;
             }
         }
     }
@@ -1242,9 +1227,9 @@ mod desktop_click_tests {
 
     #[cfg(windows)]
     #[test]
-    fn memos_behind_the_main_window_come_just_in_front_of_it_in_order() {
+    fn memos_stack_below_the_main_window_in_order() {
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            CreateWindowExW, DestroyWindow, GetWindow, SetWindowPos, GW_HWNDPREV, HWND_TOP,
+            CreateWindowExW, DestroyWindow, GetWindow, SetWindowPos, GW_HWNDNEXT, HWND_TOP,
             SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WS_POPUP,
         };
         let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
@@ -1278,19 +1263,12 @@ mod desktop_click_tests {
         let ids = |hs: &[windows_sys::Win32::Foundation::HWND]| -> Vec<isize> {
             hs.iter().map(|&h| h as isize).collect()
         };
-        super::raise_over(main as isize, &ids(&[a, b, c]));
-        let prev = |h| unsafe { GetWindow(h, GW_HWNDPREV) };
-        // Now: c, (the thread's IME window), a, b, main, other.
-        assert_eq!(prev(main), b);
-        assert_eq!(prev(b), a);
-        assert_eq!(prev(other), main);
-        let mut h = a;
-        let mut steps = 0;
-        while !h.is_null() && h != c && steps < 50 {
-            h = prev(h);
-            steps += 1;
-        }
-        assert_eq!(h, c, "the one in front of the main window stays in front");
+        super::stack_below(main as isize, &ids(&[a, b, c]));
+        let next = |h| unsafe { GetWindow(h, GW_HWNDNEXT) };
+        assert_eq!(next(main), c);
+        assert_eq!(next(c), a);
+        assert_eq!(next(a), b);
+        assert_eq!(next(b), other);
         unsafe {
             for h in [main, a, b, c, other] {
                 DestroyWindow(h);

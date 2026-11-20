@@ -727,6 +727,7 @@ impl App {
     }
     fn main_window(&mut self, root: &egui::Context) {
         if !self.main_open {
+            self.studio.main_focused = false;
             return;
         }
         let builder = egui::ViewportBuilder::default()
