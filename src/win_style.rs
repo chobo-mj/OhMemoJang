@@ -22,20 +22,25 @@ pub fn shape(ctx: &egui::Context, opacity: f32) {
     let _ = (ctx, opacity);
 }
 
-/// Keeps a mouse-operated popup from taking keyboard focus from its editor.
-pub fn without_activation(ctx: &egui::Context) {
+/// Disable the system shadow of the borderless sticker and its folded forms.
+pub fn sticker_shadow(ctx: &egui::Context, hidden: bool) {
     #[cfg(windows)]
-    imp::without_activation(ctx);
+    imp::sticker_shadow(ctx, hidden);
     #[cfg(not(windows))]
-    let _ = ctx;
+    let _ = (ctx, hidden);
 }
 
-/// Use a shallow app-drawn edge for stickers instead of the system shadow.
-pub fn sticker_shadow(ctx: &egui::Context, small: bool) {
+/// The native foreground window can change before egui sees both focus events.
+pub fn is_foreground(ctx: &egui::Context) -> Option<bool> {
     #[cfg(windows)]
-    imp::sticker_shadow(ctx, small);
+    return shaped_hwnd(ctx).map(|hwnd| unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow() as isize == hwnd
+    });
     #[cfg(not(windows))]
-    let _ = (ctx, small);
+    {
+        let _ = ctx;
+        None
+    }
 }
 
 /// Native handle of the window `ctx` draws, if it can be found.
@@ -1220,7 +1225,6 @@ mod imp {
         UI::WindowsAndMessaging::{
             EnumThreadWindows, GetWindowLongPtrW, GetWindowRect, GetWindowTextW, IsWindow,
             SetLayeredWindowAttributes, SetWindowLongPtrW, GWL_EXSTYLE, LWA_ALPHA, WS_EX_LAYERED,
-            WS_EX_NOACTIVATE,
         },
     };
 
@@ -1230,7 +1234,7 @@ mod imp {
         alpha: Option<u8>,
         native_round: Option<bool>,
         region: (i32, i32),
-        small_shadow: bool,
+        shadow_hidden: bool,
     }
 
     pub fn cached(ctx: &egui::Context) -> Option<isize> {
@@ -1240,42 +1244,55 @@ mod imp {
             .filter(|&h| h != 0)
     }
 
-    pub fn without_activation(ctx: &egui::Context) {
-        if let Some(hwnd) = cached(ctx) {
-            unsafe {
-                let h = hwnd as HWND;
-                let style = GetWindowLongPtrW(h, GWL_EXSTYLE);
-                if style & WS_EX_NOACTIVATE as isize == 0 {
-                    SetWindowLongPtrW(h, GWL_EXSTYLE, style | WS_EX_NOACTIVATE as isize);
-                }
-            }
-        }
-    }
-
-    pub fn sticker_shadow(ctx: &egui::Context, small: bool) {
+    pub fn sticker_shadow(ctx: &egui::Context, hidden: bool) {
         let key = egui::Id::new(("win_style", ctx.viewport_id()));
         let Some(mut state) = ctx.data(|d| d.get_temp::<State>(key)) else {
             return;
         };
-        if state.small_shadow == small {
+        let hwnd = state.hwnd as HWND;
+        // A rounded region also suppresses the shadow on borderless windows
+        // that DWM still shadows when non-client rendering is disabled.
+        unsafe {
+            if state.shadow_hidden != hidden {
+                let policy = if hidden {
+                    DWMNCRP_DISABLED
+                } else {
+                    DWMNCRP_USEWINDOWSTYLE
+                };
+                DwmSetWindowAttribute(
+                    hwnd,
+                    DWMWA_NCRENDERING_POLICY as u32,
+                    &policy as *const _ as *const _,
+                    std::mem::size_of_val(&policy) as u32,
+                );
+                if !hidden {
+                    SetWindowRgn(hwnd, std::ptr::null_mut(), 1);
+                    state.region = (0, 0);
+                }
+                state.shadow_hidden = hidden;
+                if hidden {
+                    round_region(ctx, &mut state);
+                }
+                ctx.data_mut(|d| d.insert_temp(key, state));
+            }
+        }
+    }
+
+    unsafe fn round_region(ctx: &egui::Context, state: &mut State) {
+        let hwnd = state.hwnd as HWND;
+        let mut rect: RECT = std::mem::zeroed();
+        if GetWindowRect(hwnd, &mut rect) == 0 {
             return;
         }
-        let policy = if small {
-            DWMNCRP_DISABLED
-        } else {
-            DWMNCRP_USEWINDOWSTYLE
-        };
-        let result = unsafe {
-            DwmSetWindowAttribute(
-                state.hwnd as HWND,
-                DWMWA_NCRENDERING_POLICY as u32,
-                &policy as *const _ as *const _,
-                std::mem::size_of_val(&policy) as u32,
-            )
-        };
-        if result >= 0 {
-            state.small_shadow = small;
-            ctx.data_mut(|d| d.insert_temp(key, state));
+        let size = (rect.right - rect.left, rect.bottom - rect.top);
+        if size != state.region {
+            let diameter = (16. * ctx.pixels_per_point()).round() as i32;
+            let region = CreateRoundRectRgn(0, 0, size.0 + 1, size.1 + 1, diameter, diameter);
+            if SetWindowRgn(hwnd, region, 1) != 0 {
+                state.region = size;
+            } else {
+                windows_sys::Win32::Graphics::Gdi::DeleteObject(region);
+            }
         }
     }
 
@@ -1325,16 +1342,8 @@ mod imp {
                 s.native_round = Some(hr >= 0);
             }
             // Windows 10 has no rounded-corner preference: clip to a region.
-            if s.native_round == Some(false) {
-                let mut r: RECT = std::mem::zeroed();
-                GetWindowRect(h, &mut r);
-                let size = (r.right - r.left, r.bottom - r.top);
-                if size != s.region {
-                    let d = (16. * ctx.pixels_per_point()).round() as i32;
-                    let rgn = CreateRoundRectRgn(0, 0, size.0 + 1, size.1 + 1, d, d);
-                    SetWindowRgn(h, rgn, 1);
-                    s.region = size;
-                }
+            if s.shadow_hidden || s.native_round == Some(false) {
+                round_region(ctx, &mut s);
             }
         }
         ctx.data_mut(|d| d.insert_temp(key, s));

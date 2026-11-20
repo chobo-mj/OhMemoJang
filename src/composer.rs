@@ -2068,6 +2068,7 @@ struct SelectionPopup {
     text_id: Id,
     range: CCursorRange,
     rect: Option<egui::Rect>,
+    lost_focus_at: Option<f64>,
 }
 
 fn sticker_selection_popup(
@@ -2080,7 +2081,11 @@ fn sticker_selection_popup(
     let ctx = ui.ctx();
     let key = id.with("selection_popup");
     let text_id = output.response.id;
+    let popup_id = egui::ViewportId(key);
     let old = ui.data_mut(|d| d.remove_temp::<Option<SelectionPopup>>(key).flatten());
+    let old_native = old
+        .as_ref()
+        .filter(|p| p.text_id == text_id && p.rect.is_none());
     let (focused, escaped, pressed, clicking, pointer, extend) = ui.input(|i| {
         (
             i.focused,
@@ -2098,7 +2103,12 @@ fn sticker_selection_popup(
             }),
         )
     });
-    if !focused || escaped || output.response.changed() || doc.ime || doc.selected_cell.is_some() {
+    if (!focused && old_native.is_none())
+        || escaped
+        || output.response.changed()
+        || doc.ime
+        || doc.selected_cell.is_some()
+    {
         return;
     }
     let using_popup = old.as_ref().is_some_and(|p| {
@@ -2120,9 +2130,14 @@ fn sticker_selection_popup(
         .response
         .drag_stopped_by(egui::PointerButton::Primary)
         || (extend && doc.selection != *previous_selection);
-    let range = if using_popup && !opened {
-        old.map(|p| p.range)
-    } else if output.response.has_focus() && (opened || old.is_some_and(|p| p.text_id == text_id)) {
+    let range = if (using_popup
+        || old_native.is_some() && (!focused || !output.response.has_focus()))
+        && !opened
+    {
+        old.as_ref().map(|p| p.range)
+    } else if output.response.has_focus()
+        && (opened || old.as_ref().is_some_and(|p| p.text_id == text_id))
+    {
         selected
     } else {
         None
@@ -2162,7 +2177,7 @@ fn sticker_selection_popup(
     } else {
         crate::native_window::work_area(ctx).unwrap_or(sticker)
     };
-    let size = Vec2::new(232., 86.);
+    let size = Vec2::new(236., 106.);
     let Some(at) = selection_popup_position(
         sticker,
         clip.translate(origin),
@@ -2213,6 +2228,8 @@ fn sticker_selection_popup(
                 }
             });
     };
+    let mut popup_escape = false;
+    let mut popup_focused = false;
     let popup_rect = if embedded {
         Some(
             egui::Area::new(key)
@@ -2225,7 +2242,6 @@ fn sticker_selection_popup(
                 .rect,
         )
     } else {
-        let popup_id = egui::ViewportId(key);
         let builder = egui::ViewportBuilder::default()
             .with_title("선택한 글 서식")
             .with_position(at)
@@ -2238,7 +2254,9 @@ fn sticker_selection_popup(
         let mut draw = Some(draw);
         ctx.show_viewport_immediate(popup_id, builder, |popup_ctx, _| {
             crate::win_style::shape(popup_ctx, 1.);
-            crate::win_style::without_activation(popup_ctx);
+            popup_escape = popup_ctx.input(|i| i.key_pressed(Key::Escape));
+            popup_focused = crate::win_style::is_foreground(popup_ctx)
+                .unwrap_or_else(|| popup_ctx.input(|i| i.focused));
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE.fill(popup_ctx.style().visuals.panel_fill))
                 .show(popup_ctx, |ui| {
@@ -2249,6 +2267,13 @@ fn sticker_selection_popup(
         });
         None
     };
+    if !embedded && (popup_escape || clipboard.is_some() || color.is_some()) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        ctx.memory_mut(|m| m.request_focus(text_id));
+    }
+    if popup_escape {
+        return;
+    }
     if let Some(event) = clipboard {
         output.state.cursor.set_char_range(Some(range));
         ui.data_mut(|d| d.insert_temp(id.with("edit_menu_events"), vec![event]));
@@ -2266,6 +2291,19 @@ fn sticker_selection_popup(
         } else {
             egui::ViewportId(key)
         };
+        let owner_focused = crate::win_style::is_foreground(ctx).unwrap_or(focused);
+        let lost_focus_at = if !embedded && !owner_focused && !popup_focused {
+            let now = ui.input(|i| i.time);
+            let since = old_native.and_then(|p| p.lost_focus_at).unwrap_or(now);
+            if now - since >= 0.05 {
+                return;
+            }
+            // The two native focus notifications can land on different passes.
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(0.05 - (now - since)));
+            Some(since)
+        } else {
+            None
+        };
         ui.data_mut(|d| {
             d.insert_temp(
                 key,
@@ -2273,6 +2311,7 @@ fn sticker_selection_popup(
                     text_id,
                     range,
                     rect: popup_rect,
+                    lost_focus_at,
                 }),
             );
             d.insert_temp(
