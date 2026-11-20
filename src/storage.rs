@@ -77,6 +77,9 @@ pub struct SessionRec {
     pub sticker_size: [f32; 2],
     pub title_width: f32,
     pub swatch_size: [f32; 2],
+    /// A memo window that was closed: only its place and sizes are kept, so
+    /// it reopens where the user left it instead of in a new-memo slot.
+    pub closed: bool,
 }
 
 #[derive(Serialize, Deserialize, Default, Clone, PartialEq)]
@@ -997,7 +1000,9 @@ impl App {
                 .studio
                 .windows
                 .iter()
-                .filter(|(_, w)| w.open)
+                .filter(|(&i, w)| {
+                    w.open || (w.has_place() && self.data.notes.get(i).is_some_and(|n| !n.deleted))
+                })
                 .map(|(&i, w)| w.session(i))
                 .collect(),
         }
@@ -1100,9 +1105,9 @@ impl App {
         // Memo windows left open (stickers on the desktop) come back.
         for r in &s.session {
             if self.data.notes.get(r.note).is_some_and(|n| !n.deleted) {
-                self.studio
-                    .windows
-                    .insert(r.note, crate::studio::Window::from_session(r));
+                let mut w = crate::studio::Window::from_session(r);
+                w.open = !r.closed;
+                self.studio.windows.insert(r.note, w);
             }
         }
         self.active = 0;
@@ -2123,6 +2128,41 @@ mod tests {
             "종료 직전 수정"
         );
         assert!(app.saving.error.is_empty());
+    }
+
+    #[test]
+    fn a_closed_memo_window_keeps_its_place_across_a_restart() {
+        let dir = temp(line!());
+        let day = NaiveDate::from_ymd_opt(2026, 11, 20).unwrap();
+        let mut a = App::sample(day);
+        a.studio.open(1, None);
+        a.studio.open(2, None);
+        {
+            let w = a.studio.windows.get_mut(&1).unwrap();
+            w.last_pos = Some(egui::pos2(640., 220.));
+            w.sticker_size = egui::vec2(300., 260.);
+            w.open = false;
+        }
+        a.studio.windows.get_mut(&2).unwrap().last_pos = Some(egui::pos2(900., 40.));
+        // Opened but never on screen, then closed: nothing to keep.
+        a.studio.open(3, None);
+        a.studio.windows.get_mut(&3).unwrap().open = false;
+        let snap = a.snapshot(&dir);
+        assert_eq!(snap.session.len(), 2);
+        let mut b = App::sample(day);
+        b.restore(&snap);
+        let closed = &b.studio.windows[&1];
+        assert!(!closed.open);
+        assert_eq!(closed.sticker_size, egui::vec2(300., 260.));
+        assert!(b.studio.windows[&2].open);
+        // Saving again changes nothing.
+        assert!(b.snapshot(&dir) == snap);
+        // Reopened, it goes back where it was.
+        b.open_sticker(1, None);
+        let w = &b.studio.windows[&1];
+        assert!(w.open);
+        assert_eq!(w.place, Some(egui::pos2(640., 220.)));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

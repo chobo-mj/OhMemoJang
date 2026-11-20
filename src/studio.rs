@@ -43,7 +43,10 @@ pub struct Window {
     swatch_drag: Option<(Vec2, Pos2, Vec2)>,
     menu: Option<Menu>,
     /// Where the window was last seen on screen, for reopening it there.
-    last_pos: Option<Pos2>,
+    pub(crate) last_pos: Option<Pos2>,
+    /// `place` is where a closed window was last seen: kept on that
+    /// monitor's work area, since it may come back larger (as the editor).
+    fit_place: bool,
     /// Set when Enter is pressed in the sticker title; applied at the start
     /// of the *next* frame, never the one Enter was pressed on. The title's
     /// return_key handling does not remove that Enter (or a pending IME
@@ -130,6 +133,7 @@ impl Window {
             swatch_drag: None,
             menu: None,
             last_pos: None,
+            fit_place: false,
             move_caret_to_body: false,
             drawn_at: f64::NEG_INFINITY,
             drawn_changes: 0,
@@ -151,7 +155,13 @@ impl Window {
             sticker_size: self.sticker_size.into(),
             title_width: self.title_width,
             swatch_size: self.swatch_size.into(),
+            closed: !self.open,
         }
+    }
+    /// Whether the window has been somewhere on screen (reopening puts it
+    /// back there).
+    pub fn has_place(&self) -> bool {
+        self.place.or(self.last_pos).is_some()
     }
     /// A window reopened where it was, without taking focus.
     pub fn from_session(r: &crate::storage::SessionRec) -> Self {
@@ -272,6 +282,16 @@ impl Studio {
         if !w.open {
             w.applied = None;
             w.native.cancel();
+            // Back where it was last seen, wherever the user had dragged it:
+            // only a memo never shown takes a new-memo place (right-aligned
+            // when that is on).
+            if w.place.is_none() {
+                w.place = w.last_pos;
+            }
+            if w.place.is_some() {
+                w.center = false;
+                w.fit_place = true;
+            }
         }
         w.open = true;
         w.mode = Mode::Editor;
@@ -1535,6 +1555,11 @@ impl App {
             // The builder is a creation request, never a live geometry feedback loop.
             if w.applied.is_none() {
                 builder = builder.with_inner_size(size);
+                // A reopened window is created where it goes, not first at
+                // the system's default spot.
+                if let Some(p) = w.place {
+                    builder = builder.with_position(p);
+                }
             }
             root.show_viewport_immediate(viewport(i), builder, |ctx, _| {
                 let now = ctx.input(|v| v.time);
@@ -1637,7 +1662,12 @@ impl App {
                         if let Some(area) = crate::native_window::work_area(ctx) {
                             p = crate::native_window::fit_position(p, size, area);
                         }
+                    } else if w.fit_place {
+                        if let Some(m) = monitors.iter().find(|m| m.contains(grip)) {
+                            p = crate::native_window::fit_position(p, size, *m);
+                        }
                     }
+                    w.fit_place = false;
                     ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(p));
                 }
                 if w.focus {
@@ -3387,6 +3417,34 @@ mod new_memo_placement_tests {
                 assert!(!a.intersects(*b), "windows must not overlap");
             }
         }
+    }
+
+    #[test]
+    fn a_memo_moved_by_the_user_reopens_where_it_was_left() {
+        let today = chrono::Local::now().date_naive();
+        let mut a = App::sample(today);
+        a.desktop.new_right = true;
+        let i = a.new_sticker();
+        // Shown once in its right-aligned place, dragged away, then closed.
+        {
+            let w = a.studio.windows.get_mut(&i).unwrap();
+            w.center = false;
+            w.last_pos = Some(Pos2::new(500., 300.));
+            w.open = false;
+        }
+        a.open_sticker(i, None);
+        let w = &a.studio.windows[&i];
+        assert!(w.open && !w.center, "not placed again like a new memo");
+        assert_eq!(w.place, Some(Pos2::new(500., 300.)));
+        assert_eq!(w.mode, Mode::Sticker);
+        // Reopening an open window does not move it.
+        a.studio.windows.get_mut(&i).unwrap().place = None;
+        a.open_sticker(i, None);
+        assert_eq!(a.studio.windows[&i].place, None);
+        // A memo never shown still takes a new-memo place.
+        let j = a.new_sticker();
+        let w = &a.studio.windows[&j];
+        assert!(w.center && w.place.is_none());
     }
 
     #[test]

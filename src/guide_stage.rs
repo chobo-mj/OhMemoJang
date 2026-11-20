@@ -35,6 +35,7 @@ fn sticker(note: usize, x: f32, y: f32, mode: u8) -> SessionRec {
         sticker_size: [340., 330.],
         title_width: 260.,
         swatch_size: [56., 56.],
+        closed: false,
     }
 }
 
