@@ -2023,8 +2023,7 @@ impl App {
                 let opacity = self.data.notes[i].document.opacity.clamp(0.2, 1.);
                 // On Windows the OS applies opacity and rounds the corners, so
                 // the paper is painted opaque and square (see `win_style`).
-                crate::win_style::shape(ctx, opacity);
-                crate::win_style::sticker_shadow(ctx, mode != Mode::Editor);
+                crate::win_style::shape_memo(ctx, opacity, mode != Mode::Editor);
                 if let Some(h) = crate::win_style::shaped_hwnd(ctx) {
                     crate::magnet::track(h, matches!(mode, Mode::Title | Mode::Swatch));
                     w.hwnd = Some(h);

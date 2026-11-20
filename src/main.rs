@@ -750,6 +750,7 @@ impl App {
             .with_maximized(true)
             .with_icon(app_icon::window());
         root.show_viewport_immediate(main_viewport(), builder, |ctx, _| {
+            crate::win_style::main_without_shadow(ctx);
             self.theme(ctx);
             self.drag_input(ctx);
             self.request_main_memo_stack(ctx);

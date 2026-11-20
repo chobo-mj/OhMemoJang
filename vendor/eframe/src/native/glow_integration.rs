@@ -1630,6 +1630,17 @@ fn render_immediate_viewport(
             return;
         };
         egui_winit::update_viewport_info(&mut viewport.info, egui_ctx, window, false);
+        #[cfg(target_os = "windows")]
+        if let Ok(handle) = window.window_handle() {
+            if let raw_window_handle::RawWindowHandle::Win32(handle) = handle.as_raw() {
+                egui_ctx.data_mut(|data| {
+                    data.insert_temp(
+                        egui::Id::new("eframe_win32_hwnd").with(viewport_id),
+                        handle.hwnd.get(),
+                    );
+                });
+            }
+        }
 
         let mut raw_input = egui_winit.take_egui_input(window);
         raw_input.viewports = glutin

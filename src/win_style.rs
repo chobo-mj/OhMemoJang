@@ -17,17 +17,17 @@ pub const NATIVE: bool = cfg!(windows);
 /// a value changes.
 pub fn shape(ctx: &egui::Context, opacity: f32) {
     #[cfg(windows)]
-    imp::shape(ctx, opacity);
+    imp::shape(ctx, opacity, false);
     #[cfg(not(windows))]
     let _ = (ctx, opacity);
 }
 
-/// Disable the system shadow of the borderless sticker and its folded forms.
-pub fn sticker_shadow(ctx: &egui::Context, hidden: bool) {
+/// Shape a memo window and keep its three sticker modes shadowless.
+pub fn shape_memo(ctx: &egui::Context, opacity: f32, shadowless: bool) {
     #[cfg(windows)]
-    imp::sticker_shadow(ctx, hidden);
+    imp::shape(ctx, opacity, shadowless);
     #[cfg(not(windows))]
-    let _ = (ctx, hidden);
+    let _ = (ctx, opacity, shadowless);
 }
 
 /// The native foreground window can change before egui sees both focus events.
@@ -41,6 +41,15 @@ pub fn is_foreground(ctx: &egui::Context) -> Option<bool> {
         let _ = ctx;
         None
     }
+}
+
+/// Disable DWM non-client rendering on the decorated main window without
+/// applying the borderless stickers' opacity or clipping region.
+pub fn main_without_shadow(ctx: &egui::Context) {
+    #[cfg(windows)]
+    imp::main_without_shadow(ctx);
+    #[cfg(not(windows))]
+    let _ = ctx;
 }
 
 /// Native handle of the window `ctx` draws, if it can be found.
@@ -1217,7 +1226,8 @@ mod imp {
         Graphics::{
             Dwm::{
                 DwmSetWindowAttribute, DWMNCRP_DISABLED, DWMNCRP_USEWINDOWSTYLE,
-                DWMWA_NCRENDERING_POLICY, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+                DWMWA_NCRENDERING_POLICY, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
+                DWMWCP_ROUND,
             },
             Gdi::{CreateRoundRectRgn, SetWindowRgn},
         },
@@ -1244,36 +1254,41 @@ mod imp {
             .filter(|&h| h != 0)
     }
 
-    pub fn sticker_shadow(ctx: &egui::Context, hidden: bool) {
-        let key = egui::Id::new(("win_style", ctx.viewport_id()));
-        let Some(mut state) = ctx.data(|d| d.get_temp::<State>(key)) else {
+    unsafe fn set_shadow(hwnd: HWND, hidden: bool) -> bool {
+        let policy = if hidden {
+            DWMNCRP_DISABLED
+        } else {
+            DWMNCRP_USEWINDOWSTYLE
+        };
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_NCRENDERING_POLICY as u32,
+            &policy as *const _ as *const _,
+            std::mem::size_of_val(&policy) as u32,
+        ) >= 0
+    }
+
+    unsafe fn set_rounding(hwnd: HWND, preference: i32) -> bool {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE as u32,
+            &preference as *const _ as *const _,
+            std::mem::size_of_val(&preference) as u32,
+        ) >= 0
+    }
+
+    pub fn main_without_shadow(ctx: &egui::Context) {
+        let key = egui::Id::new("main_without_shadow").with(ctx.viewport_id());
+        let Some(hwnd) = backend_hwnd(ctx) else {
             return;
         };
-        let hwnd = state.hwnd as HWND;
-        // A rounded region also suppresses the shadow on borderless windows
-        // that DWM still shadows when non-client rendering is disabled.
-        unsafe {
-            if state.shadow_hidden != hidden {
-                let policy = if hidden {
-                    DWMNCRP_DISABLED
-                } else {
-                    DWMNCRP_USEWINDOWSTYLE
-                };
-                DwmSetWindowAttribute(
-                    hwnd,
-                    DWMWA_NCRENDERING_POLICY as u32,
-                    &policy as *const _ as *const _,
-                    std::mem::size_of_val(&policy) as u32,
-                );
-                if !hidden {
-                    SetWindowRgn(hwnd, std::ptr::null_mut(), 1);
-                    state.region = (0, 0);
+        let handle = hwnd as isize;
+        if ctx.data(|d| d.get_temp::<isize>(key)) != Some(handle) {
+            unsafe {
+                set_rounding(hwnd, DWMWCP_DONOTROUND);
+                if set_shadow(hwnd, true) {
+                    ctx.data_mut(|d| d.insert_temp(key, handle));
                 }
-                state.shadow_hidden = hidden;
-                if hidden {
-                    round_region(ctx, &mut state);
-                }
-                ctx.data_mut(|d| d.insert_temp(key, state));
             }
         }
     }
@@ -1296,12 +1311,16 @@ mod imp {
         }
     }
 
-    pub fn shape(ctx: &egui::Context, opacity: f32) {
+    pub fn shape(ctx: &egui::Context, opacity: f32, shadowless: bool) {
         let key = egui::Id::new(("win_style", ctx.viewport_id()));
         let mut s: State = ctx.data(|d| d.get_temp(key)).unwrap_or_default();
         // SAFETY: plain Win32 calls on a window owned by this thread.
         unsafe {
-            if s.hwnd == 0 || IsWindow(s.hwnd as HWND) == 0 {
+            let backend = backend_hwnd(ctx);
+            if s.hwnd == 0
+                || IsWindow(s.hwnd as HWND) == 0
+                || backend.is_some_and(|hwnd| hwnd as isize != s.hwnd)
+            {
                 let Some(h) = find(ctx) else {
                     return;
                 };
@@ -1311,20 +1330,23 @@ mod imp {
                 };
             }
             let h = s.hwnd as HWND;
+            if s.shadow_hidden != shadowless {
+                if !shadowless {
+                    SetWindowRgn(h, std::ptr::null_mut(), 1);
+                    s.region = (0, 0);
+                }
+                s.shadow_hidden = shadowless;
+                s.native_round = None;
+                set_shadow(h, shadowless);
+            }
             let alpha = (opacity.clamp(0., 1.) * 255.).round() as u8;
-            // Checked every frame: winit rewrites the extended style whenever
-            // it changes the window (e.g. toggling resizable for the color
-            // box), which silently drops the layered flag and the opacity.
-            // An opaque window is left unlayered: a layered OpenGL window
-            // stopped presenting new frames after growing back from a title
-            // strip or color box.
+            let layer = alpha < u8::MAX;
+            // Winit can rewrite the style after mode and resize changes.
             let ex = GetWindowLongPtrW(h, GWL_EXSTYLE);
             let layered = ex & WS_EX_LAYERED as isize != 0;
-            if alpha == u8::MAX {
-                if layered {
-                    SetWindowLongPtrW(h, GWL_EXSTYLE, ex & !(WS_EX_LAYERED as isize));
-                }
-            } else if !layered || s.alpha != Some(alpha) {
+            if !layer && layered {
+                SetWindowLongPtrW(h, GWL_EXSTYLE, ex & !(WS_EX_LAYERED as isize));
+            } else if layer && (!layered || s.alpha != Some(alpha)) {
                 if !layered {
                     SetWindowLongPtrW(h, GWL_EXSTYLE, ex | WS_EX_LAYERED as isize);
                 }
@@ -1332,14 +1354,15 @@ mod imp {
             }
             s.alpha = Some(alpha);
             if s.native_round.is_none() {
-                let pref = DWMWCP_ROUND;
-                let hr = DwmSetWindowAttribute(
-                    h,
-                    DWMWA_WINDOW_CORNER_PREFERENCE as u32,
-                    &pref as *const _ as *const _,
-                    std::mem::size_of_val(&pref) as u32,
-                );
-                s.native_round = Some(hr >= 0);
+                // Forcing DWM to round a window also creates an exterior
+                // shadow, even with non-client rendering disabled. On
+                // stickers we round the window region ourselves.
+                let preference = if shadowless {
+                    DWMWCP_DONOTROUND
+                } else {
+                    DWMWCP_ROUND
+                };
+                s.native_round = Some(set_rounding(h, preference));
             }
             // Windows 10 has no rounded-corner preference: clip to a region.
             if s.shadow_hidden || s.native_round == Some(false) {
@@ -1355,10 +1378,18 @@ mod imp {
         best: Option<(i32, HWND)>,
     }
 
-    /// egui does not expose native handles of child viewports, so the window
-    /// is matched by its title and on-screen rectangle among this thread's
-    /// top-level windows.
+    fn backend_hwnd(ctx: &egui::Context) -> Option<HWND> {
+        let key = egui::Id::new("eframe_win32_hwnd").with(ctx.viewport_id());
+        ctx.data(|d| d.get_temp::<isize>(key))
+            .map(|hwnd| hwnd as HWND)
+    }
+
+    /// Resolve the handle from the backend. Other renderers can fall back to
+    /// this thread's window title and rectangle.
     pub unsafe fn find(ctx: &egui::Context) -> Option<HWND> {
+        if let Some(hwnd) = backend_hwnd(ctx) {
+            return Some(hwnd);
+        }
         let (title, rect, ppp) = ctx.input(|i| {
             let v = i.viewport();
             (
