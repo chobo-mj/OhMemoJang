@@ -909,7 +909,7 @@ pub fn month_grid(ui: &mut Ui, month: &mut chrono::NaiveDate, day: &mut chrono::
                 Color32::WHITE
             } else if wd == 0 || holiday.is_some() {
                 ACCENT
-            } else if wd == 6 {
+            } else if wd == 6 || crate::holidays::is_blue_friday(d) {
                 BLUE
             } else {
                 c.ink

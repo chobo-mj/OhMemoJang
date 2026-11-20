@@ -73,6 +73,10 @@ pub struct Desktop {
     /// Folding stops at the title line: no color box. Never on together
     /// with `skip_title` (nothing would be left to fold to).
     pub skip_swatch: bool,
+    /// New memos take the palette's colors in turn instead of
+    /// `default_color`; `color_turn` is the one the next memo takes.
+    pub cycle_color: bool,
+    pub color_turn: usize,
     /// Size of a memo folded into a color box (step 2).
     pub swatch_size: Vec2,
     /// The window for setting that size is open, and the size it shows.
@@ -145,6 +149,8 @@ impl Default for Desktop {
             title_probe: false,
             title_probe_last: None,
             skip_swatch: false,
+            cycle_color: false,
+            color_turn: 0,
             swatch_size: Vec2::splat(crate::studio::SWATCH_SIZE),
             swatch_probe: false,
             swatch_probe_last: None,
@@ -1227,7 +1233,15 @@ impl App {
                         "메모 편집 창은 스티커의 … 더보기 › 메모 편집 창 열기로 엽니다",
                     );
                     section(ui, "새 메모 기본 색");
-                    color_choices(ui, &mut self.desktop.default_color);
+                    let mut mode = self.desktop.cycle_color as usize;
+                    ui::segmented(ui, &mut mode, &["한 가지 색", "번갈아가며"]);
+                    self.desktop.cycle_color = mode == 1;
+                    ui.add_space(4.);
+                    if self.desktop.cycle_color {
+                        color_turns(ui, &mut self.desktop.color_turn);
+                    } else {
+                        color_choices(ui, &mut self.desktop.default_color);
+                    }
                     ui.add_space(6.);
                     section(ui, "새 메모 띄울 모니터");
                     let monitors = crate::native_window::monitors(ui.ctx()).len();
@@ -1702,6 +1716,57 @@ fn font_choice(ui: &mut egui::Ui, id: &str, value: &mut String) {
         });
     crate::ui::hint(ui, "설치된 글꼴을 사용하며 없으면 기본 글꼴로 표시합니다.");
 }
+/// The palette new memos take in turn; the ringed color comes next. A
+/// click makes that color the next one.
+fn color_turns(ui: &mut egui::Ui, turn: &mut usize) {
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::splat(6.);
+        for (k, &c) in PALETTE.iter().enumerate() {
+            let (rect, r) = ui.allocate_exact_size(Vec2::splat(24.), egui::Sense::click());
+            ui.painter().circle_filled(rect.center(), 11., c);
+            ui.painter().circle_stroke(
+                rect.center(),
+                11.,
+                egui::Stroke::new(1.0_f32, Color32::from_black_alpha(30)),
+            );
+            if k == *turn % PALETTE.len() {
+                ui.painter()
+                    .circle_stroke(rect.center(), 12.5, egui::Stroke::new(2.0_f32, ACCENT));
+            }
+            if r.on_hover_text("다음 새 메모를 이 색부터")
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .clicked()
+            {
+                *turn = k;
+            }
+        }
+    });
+    ui::hint(
+        ui,
+        "새 메모를 만들 때마다 다음 색으로 바뀌어요 · 테두리가 있는 색이 다음 차례",
+    );
+}
+
+impl Desktop {
+    /// The color the next new memo is shown with.
+    pub fn next_new_color(&self) -> Color32 {
+        if self.cycle_color {
+            PALETTE[self.color_turn % PALETTE.len()]
+        } else {
+            self.default_color
+        }
+    }
+    /// The color for a memo made now; with colors in turn, the next memo
+    /// takes the one after it.
+    pub fn take_new_color(&mut self) -> Color32 {
+        let c = self.next_new_color();
+        if self.cycle_color {
+            self.color_turn = (self.color_turn + 1) % PALETTE.len();
+        }
+        c
+    }
+}
+
 pub fn color_choices(ui: &mut egui::Ui, color: &mut Color32) {
     let key = ui.make_persistent_id("custom_color_open");
     ui.horizontal_wrapped(|ui| {

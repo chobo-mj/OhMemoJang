@@ -639,16 +639,13 @@ impl App {
             );
             let day = first + Duration::days(slot as i64);
             let weekday = day.weekday().num_days_from_sunday();
-            if weeks == 0 && day.month() != self.month.month() {
-                ui.painter().text(
-                    rect.min + Vec2::new(10., 10.),
-                    egui::Align2::LEFT_TOP,
-                    day.day().to_string(),
-                    egui::FontId::proportional(12.),
-                    tone.faint.gamma_multiply(0.6),
-                );
-                continue;
-            }
+            // Days of the months before and after: faint, but a memo or a
+            // schedule can be added on them like on any other day.
+            let fade = if weeks == 0 && day.month() != self.month.month() {
+                0.45
+            } else {
+                1.
+            };
             if day == self.day {
                 ui.painter().rect_filled(
                     rect.shrink(1.),
@@ -696,11 +693,12 @@ impl App {
             let holiday = crate::holidays::name(day);
             let datecolor = if holiday.is_some() || weekday == 0 {
                 sun
-            } else if weekday == 6 {
+            } else if weekday == 6 || crate::holidays::is_blue_friday(day) {
                 sat
             } else {
                 tone.ink
-            };
+            }
+            .gamma_multiply(fade);
             let number = rect.min + Vec2::new(17., 18.);
             if day == today {
                 ui.painter().circle_filled(number, 11., today_mark);
@@ -724,7 +722,7 @@ impl App {
                     let galley = ui.painter().layout(
                         name.clone(),
                         egui::FontId::proportional(10.5),
-                        sun,
+                        sun.gamma_multiply(fade),
                         f32::INFINITY,
                     );
                     let clip = Rect::from_min_max(
@@ -1040,34 +1038,26 @@ impl App {
                 (origin * ctx.pixels_per_point()).to_pos2(),
             );
         }
-        let month = self.month.month();
-        let whole_weeks = self.prefs.cal_weeks > 0;
         let hide_done = self.prefs.cal_hide_done;
         let band = (self.prefs.cal_font + 8.5).round();
         let step = band + 2.;
         let capacity = (((height - 36.) / step).floor() as usize).max(1);
         // Bands and lanes of every week row, reused until something changes.
         let mut cache = std::mem::take(&mut self.lists);
-        let key = crate::lists::key((
-            first,
-            rows,
-            month,
-            whole_weeks,
-            hide_done,
-            self.data.notes.len(),
-        ));
+        let key = crate::lists::key((first, rows, hide_done, self.data.notes.len()));
         let weeks = cache.get("calendar_bands", key, || {
             (0..rows)
                 .map(|row| {
                     let start = first + Duration::days((row * 7) as i64);
                     let days: Vec<NaiveDate> = (0..7).map(|c| start + Duration::days(c)).collect();
-                    let shown_day = |c: usize| whole_weeks || days[c].month() == month;
+                    // Bands run over the days of the next and the last month
+                    // too: those days take new memos as well.
                     let mut segments = band_segments(
                         &self.data.notes,
                         |i| self.visible(i) && !self.is_guide(i),
                         |n, d| self.calendar_matches(n, d) && !(hide_done && n.done_on(Some(d))),
                         &days,
-                        shown_day,
+                        |_| true,
                     );
                     segments.sort_by_key(|s| {
                         (
@@ -1085,7 +1075,6 @@ impl App {
         for (row, (segments, lanes)) in weeks.iter().enumerate() {
             let start = first + Duration::days((row * 7) as i64);
             let days: Vec<NaiveDate> = (0..7).map(|c| start + Duration::days(c)).collect();
-            let shown_day = |c: usize| whole_weeks || days[c].month() == month;
             let mut covering = [0usize; 7];
             for s in segments {
                 for c in &mut covering[s.first..=s.last] {
@@ -1134,7 +1123,7 @@ impl App {
                 }
             }
             for (c, &n) in covering.iter().enumerate() {
-                if n > capacity && shown_day(c) {
+                if n > capacity {
                     let shown = capacity - 1;
                     ui.painter().text(
                         egui::pos2(
@@ -1233,20 +1222,30 @@ impl App {
             response
         };
         let r = |open: bool| if open { 4 } else { 0 };
+        let corners = egui::CornerRadius {
+            nw: r(open_left),
+            sw: r(open_left),
+            ne: r(open_right),
+            se: r(open_right),
+        };
         ui.painter().rect_filled(
             rect,
-            egui::CornerRadius {
-                nw: r(open_left),
-                sw: r(open_left),
-                ne: r(open_right),
-                se: r(open_right),
-            },
+            corners,
             if response.hovered() {
                 ui::lerp_color(fill, Color32::BLACK, 0.06)
             } else {
                 fill
             },
         );
+        if !self.dark && pale(fill) {
+            // Light gray and white bands would melt into the page.
+            ui.painter().rect_stroke(
+                rect,
+                corners,
+                Stroke::new(1.0_f32, ui::lerp_color(fill, Color32::BLACK, 0.42)),
+                egui::StrokeKind::Inside,
+            );
+        }
         let label = if n.title.trim().is_empty() {
             "제목 없음".to_owned()
         } else {
@@ -2048,6 +2047,13 @@ pub struct BandSegment {
 }
 /// Runs of consecutive `days` (one week row) on which each memo shows.
 /// The day of the month grid under `p` (held inside the grid).
+/// Gray or white, light enough that a band of it needs an edge.
+pub fn pale(c: Color32) -> bool {
+    let [r, g, b, _] = c.to_array();
+    let (lo, hi) = (r.min(g).min(b), r.max(g).max(b));
+    lo >= 215 && hi - lo <= 16
+}
+
 pub fn grid_day(
     p: egui::Pos2,
     all: Rect,
@@ -2166,7 +2172,7 @@ mod band_tests {
 #[cfg(test)]
 mod column_picker_tests {
     use super::*;
-    fn has_text(output: &egui::FullOutput, text: &str) -> bool {
+    pub(super) fn has_text(output: &egui::FullOutput, text: &str) -> bool {
         output
             .shapes
             .iter()
@@ -2401,5 +2407,53 @@ mod sticker_drop_tests {
             "a window that stopped drawing is ignored"
         );
         assert_eq!(app.calendar_date_at(egui::pos2(-50., -50.), 0.2), None);
+    }
+    #[test]
+    fn the_next_months_days_in_the_grid_show_and_take_memos() {
+        let date = |s: &str| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
+        let mut app = App::sample(date("2026-11-10"));
+        app.month = date("2026-11-01");
+        app.day = date("2026-11-10");
+        app.prefs.cal_weeks = 0;
+        // November 2026 ends on a Monday: the last row runs to 5 December.
+        let i = app.new_sticker_on(date("2026-12-02"));
+        app.data.notes[i].title = "다음 달 첫 주 일정".into();
+        let ctx = egui::Context::default();
+        let mut output = None;
+        for t in 0..2 {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000., 900.),
+                )),
+                time: Some(t as f64 * 0.1),
+                ..Default::default()
+            };
+            output = Some(ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.calendar_grid(ui));
+            }));
+        }
+        assert!(super::column_picker_tests::has_text(
+            output.as_ref().unwrap(),
+            "다음 달 첫 주 일정"
+        ));
+        assert!(app
+            .targets
+            .iter()
+            .any(|t| matches!(t.kind, dragging::Destination::Date(d) if d == date("2026-12-02"))));
+        assert!(app
+            .targets
+            .iter()
+            .any(|t| matches!(t.kind, dragging::Destination::Date(d) if d == date("2026-11-01"))));
+    }
+    #[test]
+    fn only_gray_and_white_bands_get_an_edge() {
+        let pale_ones: Vec<bool> = crate::PALETTE.iter().map(|&c| pale(c)).collect();
+        assert_eq!(
+            pale_ones,
+            vec![false, false, false, false, false, false, false, false, true, true]
+        );
+        assert!(pale(Color32::WHITE));
+        assert!(!pale(Color32::from_rgb(120, 120, 120)));
     }
 }

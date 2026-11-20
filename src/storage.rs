@@ -241,6 +241,8 @@ pub struct SettingsRec {
     /// Width of the title line folded once; 0 in saves made before it.
     pub title_width: f32,
     pub skip_swatch: bool,
+    pub cycle_color: bool,
+    pub color_turn: u32,
     /// Size of the color box (step 2); zero in saves made before it.
     pub swatch_size: [f32; 2],
     /// Saved inverted, so saves made before it have the magnets on.
@@ -300,6 +302,8 @@ impl Default for SettingsRec {
             skip_title: false,
             title_width: 0.,
             skip_swatch: false,
+            cycle_color: false,
+            color_turn: 0,
             swatch_size: [0.; 2],
             magnet_off: false,
             magnet_pt: 0.,
@@ -351,6 +355,8 @@ impl SettingsRec {
         self.skip_title = d.skip_title;
         self.title_width = d.title_width;
         self.skip_swatch = d.skip_swatch;
+        self.cycle_color = d.cycle_color;
+        self.color_turn = d.color_turn as u32;
         self.swatch_size = [d.swatch_size.x, d.swatch_size.y];
         self.magnet_off = !d.magnet;
         self.magnet_pt = d.magnet_pt;
@@ -396,6 +402,8 @@ impl SettingsRec {
             eframe::egui::Vec2::splat(crate::studio::SWATCH_SIZE)
         };
         d.magnet = !self.magnet_off;
+        d.cycle_color = self.cycle_color;
+        d.color_turn = self.color_turn as usize % crate::PALETTE.len();
         d.magnet_pt = if self.magnet_pt > 0. {
             self.magnet_pt
                 .clamp(crate::magnet::SNAP_MIN, crate::magnet::SNAP_MAX)

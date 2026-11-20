@@ -411,7 +411,7 @@ impl App {
             .with_max_inner_size([900., 900.])
             .with_taskbar(false)
             .with_window_level(egui::WindowLevel::AlwaysOnTop);
-        let fill = self.desktop.default_color;
+        let fill = self.desktop.next_new_color();
         let mut closed = false;
         let mut seen = None;
         ctx.show_viewport_immediate(
@@ -486,7 +486,7 @@ impl App {
             .with_max_inner_size([TITLE_MAX, 44.])
             .with_taskbar(false)
             .with_window_level(egui::WindowLevel::AlwaysOnTop);
-        let fill = mix(self.desktop.default_color, Color32::WHITE, 0.15);
+        let fill = mix(self.desktop.next_new_color(), Color32::WHITE, 0.15);
         let mut closed = false;
         let mut seen = None;
         ctx.show_viewport_immediate(
@@ -548,7 +548,7 @@ impl App {
             .desktop
             .swatch_probe_last
             .unwrap_or(self.desktop.swatch_size);
-        let fill = self.desktop.default_color;
+        let fill = self.desktop.next_new_color();
         let mut open = true;
         let mut escape = false;
         crate::ui::dialog(
@@ -1581,7 +1581,7 @@ impl App {
         let i = self.data.notes.len();
         let mut n = Note::new("", None, i);
         n.body.clear();
-        n.color = self.desktop.default_color;
+        n.color = self.desktop.take_new_color();
         n.document.font_name = self.desktop.note_font.clone();
         n.document.font_size = self.desktop.note_font_size * 4. / 3.;
         n.document.opacity = self.desktop.opacity / 100.;
@@ -3985,6 +3985,36 @@ mod size_window_tests {
         rec.skip_title = true;
         let d = load(&rec);
         assert!(d.skip_title && !d.skip_swatch);
+    }
+    #[test]
+    fn new_memos_take_the_colors_in_turn_and_the_turn_is_saved() {
+        use crate::storage::SettingsRec;
+        let mut app = App::sample(Local::now().date_naive());
+        let one = app.new_sticker();
+        assert_eq!(app.data.notes[one].color, app.desktop.default_color);
+        app.desktop.cycle_color = true;
+        app.desktop.color_turn = PALETTE.len() - 2;
+        let colors: Vec<Color32> = (0..3)
+            .map(|_| {
+                let i = app.new_sticker();
+                app.data.notes[i].color
+            })
+            .collect();
+        let n = PALETTE.len();
+        assert_eq!(colors, vec![PALETTE[n - 2], PALETTE[n - 1], PALETTE[0]]);
+        assert_eq!(app.desktop.next_new_color(), PALETTE[1]);
+        let mut rec = SettingsRec::default();
+        rec.read_desktop(&app.desktop);
+        let back: SettingsRec =
+            serde_json::from_str(&serde_json::to_string(&rec).unwrap()).unwrap();
+        let mut d = crate::desktop::Desktop::default();
+        back.write_desktop(&mut d);
+        assert!(d.cycle_color);
+        assert_eq!(d.color_turn, 1);
+        // Saves made before it: one color as before.
+        let old: SettingsRec = serde_json::from_str("{}").unwrap();
+        old.write_desktop(&mut d);
+        assert!(!d.cycle_color);
     }
     #[test]
     fn closing_the_title_width_window_sets_the_width_folds_start_with() {

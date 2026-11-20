@@ -53,6 +53,29 @@ pub fn set_mine(days: &[MyHoliday]) {
 
 /// The names of the holidays on `date` ("어린이날 · 부처님오신날"), the
 /// user's own days off included, if any.
+/// The Friday marked blue each month: the Friday of the week the 21st is
+/// in, or the Friday before it when the 21st falls on a weekend; a week
+/// earlier while that Friday is a holiday.
+pub fn blue_friday(year: i32, month: u32) -> Option<NaiveDate> {
+    let d21 = NaiveDate::from_ymd_opt(year, month, 21)?;
+    let mut friday = match d21.weekday() {
+        Weekday::Sat => d21 - Duration::days(1),
+        Weekday::Sun => d21 - Duration::days(2),
+        w => d21 + Duration::days(4 - w.num_days_from_monday() as i64),
+    };
+    for _ in 0..3 {
+        if name(friday).is_none() {
+            break;
+        }
+        friday -= Duration::days(7);
+    }
+    Some(friday)
+}
+
+pub fn is_blue_friday(date: NaiveDate) -> bool {
+    date.weekday() == Weekday::Fri && blue_friday(date.year(), date.month()) == Some(date)
+}
+
 pub fn name(date: NaiveDate) -> Option<String> {
     let mut names: Vec<String> = for_year(date.year())
         .into_iter()
@@ -513,6 +536,21 @@ mod tests {
 
     fn d(s: &str) -> NaiveDate {
         NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
+    }
+
+    #[test]
+    fn the_blue_friday_is_in_the_week_of_the_21st_and_skips_holidays() {
+        // The 21st on a Wednesday: that week's Friday.
+        assert_eq!(blue_friday(2026, 1), Some(d("2026-01-23")));
+        // On a Saturday or a Sunday: the Friday before it.
+        assert_eq!(blue_friday(2026, 11), Some(d("2026-11-20")));
+        assert_eq!(blue_friday(2026, 6), Some(d("2026-06-19")));
+        // On a Monday, but that Friday is Christmas: a week earlier.
+        assert_eq!(blue_friday(2026, 12), Some(d("2026-12-18")));
+        assert!(is_blue_friday(d("2026-12-18")));
+        assert!(!is_blue_friday(d("2026-12-25")));
+        assert!(!is_blue_friday(d("2026-11-27")));
+        assert!(!is_blue_friday(d("2026-11-21")));
     }
 
     #[test]
