@@ -1681,6 +1681,7 @@ fn content_impl(
         .max(1.);
     let rows = (body_height / (doc.font_size * doc.zoom * 1.4)).clamp(1., 18.) as usize;
     let previous_selection = doc.selection.clone();
+    let selection_popup = ui.data(|d| d.get_temp::<bool>(Id::new(HOST_MENU))) == Some(true);
     let body_width = ui.available_width().max(32.);
     let oversized_picture = pictures.iter().any(|p| !p.fit && p.width > body_width);
     let mut output = egui::ScrollArea::new([oversized_picture, true])
@@ -1823,6 +1824,9 @@ fn content_impl(
         let mut format = doc.format.clone();
         format.strike = true;
         doc.tabs[doc.active].spans.push(Span { range, format });
+    }
+    if selection_popup {
+        sticker_selection_popup(ui, doc, id, &mut output, &previous_selection);
     }
     output.state.store(ui.ctx(), text_id);
     let marks: Vec<_> = doc.tabs[doc.active]
@@ -2025,6 +2029,160 @@ fn content_impl(
         legacy_body.clone_from(&doc.tabs[0].body);
     }
     response
+}
+
+#[derive(Clone)]
+struct SelectionPopup {
+    text_id: Id,
+    range: CCursorRange,
+    rect: egui::Rect,
+}
+
+fn sticker_selection_popup(
+    ui: &egui::Ui,
+    doc: &mut Document,
+    id: Id,
+    output: &mut egui::text_edit::TextEditOutput,
+    previous_selection: &Range<usize>,
+) {
+    let ctx = ui.ctx();
+    let key = id.with("selection_popup");
+    let hover_key = Id::new("eframe_stable_hover_rects").with(ctx.viewport_id());
+    let text_id = output.response.id;
+    let old = ui.data_mut(|d| d.remove_temp::<Option<SelectionPopup>>(key).flatten());
+    let (focused, escaped, pressed, clicking, pointer, extend) = ui.input(|i| {
+        (
+            i.focused,
+            i.key_pressed(Key::Escape),
+            i.pointer.any_pressed(),
+            i.pointer.any_down() || i.pointer.any_released(),
+            i.pointer.interact_pos(),
+            i.events.iter().any(|e| {
+                matches!(e, egui::Event::Key {
+                key: Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown,
+                pressed: true,
+                modifiers,
+                ..
+            } if modifiers.shift)
+            }),
+        )
+    });
+    if !focused || escaped || output.response.changed() || doc.ime || doc.selected_cell.is_some() {
+        return;
+    }
+    let using_popup = old.as_ref().is_some_and(|p| {
+        clicking && p.text_id == text_id && pointer.is_some_and(|point| p.rect.contains(point))
+    });
+    if pressed && !using_popup {
+        return;
+    }
+    let selected = output
+        .state
+        .cursor
+        .char_range()
+        .filter(|r| r.primary.index != r.secondary.index);
+    let opened = output
+        .response
+        .drag_stopped_by(egui::PointerButton::Primary)
+        || (extend && doc.selection != *previous_selection);
+    let range = if using_popup && !opened {
+        old.map(|p| p.range)
+    } else if output.response.has_focus() && (opened || old.is_some_and(|p| p.text_id == text_id)) {
+        selected
+    } else {
+        None
+    };
+    let Some(range) = range else { return };
+
+    let caret = output
+        .galley
+        .pos_from_ccursor(range.primary)
+        .translate(output.galley_pos.to_vec2());
+    let clip = output.text_clip_rect;
+    if caret.bottom() < clip.top() || caret.top() > clip.bottom() {
+        return;
+    }
+    let screen = ctx.screen_rect().shrink(4.);
+    let width = 231.;
+    let height = 84.;
+    let at = egui::pos2(
+        (caret.left().clamp(clip.left(), clip.right()) - width * 0.5)
+            .clamp(screen.left(), (screen.right() - width).max(screen.left())),
+        if caret.bottom() + 5. + height <= screen.bottom() {
+            caret.bottom() + 5.
+        } else {
+            (caret.top() - 5. - height).max(screen.top())
+        },
+    );
+    let mut controls = Vec::with_capacity(15);
+    let mut clipboard = None;
+    let mut color = None;
+    let popup = egui::Area::new(key)
+        .order(egui::Order::Foreground)
+        .fixed_pos(at)
+        .default_size(Vec2::new(width, height))
+        .fade_in(false)
+        .show(ctx, |ui| {
+            let tone = crate::ui::t(ui);
+            egui::Frame::NONE
+                .fill(tone.bg)
+                .stroke(Stroke::new(1.0_f32, tone.line))
+                .inner_margin(egui::Margin::same(6))
+                .corner_radius(8.)
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing = Vec2::splat(2.);
+                    ui.horizontal(|ui| {
+                        for (label, event) in
+                            [("잘라내기", egui::Event::Cut), ("복사", egui::Event::Copy)]
+                        {
+                            let button = ui.add_sized([108., 22.], egui::Button::new(label));
+                            controls.push(button.rect);
+                            if button.clicked() {
+                                clipboard = Some(event);
+                            }
+                        }
+                    });
+                    for (highlight, label, colors) in [
+                        (false, "글자색", &TEXT_COLORS[..]),
+                        (true, "형광펜", &HIGHLIGHTS[..]),
+                    ] {
+                        ui.horizontal(|ui| {
+                            ui.add_sized([48., 22.], egui::Label::new(label).extend());
+                            for (index, &(_, swatch)) in colors.iter().enumerate() {
+                                let button = paint_color_chip(ui, swatch, highlight);
+                                controls.push(button.rect);
+                                if button.clicked() {
+                                    color = Some((highlight, index as u8));
+                                }
+                            }
+                        });
+                    }
+                });
+        });
+    if let Some(event) = clipboard {
+        output.state.cursor.set_char_range(Some(range));
+        ui.data_mut(|d| d.insert_temp(id.with("edit_menu_events"), vec![event]));
+        ctx.request_repaint();
+    } else if let Some((highlight, index)) = color {
+        let [a, b] = range.sorted();
+        doc.selection = a.index..b.index;
+        output.state.cursor.set_char_range(Some(range));
+        ctx.memory_mut(|m| m.request_focus(text_id));
+        doc.paint_selection(highlight, index);
+        ctx.request_repaint();
+    } else {
+        ui.data_mut(|d| {
+            d.insert_temp(
+                key,
+                Some(SelectionPopup {
+                    text_id,
+                    range,
+                    rect: popup.response.rect,
+                }),
+            );
+            d.insert_temp(hover_key, std::sync::Arc::new(controls));
+        });
+    }
 }
 
 /// Read-only rendering for a saved comment. The document and legacy text are
@@ -2712,6 +2870,10 @@ pub fn opacity_row(ui: &mut egui::Ui, opacity: &mut f32) -> bool {
 }
 /// A swatch in the color popup ("없음"/"기본": a crossed box).
 fn color_chip(ui: &mut egui::Ui, name: &str, c: Color32, highlight: bool) -> egui::Response {
+    paint_color_chip(ui, c, highlight).on_hover_text(name)
+}
+
+fn paint_color_chip(ui: &mut egui::Ui, c: Color32, highlight: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(22.), egui::Sense::click());
     let ink = ui.visuals().text_color();
     let r = rect.shrink(2.);
@@ -2740,9 +2902,7 @@ fn color_chip(ui: &mut egui::Ui, name: &str, c: Color32, highlight: bool) -> egu
             egui::StrokeKind::Inside,
         );
     }
-    response
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text(name)
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 fn tool_button(
     ui: &mut egui::Ui,
@@ -6938,6 +7098,105 @@ mod inline_table_tests {
         ui_frame(&ctx, &mut doc, &mut body, vec![egui::Event::Copy], 0.4);
         assert_eq!(doc.selection, 0..body.chars().count());
         assert_eq!(body, "클립보드 ABC");
+    }
+
+    #[test]
+    fn sticker_selection_popup_applies_color_and_keeps_copy_and_cut_on_the_selection() {
+        let ctx = egui::Context::default();
+        let mut doc = Document::default();
+        let mut body = "메모 ABC".to_owned();
+        let end = body.chars().count();
+        doc.requested_selection = Some(end..end);
+        let mut time = 0.;
+        let mut frame = |events| {
+            time += 0.1;
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(360., 270.),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let host = Id::new(HOST_MENU);
+                        ui.data_mut(|d| {
+                            d.insert_temp(host, true);
+                            d.remove::<std::sync::Arc<Vec<egui::Rect>>>(
+                                Id::new("eframe_stable_hover_rects").with(egui::ViewportId::ROOT),
+                            );
+                        });
+                        content(ui, &mut body, &mut doc, "selection_popup_test");
+                        ui.data_mut(|d| d.remove::<bool>(host));
+                    });
+                },
+            )
+        };
+        let controls = || {
+            ctx.data(|d| {
+                d.get_temp::<std::sync::Arc<Vec<egui::Rect>>>(
+                    Id::new("eframe_stable_hover_rects").with(egui::ViewportId::ROOT),
+                )
+                .unwrap()
+            })
+        };
+        let shift_left = || key(Key::ArrowLeft, Modifiers::SHIFT);
+        let _ = frame(vec![]);
+        let _ = frame(vec![shift_left()]);
+        let _ = frame(vec![]);
+        for events in click(controls()[3].center()) {
+            let _ = frame(events);
+        }
+
+        let _ = frame(vec![shift_left()]);
+        let _ = frame(vec![]);
+        for events in click(controls()[1].center()) {
+            let _ = frame(events);
+        }
+        let copied = frame(vec![]);
+        assert!(copied
+            .platform_output
+            .commands
+            .iter()
+            .any(|c| matches!(c, egui::OutputCommand::CopyText(text) if text == "BC")));
+
+        let _ = frame(vec![shift_left()]);
+        let _ = frame(vec![]);
+        for events in click(controls()[0].center()) {
+            let _ = frame(events);
+        }
+        let cut = frame(vec![]);
+        assert!(cut
+            .platform_output
+            .commands
+            .iter()
+            .any(|c| matches!(c, egui::OutputCommand::CopyText(text) if text == "ABC")));
+        let _ = frame(vec![key(Key::Z, Modifiers::CTRL)]);
+        let _ = frame(vec![key(Key::End, Modifiers::NONE)]);
+        let end_of_line = LAST_CARET.with(|r| r.get().unwrap().1.center());
+        let from = end_of_line - Vec2::new(2., 0.);
+        let to = from - Vec2::new(36., 0.);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            pressed,
+            button: egui::PointerButton::Primary,
+            modifiers: Modifiers::NONE,
+        };
+        let _ = frame(vec![egui::Event::PointerMoved(from), button(from, true)]);
+        let _ = frame(vec![egui::Event::PointerMoved(to)]);
+        assert!(!ctx
+            .data(|d| d.get_temp::<std::sync::Arc<Vec<egui::Rect>>>(
+                Id::new("eframe_stable_hover_rects").with(egui::ViewportId::ROOT),
+            ))
+            .is_some());
+        let _ = frame(vec![button(to, false)]);
+        assert_eq!(controls().len(), 15);
+        assert_eq!(body, "메모 ABC");
+        assert_eq!(doc.tabs[0].spans.last().unwrap().range, end - 1..end);
+        assert_eq!(doc.tabs[0].spans.last().unwrap().format.color, 1);
     }
 
     fn table_area(_ctx: &egui::Context) -> egui::Rect {

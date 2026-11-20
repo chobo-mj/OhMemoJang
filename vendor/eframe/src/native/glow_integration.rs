@@ -969,7 +969,43 @@ impl GlowWinitRunning<'_> {
                 if let (Some(window), Some(egui_winit)) =
                     (&viewport.window, &mut viewport.egui_winit)
                 {
+                    let stable_hover = if let winit::event::WindowEvent::CursorMoved { position, .. } = event {
+                        let ctx = &self.integration.egui_ctx;
+                        let regions = ctx.data(|d| {
+                            d.get_temp::<std::sync::Arc<Vec<egui::Rect>>>(
+                                egui::Id::new("eframe_stable_hover_rects").with(viewport_id),
+                            )
+                        });
+                        regions.is_some_and(|regions| {
+                            let scale = egui_winit::pixels_per_point(ctx, window);
+                            let point = egui::pos2(position.x as f32 / scale, position.y as f32 / scale);
+                            // Repaint when the hovered control changes. Keep receiving native
+                            // motion so the next mouse click still uses the actual position.
+                            ctx.input_for(viewport_id, |i| {
+                                !i.pointer.any_down()
+                                    && i.pointer.hover_pos().is_some_and(|previous| {
+                                        regions.iter().any(|r| r.contains(previous) && r.contains(point))
+                                    })
+                            })
+                        })
+                    } else {
+                        false
+                    };
                     event_response = self.integration.on_window_event(window, egui_winit, event);
+                    if stable_hover {
+                        let events = &mut egui_winit.egui_input_mut().events;
+                        let len = events.len();
+                        if len >= 2
+                            && matches!(events[len - 1], egui::Event::PointerMoved(_))
+                            && matches!(events[len - 2], egui::Event::PointerMoved(_))
+                        {
+                            events.remove(len - 2);
+                        }
+                        // A pending click, wheel, key, or touch must still repaint.
+                        if matches!(events.as_slice(), [egui::Event::PointerMoved(_)]) {
+                            event_response.repaint = false;
+                        }
+                    }
                 }
             } else {
                 log::trace!("Ignoring event: no viewport for {viewport_id:?}");

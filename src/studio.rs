@@ -1853,6 +1853,8 @@ impl App {
                     rested = true;
                     return;
                 }
+                let hover_key = egui::Id::new("eframe_stable_hover_rects").with(ctx.viewport_id());
+                ctx.data_mut(|d| d.remove::<std::sync::Arc<Vec<Rect>>>(hover_key));
                 w.drawn_at = now;
                 w.drawn_changes = changes;
                 crate::tutorial::mark(ctx, crate::tutorial::Spot::Note(i), ctx.screen_rect());
