@@ -1,6 +1,11 @@
 use crate::*;
 use chrono::Duration;
 use egui::{Rect, Sense, Stroke};
+
+struct StandingScheduleDrag {
+    note: usize,
+    from: NaiveDate,
+}
 impl App {
     pub fn filters(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
@@ -683,7 +688,26 @@ impl App {
                         .rect_filled(rect.shrink(2.), 4., ACCENT.gamma_multiply(0.18));
                 }
             }
-            if r.dnd_hover_payload::<NoteDrag>().is_some() {
+            let standing_move = self.cal.painting
+                && self.cal.standing_pinned()
+                && self.stand_feature_on(crate::calendar_dock::StandFeature::Move);
+            if standing_move {
+                if let Some(drag) = r.dnd_release_payload::<StandingScheduleDrag>() {
+                    let note = &mut self.data.notes[drag.note];
+                    if let Some(start) = note.date {
+                        if let Some(next) = start.checked_add_signed(day - drag.from) {
+                            if next != start {
+                                note.move_start(next);
+                                self.day = day;
+                                self.toast = format!("{} → {day}", note.title);
+                            }
+                        }
+                    }
+                }
+            }
+            if r.dnd_hover_payload::<NoteDrag>().is_some()
+                || (standing_move && r.dnd_hover_payload::<StandingScheduleDrag>().is_some())
+            {
                 ui.painter().rect_stroke(
                     rect.shrink(2.),
                     4.,
@@ -1206,7 +1230,12 @@ impl App {
         open_right: bool,
     ) {
         let band_on = self.stand_allows(crate::calendar_dock::StandFeature::Band);
+        let standing = self.cal.painting && self.cal.standing_pinned();
         let n = &self.data.notes[i];
+        let standing_move = standing
+            && self.stand_feature_on(crate::calendar_dock::StandFeature::Move)
+            && self.desktop.calendar_basis == 1
+            && n.date.is_some();
         let done = days.iter().all(|&d| n.done_on(Some(d)));
         let fill = if self.dark {
             Color32::from_rgb(52, 50, 46)
@@ -1217,10 +1246,11 @@ impl App {
             .interact(
                 rect,
                 ui.id().with(("band", i, days[0])),
-                if band_on {
-                    Sense::click_and_drag()
-                } else {
-                    Sense::hover()
+                match (band_on, !standing && band_on || standing_move) {
+                    (true, true) => Sense::click_and_drag(),
+                    (true, false) => Sense::click(),
+                    (false, true) => Sense::drag(),
+                    (false, false) => Sense::hover(),
                 },
             )
             .on_hover_text(&n.title);
@@ -1294,30 +1324,43 @@ impl App {
             galley,
             INK,
         );
+        let day_at = |p: egui::Pos2| {
+            let k = ((p.x - rect.left()) / (rect.width() / days.len() as f32)).floor();
+            days[(k.max(0.) as usize).min(days.len() - 1)]
+        };
+        if standing_move && response.drag_started_by(egui::PointerButton::Primary) {
+            if let Some(press) = ui.input(|input| input.pointer.press_origin()) {
+                egui::DragAndDrop::set_payload(
+                    ui.ctx(),
+                    StandingScheduleDrag {
+                        note: i,
+                        from: day_at(press),
+                    },
+                );
+            }
+        }
         if !band_on {
-            // The standing calendar, with memo bands not turned on.
             return;
         }
         // The day under the pointer is the occurrence a click or drag uses.
         let day = response
             .interact_pointer_pos()
             .or(response.hover_pos())
-            .map(|p| {
-                let k = ((p.x - rect.left()) / (rect.width() / days.len() as f32)).floor();
-                days[(k.max(0.) as usize).min(days.len() - 1)]
-            })
+            .map(day_at)
             .unwrap_or(days[0]);
-        response.dnd_set_drag_payload(NoteDrag);
-        let grips = self.band_edges(ui, i, rect, open_left, open_right);
         let occurrence = if self.desktop.calendar_basis == 1 {
             Some(day)
         } else {
             None
         };
-        self.drag_source_on(ui, &response, i, occurrence);
-        if let Some(s) = self.sources.last_mut() {
-            // The grips at the ends resize; only the middle carries the memo.
-            s.rect = grips.intersect(ui.clip_rect());
+        if !standing {
+            response.dnd_set_drag_payload(NoteDrag);
+            let grips = self.band_edges(ui, i, rect, open_left, open_right);
+            self.drag_source_on(ui, &response, i, occurrence);
+            if let Some(s) = self.sources.last_mut() {
+                // The grips at the ends resize; only the middle carries the memo.
+                s.rect = grips.intersect(ui.clip_rect());
+            }
         }
         if response.clicked() {
             self.open_sticker(i, occurrence);

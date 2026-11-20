@@ -1513,6 +1513,7 @@ impl App {
                         ui.checkbox(&mut self.prefs.stand_range, "날짜를 끌어 기간 일정 만들기");
                         ui.checkbox(&mut self.prefs.stand_drop, "스티커를 끌어 놓아 일정 등록");
                         ui.checkbox(&mut self.prefs.stand_band, "메모 막대 클릭 · 우클릭");
+                        ui.checkbox(&mut self.prefs.stand_move, "일정 막대를 끌어 날짜 옮기기");
                     });
                 }
             }

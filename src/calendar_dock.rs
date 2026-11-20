@@ -100,6 +100,7 @@ pub enum StandFeature {
     Drop,
     /// Clicking or right-clicking a memo's band.
     Band,
+    Move,
 }
 
 pub struct Dock {
@@ -280,6 +281,7 @@ impl App {
                 StandFeature::Range => p.stand_range,
                 StandFeature::Drop => p.stand_drop,
                 StandFeature::Band => p.stand_band,
+                StandFeature::Move => p.stand_move,
             }
     }
     /// [`Self::stand_feature_on`] for what is being drawn: only the
@@ -409,7 +411,9 @@ impl App {
                         if self.cal.horizontal {
                             self.calendar_horizontal(ui);
                         } else {
-                            egui::ScrollArea::vertical().show(ui, |ui| self.calendar(ui));
+                            egui::ScrollArea::vertical()
+                                .drag_to_scroll(false)
+                                .show(ui, |ui| self.calendar(ui));
                         }
                         self.cal.painting = false;
                     });
@@ -1101,6 +1105,7 @@ mod standing_tests {
             StandFeature::Range,
             StandFeature::Drop,
             StandFeature::Band,
+            StandFeature::Move,
         ];
         // Not standing: everything works.
         assert!(all.iter().all(|&f| app.stand_feature_on(f)));
