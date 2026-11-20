@@ -64,6 +64,8 @@ pub struct Note {
     pub journal_comments: Vec<String>,
     pub color: eframe::egui::Color32,
     pub topmost: bool,
+    /// The sticker's X button does nothing: only its right-click menu closes it.
+    pub close_locked: bool,
     pub fold: u8,
     pub deleted: bool,
     pub has_image: bool,
@@ -105,6 +107,7 @@ impl Note {
             journal_comments: vec![],
             color: crate::PALETTE[i % 10],
             topmost: false,
+            close_locked: false,
             fold: 0,
             deleted: false,
             has_image: false,

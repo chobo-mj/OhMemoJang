@@ -342,6 +342,9 @@ pub struct Tab {
 /// right-click menu; the entry picked is left under `HOST_ACTION`.
 pub const HOST_MENU: &str = "composer_host_menu";
 pub const HOST_ACTION: &str = "composer_host_action";
+/// Set (temporarily) by a memo window: the text's right-click menu offers
+/// "글꼴…" (left under `HOST_ACTION`) and the window's opacity.
+pub const HOST_STYLE: &str = "composer_host_style";
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum HostAction {
     Schedule,
@@ -349,6 +352,7 @@ pub enum HostAction {
     StickerMenu,
     Trash,
     Purge,
+    Font,
 }
 
 pub const PICTURE_BASE: u32 = 0xE000;
@@ -847,14 +851,6 @@ impl Document {
         }
     }
     pub fn toggle_format(&mut self, kind: usize) {
-        fn flag(f: &mut Format, kind: usize) -> &mut bool {
-            match kind {
-                0 => &mut f.bold,
-                1 => &mut f.italic,
-                2 => &mut f.underline,
-                _ => &mut f.strike,
-            }
-        }
         // On a selection: on unless every selected character has it.
         let on = if self.selected_cell.is_none() && !self.selection.is_empty() {
             let tab = &self.tabs[self.active];
@@ -868,6 +864,12 @@ impl Document {
         } else {
             !*flag(&mut self.format, kind)
         };
+        self.set_format(kind, on);
+    }
+    /// Turn one style (`kind`: 0 bold, 1 italic, 2 underline, 3 strike) on
+    /// or off for the selection (or the selected table cell), and for what
+    /// is typed next.
+    fn set_format(&mut self, kind: usize, on: bool) {
         *flag(&mut self.format, kind) = on;
         if let Some((b, r, c)) = self.selected_cell {
             if let Some(Block::Table(t)) = self.tabs[self.active].blocks.get_mut(b) {
@@ -881,6 +883,299 @@ impl Document {
             self.restyle(|f| *flag(f, kind) = on);
         }
     }
+    /// What the font dialog starts from: the memo's font and size, and the
+    /// styles of the selection (a style only when every selected character
+    /// has it, a color only when they share it), or of what is typed next.
+    pub fn font_choice(&self) -> FontChoice {
+        let tab = self.active.min(self.tabs.len().saturating_sub(1));
+        let cell = self.selected_cell.filter(|_| tab == self.active);
+        let mut start = self.format.clone();
+        if let (None, Some(t)) = (cell, self.tabs.get(tab)) {
+            let chars = t.body.chars().count();
+            let range = self.selection.start.min(chars)..self.selection.end.min(chars);
+            if !range.is_empty() {
+                let winner = winning_spans(&t.spans, chars);
+                let at = |i: usize| match winner[i] {
+                    u32::MAX => Format::default(),
+                    w => t.spans[w as usize].format.clone(),
+                };
+                let first = at(range.start);
+                start = first.clone();
+                for i in range {
+                    let mut f = at(i);
+                    for kind in 0..4 {
+                        if !*flag(&mut f, kind) {
+                            *flag(&mut start, kind) = false;
+                        }
+                    }
+                    if f.color != first.color {
+                        start.color = MIXED;
+                    }
+                    if f.highlight != first.highlight {
+                        start.highlight = MIXED;
+                    }
+                }
+            }
+        }
+        FontChoice {
+            font_name: self.font_name.clone(),
+            font_size: self.font_size,
+            format: start.clone(),
+            start,
+            tab,
+            selection: self.selection.clone(),
+            cell,
+        }
+    }
+    /// The font dialog's "확인": the font and size for the whole memo, and
+    /// each style or color the dialog changed for the text selected when it
+    /// opened (what was not changed keeps each character's own).
+    pub fn apply_font_choice(&mut self, c: &FontChoice) {
+        if !c.font_name.is_empty() {
+            self.font_name.clone_from(&c.font_name);
+        }
+        if c.font_size.is_finite() && c.font_size > 0. {
+            self.font_size = c.font_size.clamp(6. / 0.75, 48. / 0.75);
+        }
+        if c.format == c.start {
+            return;
+        }
+        // The text may have been clicked elsewhere while the dialog was
+        // open: the styles go to what was selected when it opened.
+        let (selection, cell) = (self.selection.clone(), self.selected_cell);
+        if c.tab == self.active {
+            self.selection = c.selection.clone();
+            self.selected_cell = c.cell;
+        } else {
+            let end = self.selection.end;
+            self.selection = end..end;
+            self.selected_cell = None;
+        }
+        let (mut now, mut was) = (c.format.clone(), c.start.clone());
+        for kind in 0..4 {
+            let on = *flag(&mut now, kind);
+            if on != *flag(&mut was, kind) {
+                self.set_format(kind, on);
+            }
+        }
+        for (highlight, new, old) in [
+            (false, c.format.color, c.start.color),
+            (true, c.format.highlight, c.start.highlight),
+        ] {
+            if new != old && new != MIXED {
+                self.paint_selection(highlight, new);
+            }
+        }
+        if let Some((b, r, col)) = self.selected_cell {
+            // A cell keeps its colors in its own format.
+            if let Some(Block::Table(t)) = self.tabs[self.active].blocks.get_mut(b) {
+                if let Some(cell) = t.cells.get_mut(r).and_then(|r| r.get_mut(col)) {
+                    cell.format = self.format.clone();
+                }
+            }
+        }
+        if c.tab == self.active {
+            self.selection = selection;
+            self.selected_cell = cell;
+        }
+    }
+}
+/// A color or highlighter that differs across the selection.
+pub const MIXED: u8 = u8::MAX;
+fn flag(f: &mut Format, kind: usize) -> &mut bool {
+    match kind {
+        0 => &mut f.bold,
+        1 => &mut f.italic,
+        2 => &mut f.underline,
+        _ => &mut f.strike,
+    }
+}
+/// What the font dialog edits (see [`Document::font_choice`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FontChoice {
+    pub font_name: String,
+    /// In the memo's own unit (points are this × 0.75).
+    pub font_size: f32,
+    pub format: Format,
+    /// The styles as they were: only what the dialog changed is applied, so
+    /// a selection of mixed styles keeps them unless one is picked.
+    start: Format,
+    tab: usize,
+    selection: Range<usize>,
+    cell: Option<(usize, usize, usize)>,
+}
+impl FontChoice {
+    /// The text the preview shows: the selection's first line (up to 24
+    /// characters), or a sample.
+    pub fn sample(&self, doc: &Document) -> String {
+        let picked = doc
+            .tabs
+            .get(self.tab)
+            .filter(|_| self.cell.is_none() && !self.selection.is_empty())
+            .map(|t| {
+                t.body
+                    .chars()
+                    .skip(self.selection.start)
+                    .take(self.selection.len())
+                    .filter(|&c| picture_id(c).is_none())
+                    .take_while(|&c| c != '\n')
+                    .take(24)
+                    .collect::<String>()
+            })
+            .unwrap_or_default();
+        if picked.trim().is_empty() {
+            "가나다라 AaBbCc 123".into()
+        } else {
+            picked
+        }
+    }
+}
+/// The font dialog's controls: font, size, styles, colors and a preview of
+/// `sample`. Returns whether anything was changed.
+pub fn font_panel(ui: &mut egui::Ui, c: &mut FontChoice, sample: &str) -> bool {
+    let before = c.clone();
+    let list_height = 168.;
+    ui.horizontal_top(|ui| {
+        ui.vertical(|ui| {
+            ui.strong("글꼴");
+            ui.set_width(178.);
+            egui::Frame::NONE
+                .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+                .corner_radius(4.)
+                .inner_margin(egui::Margin::same(3))
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("font_dialog_fonts")
+                        .max_height(list_height)
+                        .min_scrolled_height(list_height)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for name in font_choices() {
+                                let face = font_id(ui, 14., name, false);
+                                let selected = c.font_name == name;
+                                let r =
+                                    ui.selectable_label(selected, RichText::new(name).font(face));
+                                if r.clicked() {
+                                    c.font_name = name.into();
+                                }
+                            }
+                        });
+                });
+        });
+        ui.vertical(|ui| {
+            ui.strong("크기");
+            ui.set_width(84.);
+            let mut pt = (c.font_size * 0.75).round();
+            if ui
+                .add(
+                    egui::DragValue::new(&mut pt)
+                        .range(6.0..=48.0)
+                        .speed(0.2)
+                        .fixed_decimals(0)
+                        .suffix(" pt"),
+                )
+                .changed()
+            {
+                c.font_size = pt.round() / 0.75;
+            }
+            egui::ScrollArea::vertical()
+                .id_salt("font_dialog_sizes")
+                .max_height(list_height - 26.)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    for v in [
+                        8., 9., 10., 11., 12., 14., 16., 18., 20., 24., 28., 32., 36., 48.,
+                    ] {
+                        if ui
+                            .selectable_label((pt - v).abs() < 0.1, format!("{v:.0} pt"))
+                            .clicked()
+                        {
+                            c.font_size = v / 0.75;
+                        }
+                    }
+                });
+        });
+        ui.vertical(|ui| {
+            ui.strong("서식");
+            for (kind, label) in [
+                (0, "굵게  Ctrl+B"),
+                (1, "기울임  Ctrl+I"),
+                (2, "밑줄  Ctrl+U"),
+                (3, "취소선"),
+            ] {
+                ui.checkbox(flag(&mut c.format, kind), label);
+            }
+        });
+    });
+    ui.add_space(6.);
+    for (highlight, title, colors) in [
+        (false, "글자 색", &TEXT_COLORS[..]),
+        (true, "형광펜", &HIGHLIGHTS[..]),
+    ] {
+        ui.horizontal(|ui| {
+            ui.add_sized([52., 22.], egui::Label::new(title));
+            for (k, &(name, col)) in colors.iter().enumerate() {
+                let r = color_chip(ui, name, col, highlight);
+                let value = if highlight {
+                    &mut c.format.highlight
+                } else {
+                    &mut c.format.color
+                };
+                if *value == k as u8 {
+                    ui.painter().rect_stroke(
+                        r.rect,
+                        5.,
+                        Stroke::new(2.0_f32, ui.visuals().selection.stroke.color),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+                if r.clicked() {
+                    *value = k as u8;
+                }
+            }
+            let value = if highlight {
+                c.format.highlight
+            } else {
+                c.format.color
+            };
+            if value == MIXED {
+                crate::ui::caption(ui, "여러 색");
+            }
+        });
+    }
+    ui.add_space(6.);
+    ui.strong("미리보기");
+    let size = c.font_size.clamp(6. / 0.75, 48. / 0.75);
+    let font = font_id(ui, size, &c.font_name, false);
+    let bold_font = font_id(ui, size, &c.font_name, true);
+    let mut shown = c.format.clone();
+    if shown.color == MIXED {
+        shown.color = 0;
+    }
+    if shown.highlight == MIXED {
+        shown.highlight = 0;
+    }
+    let ink = ui.visuals().text_color();
+    let mut job = layout(sample, &[], &shown, font, bold_font, ink);
+    job.wrap.max_width = f32::INFINITY;
+    job.wrap.max_rows = 1;
+    egui::Frame::NONE
+        .fill(ui.visuals().extreme_bg_color)
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+        .corner_radius(4.)
+        .inner_margin(egui::Margin::symmetric(10, 8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.set_height(72.);
+            ui.centered_and_justified(|ui| {
+                ui.add(egui::Label::new(job).truncate());
+            });
+        });
+    crate::ui::caption(
+        ui,
+        "글꼴과 크기는 메모 전체에, 서식과 색은 선택한 글자(없으면 이어서 쓸 글자)에 적용돼요.",
+    );
+    *c != before
 }
 
 /// Render an inline editor with its footer anchored to the bottom of its available panel.
@@ -1630,6 +1925,20 @@ fn content_impl(
             ui.close_menu();
         }
         ui.separator();
+        // In a memo window: the font dialog and the window's opacity.
+        if ui
+            .data(|d| d.get_temp::<bool>(egui::Id::new(HOST_STYLE)))
+            .unwrap_or(false)
+        {
+            if ui.button("글꼴…").clicked() {
+                ui.data_mut(|d| d.insert_temp(egui::Id::new(HOST_ACTION), HostAction::Font));
+                ui.close_menu();
+            }
+            if opacity_row(ui, &mut doc.opacity) {
+                crate::float::keep_open(ui);
+            }
+            ui.separator();
+        }
         if ui
             .add_enabled(doc.zoom != 1., egui::Button::new("원본 배율 100%"))
             .clicked()
@@ -2363,6 +2672,43 @@ fn toolbar(ui: &mut egui::Ui, doc: &mut Document, id: Id, opacity: bool) -> egui
         },
     )
     .response
+}
+/// "투명도" with its slider and four presets, for a memo window's
+/// right-click menus. Returns whether the pointer is on it (a menu that
+/// closes on a click stays open for it).
+pub fn opacity_row(ui: &mut egui::Ui, opacity: &mut f32) -> bool {
+    let r = ui
+        .horizontal(|ui| {
+            ui.label("투명도");
+            let mut pct = (*opacity * 100.).round();
+            ui.spacing_mut().slider_width = 96.;
+            if ui
+                .add(
+                    egui::Slider::new(&mut pct, 20.0..=100.)
+                        .integer()
+                        .suffix("%"),
+                )
+                .changed()
+            {
+                *opacity = pct / 100.;
+            }
+        })
+        .response;
+    let presets = ui
+        .horizontal(|ui| {
+            ui.spacing_mut().button_padding = Vec2::new(6., 2.);
+            let pct = (*opacity * 100.).round();
+            for v in [40., 60., 80., 100.] {
+                if ui
+                    .selectable_label((pct - v).abs() < 0.5, format!("{v:.0}%"))
+                    .clicked()
+                {
+                    *opacity = v / 100.;
+                }
+            }
+        })
+        .response;
+    ui.rect_contains_pointer(r.rect.union(presets.rect))
 }
 /// A swatch in the color popup ("없음"/"기본": a crossed box).
 fn color_chip(ui: &mut egui::Ui, name: &str, c: Color32, highlight: bool) -> egui::Response {
@@ -5302,6 +5648,103 @@ fn shortcut_substitution(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn the_font_dialog_starts_from_what_every_selected_character_shares() {
+        let mut d = Document::default();
+        d.tabs[0].body = "abcdef".into();
+        let bold_red = Format {
+            bold: true,
+            color: 1,
+            ..Default::default()
+        };
+        d.tabs[0].spans.push(Span {
+            range: 0..2,
+            format: bold_red.clone(),
+        });
+        d.selection = 0..2;
+        assert_eq!(d.font_choice().format, bold_red);
+        // Half bold, two colors: neither is shown as chosen.
+        d.selection = 0..4;
+        let c = d.font_choice();
+        assert!(!c.format.bold);
+        assert_eq!(c.format.color, MIXED);
+        assert_eq!(c.format.highlight, 0);
+        // Nothing selected: what is typed next.
+        d.selection = 3..3;
+        d.format.italic = true;
+        assert!(d.font_choice().format.italic);
+    }
+    #[test]
+    fn the_font_dialog_changes_only_what_was_picked_on_the_selection_it_opened_with() {
+        let mut d = Document::default();
+        d.tabs[0].body = "abcdef".into();
+        d.tabs[0].spans.push(Span {
+            range: 0..2,
+            format: Format {
+                bold: true,
+                color: 1,
+                ..Default::default()
+            },
+        });
+        d.selection = 0..4;
+        let mut c = d.font_choice();
+        c.font_name = "굴림".into();
+        c.font_size = 20. / 0.75;
+        c.format.underline = true;
+        // The text was clicked elsewhere while the dialog was open.
+        d.selection = 5..5;
+        d.apply_font_choice(&c);
+        assert_eq!(d.font_name, "굴림");
+        assert!((d.font_size * 0.75 - 20.).abs() < 0.01);
+        let w = winning_spans(&d.tabs[0].spans, 6);
+        let f = |i: usize| match w[i] {
+            u32::MAX => Format::default(),
+            k => d.tabs[0].spans[k as usize].format.clone(),
+        };
+        for i in 0..4 {
+            assert!(f(i).underline, "{i}");
+        }
+        // Bold and the two colors were left as they were (mixed).
+        assert!(f(0).bold && f(1).bold && !f(2).bold);
+        assert_eq!((f(0).color, f(3).color), (1, 0));
+        assert_eq!(f(4), Format::default(), "outside the selection");
+        assert_eq!(d.selection, 5..5, "the caret stays where it was put");
+        // A color picked over a mixed selection colors all of it.
+        d.selection = 0..4;
+        let mut c = d.font_choice();
+        c.format.color = 4;
+        d.apply_font_choice(&c);
+        let w = winning_spans(&d.tabs[0].spans, 6);
+        let color = |i: usize| d.tabs[0].spans[w[i] as usize].format.color;
+        assert!((0..4).all(|i| color(i) == 4));
+    }
+    #[test]
+    fn with_nothing_selected_the_font_dialog_sets_what_is_typed_next() {
+        let mut d = Document::default();
+        d.tabs[0].body = "abc".into();
+        d.selection = 3..3;
+        let mut c = d.font_choice();
+        c.format.bold = true;
+        c.format.highlight = 2;
+        d.apply_font_choice(&c);
+        assert!(d.format.bold);
+        assert_eq!(d.format.highlight, 2);
+        assert!(d.tabs[0].spans.is_empty(), "no text was restyled");
+        // An unchanged dialog changes nothing at all.
+        let before = d.format.clone();
+        let c = d.font_choice();
+        d.apply_font_choice(&c);
+        assert_eq!(d.format, before);
+    }
+    #[test]
+    fn the_font_preview_shows_the_selected_line_or_a_sample() {
+        let mut d = Document::default();
+        d.tabs[0].body = "첫 줄입니다\n둘째 줄".into();
+        d.selection = 2..9;
+        assert_eq!(d.font_choice().sample(&d), "줄입니다");
+        d.selection = 1..1;
+        assert_eq!(d.font_choice().sample(&d), "가나다라 AaBbCc 123");
+    }
     #[test]
     fn coloring_a_selection_keeps_its_bold_and_paints_the_layout() {
         let mut d = Document::default();

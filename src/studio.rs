@@ -5,9 +5,8 @@ use std::collections::BTreeMap;
 
 /// The color of the "중요 메모" star shown before titles.
 pub const STAR: Color32 = Color32::from_rgb(236, 168, 32);
-/// The smallest sticker: both of its toolbars still show whole (the top bar's
-/// buttons with a little blank space to drag it by, the format buttons on
-/// one row).
+/// The smallest sticker: its top bar still shows whole (its buttons with a
+/// little blank space to drag it by).
 pub const STICKER_MIN: Vec2 = Vec2::new(290., 220.);
 /// Width of the title line a memo folds to (step 1) unless set otherwise,
 /// and the range it can be set in.
@@ -272,6 +271,15 @@ pub struct Studio {
     pub drag: Option<StickerDrag>,
     /// When the main window was last built in full, and `lists::CHANGES` then.
     pub(crate) main_drawn: Option<(f64, u64)>,
+    /// The "글꼴" dialog of a memo window.
+    pub font_dialog: Option<FontDialog>,
+}
+/// The "글꼴" dialog, opened from a memo window's right-click menus.
+pub struct FontDialog {
+    pub note: usize,
+    pub choice: crate::composer::FontChoice,
+    /// What the preview shows (the selected text, or a sample).
+    pub sample: String,
 }
 impl Studio {
     pub fn open(&mut self, i: usize, occurrence: Option<NaiveDate>) {
@@ -739,6 +747,18 @@ impl App {
             }
             ui.separator();
         }
+        if own && !locked {
+            if ui.button("글꼴…").clicked() {
+                self.open_font_dialog(&ctx, i);
+                done = true;
+            }
+            let mut opacity = self.data.notes[i].document.opacity;
+            crate::composer::opacity_row(ui, &mut opacity);
+            if opacity != self.data.notes[i].document.opacity {
+                self.data.notes[i].document.opacity = opacity;
+            }
+            ui.separator();
+        }
         crate::ui::caption(ui, "스티커 정렬");
         // "화면 오른쪽/왼쪽에 정렬" each open their own popup (모두 제목만
         // 보이게 / 모두 상자로 접기 / 모두펼치기, specific to that side)
@@ -772,6 +792,15 @@ impl App {
         // duplicated what the main context menu already offers.
         if own {
             ui.separator();
+            let mut close_locked = self.data.notes[i].close_locked;
+            if menu_check(ui, &mut close_locked, "닫기 버튼 잠금")
+                .on_hover_text(
+                    "켜면 X 버튼으로 닫히지 않아요. 이 메뉴의 ‘이 스티커 닫기’로 닫아요.",
+                )
+                .changed()
+            {
+                self.data.notes[i].close_locked = close_locked;
+            }
             if ui.button("이 스티커 닫기").clicked() {
                 w.open = false;
                 done = true;
@@ -904,6 +933,60 @@ impl App {
             w.menu = Some(m);
         }
     }
+    /// Opens the "글꼴" dialog for memo `i`, near the pointer, on what is
+    /// selected in it now.
+    pub fn open_font_dialog(&mut self, ctx: &egui::Context, i: usize) {
+        let doc = &self.data.notes[i].document;
+        let choice = doc.font_choice();
+        let sample = choice.sample(doc);
+        let pointer = ctx.input(|v| v.pointer.latest_pos()).unwrap_or_default();
+        let at = crate::float::screen_origin(ctx) + pointer.to_vec2() + Vec2::new(12., 12.);
+        let area = crate::native_window::work_area(ctx).unwrap_or_else(|| ctx.screen_rect());
+        let at = fit_in(at, Vec2::from(FONT_DIALOG_SIZE) + Vec2::new(16., 40.), area);
+        // Where `crate::ui::dialog` looks for the window's place.
+        let vid = egui::ViewportId::from_hash_of(("dialog", FONT_DIALOG));
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new(("dialog_position", vid)), at));
+        crate::ui::raise(ctx, FONT_DIALOG);
+        self.studio.font_dialog = Some(FontDialog {
+            note: i,
+            choice,
+            sample,
+        });
+    }
+    /// The "글꼴" dialog: "확인" (or Enter) applies it to its memo; "취소",
+    /// Escape or closing the window leaves the memo as it was.
+    pub fn font_dialog_window(&mut self, ctx: &egui::Context) {
+        let Some(mut d) = self.studio.font_dialog.take() else {
+            return;
+        };
+        if !matches!(self.data.notes.get(d.note), Some(n) if !n.deleted && !n.locked) {
+            return;
+        }
+        let mut open = true;
+        let (mut apply, mut cancel) = (false, false);
+        crate::ui::dialog(
+            ctx,
+            FONT_DIALOG,
+            "글꼴",
+            FONT_DIALOG_SIZE,
+            true,
+            &mut open,
+            |ui| {
+                crate::composer::font_panel(ui, &mut d.choice, &d.sample);
+                let (ok, no) = crate::ui::dialog_buttons(ui, "확인", "취소");
+                apply = ok || ui.input(|v| v.key_pressed(egui::Key::Enter));
+                cancel = no || ui.input(|v| v.key_pressed(egui::Key::Escape));
+            },
+        );
+        if apply {
+            self.data.notes[d.note]
+                .document
+                .apply_font_choice(&d.choice);
+            ctx.request_repaint_of(viewport(d.note));
+        } else if open && !cancel {
+            self.studio.font_dialog = Some(d);
+        }
+    }
     /// The memo's "더보기" items. Rows with a submenu open it beside this
     /// menu window instead of inside it.
     fn more_items(
@@ -938,7 +1021,7 @@ impl App {
             done = true;
         }
         let mut wiki = self.data.notes[i].wiki;
-        let r = ui.checkbox(&mut wiki, "위키에 보관");
+        let r = menu_check(ui, &mut wiki, "위키에 보관");
         plain(&r);
         if r.changed() {
             self.data.notes[i].wiki = wiki;
@@ -1676,7 +1759,13 @@ impl App {
                     w.focus = false;
                 }
                 if ctx.input(|v| v.viewport().close_requested()) {
-                    w.open = false;
+                    if self.data.notes[i].close_locked {
+                        // Alt+F4 is a close button too: only the menu closes it.
+                        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                        self.data.notes[i].document.status = CLOSE_LOCKED.into();
+                    } else {
+                        w.open = false;
+                    }
                 }
                 if let Some(p) = ctx.input(|v| v.viewport().outer_rect.map(|r| r.min)) {
                     w.last_pos = Some(p);
@@ -1904,6 +1993,9 @@ impl App {
                                             .desired_width(f32::INFINITY)
                                             .hint_text("제목"),
                                     );
+                                    if title.secondary_clicked() {
+                                        open_menu(ctx, &mut w);
+                                    }
                                     if title.lost_focus()
                                         && ui.input(|v| v.key_pressed(egui::Key::Enter))
                                     {
@@ -1925,9 +2017,10 @@ impl App {
                         let small_font = egui::TextStyle::Small.resolve(&ctx.style());
                         ctx.fonts(|f| f.row_height(&small_font)) + 4.
                     };
-                    // The tab row (40) and, when shown, the format buttons in
-                    // as many rows as the width needs.
-                    let footer_height = (if engaged {
+                    // The tab row (40) and, in the editor window, the format
+                    // buttons in as many rows as the width needs.
+                    let tools = footer_tools(mode, engaged);
+                    let footer_height = (if tools {
                         44. + crate::composer::footer_tools_height(width - 18.)
                     } else {
                         40.
@@ -1953,7 +2046,7 @@ impl App {
                         )
                         .show(ctx, |ui| {
                             paper_style(ui, paper);
-                            self.data.notes[i].document.toolbar_visible = engaged;
+                            self.data.notes[i].document.toolbar_visible = tools;
                             let rect = ui.max_rect();
                             crate::composer::footer(
                                 ui,
@@ -1972,7 +2065,7 @@ impl App {
                                 let arrows = Rect::from_min_size(
                                     Pos2::new(
                                         rect.right() - CORNER_ICONS_W - CORNER_ICONS_GAP,
-                                        rect.bottom() - 28.,
+                                        rect.bottom() - status_height - 28.,
                                     ),
                                     Vec2::new(CORNER_ICONS_W, 28.),
                                 );
@@ -2000,6 +2093,8 @@ impl App {
                         ))
                         .show(ctx, |ui| {
                             paper_style(ui, paper);
+                            let style = egui::Id::new(crate::composer::HOST_STYLE);
+                            ui.data_mut(|d| d.insert_temp(style, true));
                             if mode == Mode::Sticker {
                                 let n = &mut self.data.notes[i];
                                 let host = egui::Id::new(crate::composer::HOST_MENU);
@@ -2011,31 +2106,6 @@ impl App {
                                     ("memo_document", i),
                                 );
                                 ui.data_mut(|d| d.remove::<bool>(host));
-                                let action = egui::Id::new(crate::composer::HOST_ACTION);
-                                let picked = ui.data_mut(|d| {
-                                    let p = d.get_temp::<crate::composer::HostAction>(action);
-                                    d.remove::<crate::composer::HostAction>(action);
-                                    p
-                                });
-                                match picked {
-                                    Some(crate::composer::HostAction::Schedule) => {
-                                        self.open_schedule(i)
-                                    }
-                                    Some(crate::composer::HostAction::Alarm) => {
-                                        self.open_reminder(i)
-                                    }
-                                    Some(crate::composer::HostAction::StickerMenu) => {
-                                        open_menu(ctx, &mut w)
-                                    }
-                                    Some(crate::composer::HostAction::Trash) => {
-                                        self.trash_note(i);
-                                        w.open = false;
-                                    }
-                                    Some(crate::composer::HostAction::Purge) => {
-                                        self.request_purge(i)
-                                    }
-                                    None => {}
-                                }
                             } else {
                                 egui::Frame::NONE
                                     .fill(Color32::from_white_alpha(70))
@@ -2055,6 +2125,31 @@ impl App {
                                             ("memo_document", i),
                                         );
                                     });
+                            }
+                            ui.data_mut(|d| d.remove::<bool>(style));
+                            let action = egui::Id::new(crate::composer::HOST_ACTION);
+                            let picked = ui.data_mut(|d| {
+                                let p = d.get_temp::<crate::composer::HostAction>(action);
+                                d.remove::<crate::composer::HostAction>(action);
+                                p
+                            });
+                            match picked {
+                                Some(crate::composer::HostAction::Schedule) => {
+                                    self.open_schedule(i)
+                                }
+                                Some(crate::composer::HostAction::Alarm) => self.open_reminder(i),
+                                Some(crate::composer::HostAction::StickerMenu) => {
+                                    open_menu(ctx, &mut w)
+                                }
+                                Some(crate::composer::HostAction::Trash) => {
+                                    self.trash_note(i);
+                                    w.open = false;
+                                }
+                                Some(crate::composer::HostAction::Purge) => self.request_purge(i),
+                                Some(crate::composer::HostAction::Font) => {
+                                    self.open_font_dialog(ctx, i)
+                                }
+                                None => {}
                             }
                         });
                     self.consume_body_project(i);
@@ -2274,7 +2369,11 @@ impl App {
             let now = ctx.input(|v| v.time);
             let old = self.desktop.last_escape.insert(ctx.viewport_id(), now);
             if old.is_some_and(|t| now - t < 0.8) {
-                w.open = false;
+                if self.data.notes[i].close_locked {
+                    self.data.notes[i].document.status = CLOSE_LOCKED.into();
+                } else {
+                    w.open = false;
+                }
             }
             w.help = false;
             w.menu = None;
@@ -2455,13 +2554,45 @@ impl App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
             }
             // Pin, done, fold and close stay on the idle sticker too.
-            if (engaged || mode == Mode::Sticker)
-                && icon_button(ui, Icon::Close, "창 닫기 · 메모는 유지").clicked()
-            {
-                w.open = false;
+            if engaged || mode == Mode::Sticker {
+                if self.data.notes[i].close_locked {
+                    // Locked from the right-click menu: only the menu closes it.
+                    ui.scope(|ui| {
+                        ui.disable();
+                        icon_button(ui, Icon::Close, "창 닫기")
+                            .on_disabled_hover_text(CLOSE_LOCKED);
+                    });
+                } else if icon_button(ui, Icon::Close, "창 닫기 · 메모는 유지").clicked() {
+                    w.open = false;
+                }
             }
         });
     }
+}
+/// Said when a close-locked memo window is asked to close by its X button,
+/// Alt+F4 or a double Escape.
+const CLOSE_LOCKED: &str = "닫기 버튼이 잠겨 있어요 · 우클릭 메뉴의 ‘이 스티커 닫기’로 닫아요";
+/// Whether a memo window's footer shows the format buttons above its tabs:
+/// only the editor window does. A sticker's font, styles and opacity are in
+/// its right-click menus ("글꼴…", "투명도").
+fn footer_tools(mode: Mode, engaged: bool) -> bool {
+    engaged && mode == Mode::Editor
+}
+/// The id of the "글꼴" dialog's window (see [`crate::ui::dialog`]).
+const FONT_DIALOG: &str = "font_dialog";
+const FONT_DIALOG_SIZE: [f32; 2] = [520., 520.];
+/// A checkbox in a menu window. Its buttons have no fill there, which left
+/// the box itself invisible: it gets an outline of its own.
+fn menu_check(ui: &mut egui::Ui, value: &mut bool, label: &str) -> egui::Response {
+    ui.scope(|ui| {
+        let ink = ui.visuals().text_color();
+        let w = &mut ui.visuals_mut().widgets;
+        for v in [&mut w.inactive, &mut w.hovered, &mut w.active] {
+            v.bg_stroke = egui::Stroke::new(1.0_f32, ink.gamma_multiply(0.5));
+        }
+        ui.checkbox(value, label)
+    })
+    .inner
 }
 /// How many 28 px buttons (each with 4 px spacing before it) follow the gap
 /// of a memo window's top bar, so they end exactly at its right edge. Keep in
@@ -3202,11 +3333,135 @@ mod arrangement_tests {
         }
     }
     #[test]
-    fn the_smallest_sticker_keeps_its_format_buttons_on_one_row() {
-        assert_eq!(
-            crate::composer::footer_tools_height(STICKER_MIN.x - 18.),
-            28.
-        );
+    fn a_sticker_footer_has_no_format_buttons_and_the_editor_window_keeps_them() {
+        assert!(!footer_tools(Mode::Sticker, true));
+        assert!(!footer_tools(Mode::Sticker, false));
+        assert!(footer_tools(Mode::Editor, true));
+        assert!(!footer_tools(Mode::Editor, false));
+        // The editor window is never narrower than this: one row.
+        assert_eq!(crate::composer::footer_tools_height(480. - 18.), 28.);
+    }
+    #[test]
+    fn the_sticker_menu_offers_the_font_dialog_opacity_and_the_close_lock() {
+        let mut a = App::sample(Local::now().date_naive());
+        let mut w = Window::new(Mode::Sticker);
+        let ctx = egui::Context::default();
+        let input = || egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800., 600.))),
+            ..Default::default()
+        };
+        let mut menu = |a: &mut App, own: bool| {
+            let mut sub2 = None;
+            ctx.run(input(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    a.sticker_menu(ui, 0, &mut w, own, &mut sub2);
+                });
+            })
+        };
+        let own = menu(&mut a, true);
+        for text in ["글꼴…", "투명도", "닫기 버튼 잠금", "이 스티커 닫기"] {
+            assert!(menu_has_text(&own, text), "{text}");
+        }
+        let arrange = menu(&mut a, false);
+        for text in ["글꼴…", "투명도", "닫기 버튼 잠금"] {
+            assert!(!menu_has_text(&arrange, text), "{text}");
+        }
+        // A locked memo is not restyled from its menu.
+        a.data.notes[0].locked = true;
+        let locked = menu(&mut a, true);
+        assert!(!menu_has_text(&locked, "글꼴…"));
+        assert!(menu_has_text(&locked, "닫기 버튼 잠금"));
+    }
+    #[test]
+    fn a_close_locked_sticker_ignores_its_x_button() {
+        for close_locked in [false, true] {
+            let mut a = App::sample(Local::now().date_naive());
+            a.data.notes[0].close_locked = close_locked;
+            let mut w = Window::new(Mode::Sticker);
+            let ctx = egui::Context::default();
+            let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(360., 200.));
+            // The close button ends the top bar (10 px margins, 28 px buttons).
+            let x = Pos2::new(360. - 10. - 14., 4. + 14.);
+            let button = |pressed| egui::Event::PointerButton {
+                pos: x,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            for events in [
+                vec![],
+                vec![egui::Event::PointerMoved(x)],
+                vec![button(true)],
+                vec![button(false)],
+            ] {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(screen),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default()
+                            .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(10, 4)))
+                            .show(ctx, |ui| {
+                                a.memo_header(ui, 0, &mut w, Mode::Sticker, true, false);
+                            });
+                    },
+                );
+            }
+            assert_eq!(w.open, close_locked, "close_locked {close_locked}");
+        }
+    }
+    #[test]
+    fn the_font_dialog_applies_on_enter_and_leaves_the_memo_on_escape() {
+        let mut a = App::sample(Local::now().date_naive());
+        let ctx = egui::Context::default();
+        let key = |key| {
+            vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            }]
+        };
+        let run = |a: &mut App, events: Vec<egui::Event>, open: bool| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1200., 800.))),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    if open {
+                        a.open_font_dialog(ctx, 0);
+                    }
+                    a.font_dialog_window(ctx);
+                },
+            );
+        };
+        let pick = |a: &mut App| {
+            let d = a.studio.font_dialog.as_mut().expect("the dialog is open");
+            assert_eq!(d.note, 0);
+            d.choice.font_name = "굴림".into();
+            d.choice.format.bold = true;
+        };
+        let before = a.data.notes[0].document.font_name.clone();
+        assert_ne!(before, "굴림");
+        run(&mut a, vec![], true);
+        pick(&mut a);
+        run(&mut a, vec![], false);
+        assert!(a.studio.font_dialog.is_some(), "stays open until answered");
+        run(&mut a, key(egui::Key::Escape), false);
+        assert!(a.studio.font_dialog.is_none());
+        assert_eq!(a.data.notes[0].document.font_name, before);
+        assert!(!a.data.notes[0].document.format.bold);
+        run(&mut a, vec![], true);
+        pick(&mut a);
+        run(&mut a, key(egui::Key::Enter), false);
+        assert!(a.studio.font_dialog.is_none());
+        assert_eq!(a.data.notes[0].document.font_name, "굴림");
+        assert!(a.data.notes[0].document.format.bold);
     }
     #[test]
     fn arrange_submenu_omits_the_close_actions_the_context_menu_still_has() {

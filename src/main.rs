@@ -558,6 +558,7 @@ impl eframe::App for App {
         self.monitor_picker(ctx);
         self.size_probe_window(ctx);
         self.title_probe_window(ctx);
+        self.font_dialog_window(ctx);
         self.apply_arrangement(ctx);
         self.detached_note(ctx);
         self.finish_completed_stickers(ctx);

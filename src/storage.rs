@@ -116,6 +116,7 @@ pub struct NoteRec {
     pub journal_comments: Vec<String>,
     pub color: [u8; 4],
     pub topmost: bool,
+    pub close_locked: bool,
     pub fold: u8,
     pub deleted: bool,
     pub has_image: bool,
@@ -842,6 +843,7 @@ fn note_rec(n: &Note) -> NoteRec {
         journal_comments: n.journal_comments.clone(),
         color: color(n.color),
         topmost: n.topmost,
+        close_locked: n.close_locked,
         fold: n.fold,
         deleted: n.deleted,
         has_image: n.has_image,
@@ -888,6 +890,7 @@ fn note_from(r: &NoteRec, i: usize) -> Note {
         n.color = to_color(r.color);
     }
     n.topmost = r.topmost;
+    n.close_locked = r.close_locked;
     n.fold = r.fold;
     n.deleted = r.deleted;
     n.has_image = r.has_image;
