@@ -665,18 +665,20 @@ impl App {
             }
             // Dragging over days marks a stretch for a several-day schedule.
             if r.drag_started() && self.stand_allows(crate::calendar_dock::StandFeature::Range) {
-                self.range_drag = Some((day, day));
+                self.range_drag = Some((ui.ctx().viewport_id(), day, day));
             }
-            if let Some((from, _)) = self.range_drag {
-                if ui
-                    .input(|i| i.pointer.interact_pos())
-                    .is_some_and(|p| rect.contains(p))
+            let viewport = ui.ctx().viewport_id();
+            if let Some((owner, from, _)) = self.range_drag {
+                if owner == viewport
+                    && ui
+                        .input(|i| i.pointer.interact_pos())
+                        .is_some_and(|p| rect.intersect(ui.clip_rect()).contains(p))
                 {
-                    self.range_drag = Some((from, day));
+                    self.range_drag = Some((owner, from, day));
                 }
             }
-            if let Some((a, b)) = self.range_drag {
-                if a != b && (a.min(b)..=a.max(b)).contains(&day) {
+            if let Some((owner, a, b)) = self.range_drag {
+                if owner == viewport && a != b && (a.min(b)..=a.max(b)).contains(&day) {
                     ui.painter()
                         .rect_filled(rect.shrink(2.), 4., ACCENT.gamma_multiply(0.18));
                 }
@@ -778,8 +780,8 @@ impl App {
         }
         self.calendar_bands(ui, all, first, rows, col, height);
         // Let go after dragging over several days: a new sticker for them.
-        if let Some((a, b)) = self.range_drag {
-            if !ui.input(|i| i.pointer.primary_down()) {
+        if let Some((owner, a, b)) = self.range_drag {
+            if owner == ui.ctx().viewport_id() && !ui.input(|i| i.pointer.primary_down()) {
                 self.range_drag = None;
                 if a != b {
                     let (start, end) = (a.min(b), a.max(b));
@@ -824,6 +826,7 @@ impl App {
         } else {
             egui::ScrollArea::vertical()
                 .id_salt(("calendar_scroll", work))
+                .drag_to_scroll(false)
                 .show(ui, |ui| {
                     let t = self.calendar_grid_with(ui, Some(false));
                     self.calendar_day_detail(ui);
@@ -868,6 +871,7 @@ impl App {
         left.set_clip_rect(ui.clip_rect().intersect(left_rect));
         egui::ScrollArea::vertical()
             .id_salt(("main_cal_grid_scroll", work))
+            .drag_to_scroll(false)
             .show(&mut left, |ui| {
                 toggled = self.calendar_grid_with(ui, Some(true))
             });

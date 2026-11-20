@@ -101,7 +101,7 @@ struct App {
     schedule_drop_serial: u64,
     pending_date_drop: Option<(usize, NaiveDate)>,
     /// Days being dragged over in the calendar: (first, current).
-    range_drag: Option<(NaiveDate, NaiveDate)>,
+    range_drag: Option<(egui::ViewportId, NaiveDate, NaiveDate)>,
     /// New memos made from the calendar (a day's +, '+ 이 날짜에 스티커', a
     /// drag over days) or '+ 새 일정', until their window is closed: closed
     /// with no title and no content, they are erased for good.
