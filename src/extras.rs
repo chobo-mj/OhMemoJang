@@ -1147,6 +1147,26 @@ mod tests {
         assert!(a.matches_search(0));
     }
     #[test]
+    fn renaming_and_merging_projects_preserve_all_linked_memos() {
+        let mut a = app();
+        a.data.notes[1].deleted = true;
+        a.project_filter = Some(0);
+        a.extra.search_project = Some(0);
+        a.rename_project(0, "회의");
+        assert_eq!(a.data.projects[0], "회의");
+        assert_eq!(a.data.notes[0].project, Some(0));
+
+        let target = a.data.projects[1].clone();
+        a.rename_project(0, &target);
+        assert!(a.extra.deleted_projects.contains(&0));
+        assert_eq!(a.project_filter, Some(1));
+        assert_eq!(a.extra.search_project, Some(1));
+        assert_eq!(a.data.notes[0].project, Some(1));
+        assert_eq!(a.data.notes[1].project, Some(1));
+        assert!(a.data.notes[1].deleted);
+    }
+
+    #[test]
     fn deleting_project_name_preserves_notes_and_comments() {
         let mut a = app();
         a.data.notes[0].wiki_comments.push("댓글".into());
