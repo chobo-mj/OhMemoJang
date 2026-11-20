@@ -883,7 +883,7 @@ impl App {
             egui::SidePanel::right(if side { "split_side" } else { "split" })
                 .default_width(if side { 820. } else { 560. })
                 .min_width(380.)
-                .max_width(ctx.screen_rect().width() * 0.62)
+                .max_width((ctx.available_rect().width() - 210.).max(380.))
                 .resizable(true)
                 .show_separator_line(true)
                 .frame(egui::Frame::NONE.fill(tone.bg).inner_margin(egui::Margin {

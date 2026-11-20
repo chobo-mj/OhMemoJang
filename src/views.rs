@@ -6,7 +6,7 @@ impl App {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 6.;
             let combo = egui::ComboBox::from_id_salt(ui.id().with("projects"))
-                .width(150.)
+                .width(150_f32.min(ui.available_width()))
                 .selected_text(format!(
                     "# {}",
                     crate::refinements::project_label(self.project_filter, &self.data.projects)
