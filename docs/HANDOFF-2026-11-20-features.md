@@ -186,6 +186,7 @@ OhMemoJang(`C:\work\MEMONOKING`, main 브랜치)의 2.1 기능·버그 목록을
   - 시험 도구(이 세션 임시 폴더 `C:\Users\corea\AppData\Local\Temp\claude\9763208642e35975\66b523d6-46a3-481d-b4be-4fd930b84ce9\scratchpad`): 앞 세션 도구를 모아 둠(`launch.ps1 -log "" [-real]`, `trayquit.ps1`, `wins.ps1`, `shot.ps1`, `kb.ps1`(-right 우클릭), `drag.ps1`, `setclip.ps1`, `placemain.ps1`). 시험용 프로필은 그대로 앞 세션 `df880ac5…\scratchpad\stage`.
   - Bash 도구에서 긴 heredoc(따옴표 섞인 것)은 거절된다. 패치 스크립트는 Write로 임시 폴더에 쓰고 실행한다.
   - 메모리 참고(19번): 시험용 프로필 앱 작업 집합 457MB, 실제 데이터 앱 약 493MB.
+- 2026-11-20 10:46 기준: 5시간 한도 64%(14:30 리필), 주간 88%. 13번 커밋(2ee3093). 실제 데이터로 다시 띄워 둠. 컨텍스트 메시지 56%로 14번부터 새 세션.
 - 다음: 14 C3·C5·C4.
 
 ## 미검증·수동 검증 후보
