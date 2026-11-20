@@ -2398,6 +2398,14 @@ impl App {
                         crate::desktop::infer_title(&mut n.title, &n.body);
                     }
                 }
+                if mode != Mode::Editor {
+                    let edge_radius = if crate::win_style::NATIVE || mode != Mode::Sticker {
+                        8
+                    } else {
+                        radius
+                    };
+                    paint_sticker_edge(ctx, base, edge_radius);
+                }
                 if w.mode != mode || !w.open {
                     w.native.cancel();
                     w.help = false;
@@ -2850,6 +2858,30 @@ fn header_controls(mode: Mode, engaged: bool) -> usize {
 /// between them and the window's right edge (the resize grip).
 const CORNER_ICONS_W: f32 = 60.;
 const CORNER_ICONS_GAP: f32 = 22.;
+/// A shallow inner shadow keeps overlapping stickers readable without
+/// reviving the large system shadow or adding transparent window margins.
+fn paint_sticker_edge(ctx: &egui::Context, paper: Color32, radius: u8) {
+    let rect = ctx.screen_rect();
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("sticker_edge"),
+    ));
+    let dark_paper = egui::Rgba::from(paper).intensity() < 0.18;
+    for (inset, radius, opacity) in [(0., radius, 26), (1., radius.saturating_sub(1), 10)] {
+        let color = if dark_paper {
+            Color32::from_white_alpha(opacity)
+        } else {
+            Color32::from_black_alpha(opacity)
+        };
+        painter.rect_stroke(
+            rect.shrink(inset),
+            radius,
+            egui::Stroke::new(1.0_f32, color),
+            egui::StrokeKind::Inside,
+        );
+    }
+}
+
 fn paper_style(ui: &mut egui::Ui, paper: Color32) {
     let v = ui.visuals_mut();
     v.dark_mode = false;
