@@ -33,6 +33,16 @@ pub fn hwnd(ctx: &egui::Context) -> Option<isize> {
     }
 }
 
+/// Puts those of `windows` that are behind `main` just in front of it, in
+/// the order they had; ones already in front of it (and topmost ones) stay
+/// where they are. Nothing is activated.
+pub fn raise_over(main: isize, windows: &[isize]) {
+    #[cfg(windows)]
+    desk::raise_over(main, windows);
+    #[cfg(not(windows))]
+    let _ = (main, windows);
+}
+
 /// Native handle of the window `ctx` draws as [`shape`] found it (no search).
 pub fn shaped_hwnd(ctx: &egui::Context) -> Option<isize> {
     #[cfg(windows)]
@@ -594,6 +604,47 @@ mod desk {
     /// Takes the window's button off the taskbar (`show` false) or puts it
     /// back. Explorer keeps the button of a window moved under the desktop
     /// icons, so it is taken off by hand.
+    pub fn raise_over(main: isize, windows: &[isize]) {
+        if main == 0 || windows.is_empty() {
+            return;
+        }
+        // SAFETY: plain Win32 calls; gone handles only make them fail.
+        unsafe {
+            let main = main as HWND;
+            // Those behind the main window, from the top down.
+            let mut behind = Vec::new();
+            let mut h = GetWindow(main, GW_HWNDNEXT);
+            while !h.is_null() && behind.len() < windows.len() {
+                if windows.contains(&(h as isize)) {
+                    behind.push(h);
+                }
+                h = GetWindow(h, GW_HWNDNEXT);
+            }
+            for h in behind {
+                // `SetWindowPos` puts a window behind the one it is given:
+                // behind the window just above the main one, so in front of
+                // the main one. Behind a topmost one it would go up there.
+                let above = GetWindow(main, GW_HWNDPREV);
+                let after = if above.is_null()
+                    || GetWindowLongW(above, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST != 0
+                {
+                    HWND_TOP
+                } else {
+                    above
+                };
+                SetWindowPos(
+                    h,
+                    after,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                );
+            }
+        }
+    }
+
     pub fn taskbar_button(hwnd: isize, show: bool) {
         use windows::Win32::System::Com::{
             CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
@@ -1189,6 +1240,63 @@ mod desktop_click_tests {
         assert!(super::pin_lost(true, true, 2100), "the layer stayed hidden");
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn memos_behind_the_main_window_come_just_in_front_of_it_in_order() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, GetWindow, SetWindowPos, GW_HWNDPREV, HWND_TOP,
+            SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WS_POPUP,
+        };
+        let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+        let make = || unsafe {
+            CreateWindowExW(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                WS_POPUP,
+                0,
+                0,
+                10,
+                10,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            )
+        };
+        let [main, a, b, c, other] = [make(), make(), make(), make(), make()];
+        assert!(![main, a, b, c, other].iter().any(|h| h.is_null()));
+        let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+        unsafe {
+            // From the top: c, main, a, other, b.
+            SetWindowPos(main, HWND_TOP, 0, 0, 0, 0, flags);
+            SetWindowPos(a, main, 0, 0, 0, 0, flags);
+            SetWindowPos(other, a, 0, 0, 0, 0, flags);
+            SetWindowPos(b, other, 0, 0, 0, 0, flags);
+            SetWindowPos(c, HWND_TOP, 0, 0, 0, 0, flags);
+        }
+        let ids = |hs: &[windows_sys::Win32::Foundation::HWND]| -> Vec<isize> {
+            hs.iter().map(|&h| h as isize).collect()
+        };
+        super::raise_over(main as isize, &ids(&[a, b, c]));
+        let prev = |h| unsafe { GetWindow(h, GW_HWNDPREV) };
+        // Now: c, (the thread's IME window), a, b, main, other.
+        assert_eq!(prev(main), b);
+        assert_eq!(prev(b), a);
+        assert_eq!(prev(other), main);
+        let mut h = a;
+        let mut steps = 0;
+        while !h.is_null() && h != c && steps < 50 {
+            h = prev(h);
+            steps += 1;
+        }
+        assert_eq!(h, c, "the one in front of the main window stays in front");
+        unsafe {
+            for h in [main, a, b, c, other] {
+                DestroyWindow(h);
+            }
+        }
+    }
     #[test]
     fn a_closed_handle_is_no_live_window() {
         assert!(!super::window_alive(0));

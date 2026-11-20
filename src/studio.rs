@@ -55,6 +55,8 @@ pub struct Window {
     /// `place` is where a closed window was last seen: kept on that
     /// monitor's work area, since it may come back larger (as the editor).
     fit_place: bool,
+    /// The native window, once drawn.
+    hwnd: Option<isize>,
     /// Set when Enter is pressed in the sticker title; applied at the start
     /// of the *next* frame, never the one Enter was pressed on. The title's
     /// return_key handling does not remove that Enter (or a pending IME
@@ -144,6 +146,7 @@ impl Window {
             menu: None,
             last_pos: None,
             fit_place: false,
+            hwnd: None,
             move_caret_to_body: false,
             drawn_at: f64::NEG_INFINITY,
             drawn_changes: 0,
@@ -1651,6 +1654,31 @@ impl App {
             }
         }
     }
+    /// Stickers and folded memos (not memo editor windows) on screen.
+    fn memo_windows(&self) -> Vec<isize> {
+        self.studio
+            .windows
+            .values()
+            .filter(|w| w.open && matches!(w.mode, Mode::Sticker | Mode::Title | Mode::Swatch))
+            .filter_map(|w| w.hwnd)
+            .collect()
+    }
+    /// A click inside the main window brings the stickers and folded memos
+    /// in front of it, in their order. Picked from the taskbar (no click
+    /// inside), the main window stays in front. The calendar window is no
+    /// memo and stays where it is.
+    pub fn memos_to_front(&mut self, ctx: &egui::Context) {
+        if !self.desktop.memo_front || !ctx.input(|i| i.pointer.any_pressed()) {
+            return;
+        }
+        let memos = self.memo_windows();
+        if memos.is_empty() {
+            return;
+        }
+        if let Some(main) = crate::win_style::hwnd(ctx) {
+            crate::win_style::raise_over(main, &memos);
+        }
+    }
     pub fn render_note_windows(&mut self, root: &egui::Context) {
         self.drop_blank_drafts();
         crate::magnet::configure(self.desktop.magnet, self.desktop.magnet_pt);
@@ -1898,6 +1926,7 @@ impl App {
                 crate::win_style::shape(ctx, opacity);
                 if let Some(h) = crate::win_style::shaped_hwnd(ctx) {
                     crate::magnet::track(h, matches!(mode, Mode::Title | Mode::Swatch));
+                    w.hwnd = Some(h);
                 }
                 let alpha = if crate::win_style::NATIVE {
                     1.
@@ -3985,6 +4014,38 @@ mod size_window_tests {
         rec.skip_title = true;
         let d = load(&rec);
         assert!(d.skip_title && !d.skip_swatch);
+    }
+    #[test]
+    fn only_stickers_and_folded_memos_on_screen_come_to_the_front() {
+        let mut app = App::sample(Local::now().date_naive());
+        for (k, mode, open) in [
+            (0, Mode::Sticker, true),
+            (1, Mode::Title, true),
+            (2, Mode::Swatch, true),
+            (3, Mode::Editor, true),
+            (4, Mode::Sticker, false),
+            (5, Mode::Sticker, true),
+        ] {
+            let mut w = Window::new(mode);
+            w.open = open;
+            // The last one was never drawn: no window yet.
+            w.hwnd = (k != 5).then_some(100 + k as isize);
+            app.studio.windows.insert(k, w);
+        }
+        assert_eq!(app.memo_windows(), vec![100, 101, 102]);
+        // On by default, also for saves made before it; it can be turned off.
+        use crate::storage::SettingsRec;
+        let mut d = crate::desktop::Desktop::default();
+        assert!(d.memo_front);
+        let old: SettingsRec = serde_json::from_str("{}").unwrap();
+        old.write_desktop(&mut d);
+        assert!(d.memo_front);
+        d.memo_front = false;
+        let mut rec = SettingsRec::default();
+        rec.read_desktop(&d);
+        let mut back = crate::desktop::Desktop::default();
+        rec.write_desktop(&mut back);
+        assert!(!back.memo_front);
     }
     #[test]
     fn new_memos_take_the_colors_in_turn_and_the_turn_is_saved() {

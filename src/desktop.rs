@@ -73,6 +73,9 @@ pub struct Desktop {
     /// Folding stops at the title line: no color box. Never on together
     /// with `skip_title` (nothing would be left to fold to).
     pub skip_swatch: bool,
+    /// A click inside the main window brings stickers and folded memos in
+    /// front of it.
+    pub memo_front: bool,
     /// New memos take the palette's colors in turn instead of
     /// `default_color`; `color_turn` is the one the next memo takes.
     pub cycle_color: bool,
@@ -149,6 +152,7 @@ impl Default for Desktop {
             title_probe: false,
             title_probe_last: None,
             skip_swatch: false,
+            memo_front: true,
             cycle_color: false,
             color_turn: 0,
             swatch_size: Vec2::splat(crate::studio::SWATCH_SIZE),
@@ -1231,6 +1235,12 @@ impl App {
                         &mut self.desktop.always_sticker,
                         "메모를 항상 스티커 메모로 열기",
                         "메모 편집 창은 스티커의 … 더보기 › 메모 편집 창 열기로 엽니다",
+                    );
+                    toggle_row(
+                        ui,
+                        &mut self.desktop.memo_front,
+                        "메인 창을 누르면 메모를 앞으로",
+                        "메인 창 안을 누르면 스티커와 접은 메모가 메인 창 앞에 와요 · 작업표시줄에서 고르면 메인 창이 앞에",
                     );
                     section(ui, "새 메모 기본 색");
                     let mut mode = self.desktop.cycle_color as usize;

@@ -736,6 +736,7 @@ impl App {
         root.show_viewport_immediate(main_viewport(), builder, |ctx, _| {
             self.theme(ctx);
             self.drag_input(ctx);
+            self.memos_to_front(ctx);
             if ctx.input(|i| i.viewport().close_requested()) {
                 if self.tray.active() {
                     // Down to the tray; the program and its stickers keep running.

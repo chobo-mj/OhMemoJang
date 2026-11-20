@@ -241,6 +241,8 @@ pub struct SettingsRec {
     /// Width of the title line folded once; 0 in saves made before it.
     pub title_width: f32,
     pub skip_swatch: bool,
+    /// Saved inverted, so saves made before it have it on.
+    pub memo_front_off: bool,
     pub cycle_color: bool,
     pub color_turn: u32,
     /// Size of the color box (step 2); zero in saves made before it.
@@ -302,6 +304,7 @@ impl Default for SettingsRec {
             skip_title: false,
             title_width: 0.,
             skip_swatch: false,
+            memo_front_off: false,
             cycle_color: false,
             color_turn: 0,
             swatch_size: [0.; 2],
@@ -356,6 +359,7 @@ impl SettingsRec {
         self.title_width = d.title_width;
         self.skip_swatch = d.skip_swatch;
         self.cycle_color = d.cycle_color;
+        self.memo_front_off = !d.memo_front;
         self.color_turn = d.color_turn as u32;
         self.swatch_size = [d.swatch_size.x, d.swatch_size.y];
         self.magnet_off = !d.magnet;
@@ -403,6 +407,7 @@ impl SettingsRec {
         };
         d.magnet = !self.magnet_off;
         d.cycle_color = self.cycle_color;
+        d.memo_front = !self.memo_front_off;
         d.color_turn = self.color_turn as usize % crate::PALETTE.len();
         d.magnet_pt = if self.magnet_pt > 0. {
             self.magnet_pt
