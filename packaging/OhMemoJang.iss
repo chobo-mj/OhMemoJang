@@ -53,7 +53,7 @@ Source: "{#StageDir}\SHA256SUMS.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{userprograms}\OhMemoJang\OhMemoJang"; Filename: "{app}\OhMemoJang.exe"; WorkingDir: "{app}"; AppUserModelID: "OhMemoJang.App"
-Name: "{userdesktop}\OhMemoJang"; Filename: "{app}\OhMemoJang.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{userdesktop}\OhMemoJang"; Filename: "{app}\OhMemoJang.exe"; WorkingDir: "{app}"; AppUserModelID: "OhMemoJang.App"; Tasks: desktopicon
 
 ; Nothing is written to the registry at install time. The program itself adds
 ; the "start with Windows" value when the user turns that setting on, so

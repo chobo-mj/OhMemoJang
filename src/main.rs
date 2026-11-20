@@ -1486,6 +1486,7 @@ fn main() -> eframe::Result {
         // Shows whether Windows started the program at sign-in at all.
         system::log_line("start.log", "Windows 시작: 트레이로 실행");
     }
+    toast::set_process_identity();
     system::migrate_old_data_dirs();
     // The root window is an invisible, never-minimized host. Every visible
     // window (main, calendar, stickers, dialogs) is an independent child, so

@@ -10,6 +10,17 @@ use std::sync::Mutex;
 
 pub const APP_ID: &str = "OhMemoJang.App";
 
+/// Use the same identity as the installer shortcut before any window exists.
+pub fn set_process_identity() {
+    #[cfg(windows)]
+    {
+        let id: Vec<u16> = APP_ID.encode_utf16().chain([0]).collect();
+        unsafe {
+            windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(id.as_ptr());
+        }
+    }
+}
+
 /// What was pressed on an alarm's notification.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Answer {
@@ -158,7 +169,6 @@ mod imp {
     /// the current user, used by this process. Done once.
     fn register() -> bool {
         use windows_sys::Win32::System::Registry::*;
-        use windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
         let icon = std::env::var_os("LOCALAPPDATA")
             .map(|d| std::path::PathBuf::from(d).join("OhMemoJang"))
             .and_then(|dir| {
@@ -239,7 +249,6 @@ mod imp {
                 set("IconUri", &icon.to_string_lossy());
             }
             RegCloseKey(key);
-            SetCurrentProcessExplicitAppUserModelID(wide(APP_ID).as_ptr());
         }
         shortcut().is_ok()
     }
