@@ -565,6 +565,7 @@ impl eframe::App for App {
         self.swatch_probe_window(ctx);
         self.apply_arrangement(ctx);
         self.detached_note(ctx);
+        self.stack_memos_for_main();
         self.keep_open_stickers_on_desktop(ctx);
         self.finish_completed_stickers(ctx);
         self.global_dialogs(ctx);
@@ -740,7 +741,7 @@ impl App {
         root.show_viewport_immediate(main_viewport(), builder, |ctx, _| {
             self.theme(ctx);
             self.drag_input(ctx);
-            self.memos_to_front(ctx);
+            self.request_main_memo_stack(ctx);
             if ctx.input(|i| i.viewport().close_requested()) {
                 if self.tray.active() {
                     // Down to the tray; the program and its stickers keep running.

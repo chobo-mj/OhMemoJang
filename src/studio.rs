@@ -296,6 +296,7 @@ pub struct Studio {
     /// When the main window was last built in full, and `lists::CHANGES` then.
     pub(crate) main_drawn: Option<(f64, u64)>,
     pub(crate) main_focused: bool,
+    stack_below_main: Option<isize>,
     #[cfg(windows)]
     desktop_watch: Option<crate::win_style::ForegroundWatch>,
     #[cfg(windows)]
@@ -1677,18 +1678,21 @@ impl App {
             .collect()
     }
     /// On activation, group the open stickers immediately below the main window.
-    pub fn memos_to_front(&mut self, ctx: &egui::Context) {
+    pub fn request_main_memo_stack(&mut self, ctx: &egui::Context) {
         let (focused, clicked) = ctx.input(|i| (i.focused, i.pointer.any_pressed()));
         let was_focused = std::mem::replace(&mut self.studio.main_focused, focused);
         if !self.desktop.memo_front || !focused || (was_focused && !clicked) {
             return;
         }
-        let memos = self.memo_windows();
-        if memos.is_empty() {
-            return;
-        }
-        if let Some(main) = crate::win_style::hwnd(ctx) {
-            crate::win_style::stack_below(main, &memos);
+        self.studio.stack_below_main = crate::win_style::hwnd(ctx);
+    }
+
+    pub fn stack_memos_for_main(&mut self) {
+        if let Some(main) = self.studio.stack_below_main.take() {
+            let memos = self.memo_windows();
+            if self.main_open && !memos.is_empty() {
+                crate::win_style::stack_below(main, &memos);
+            }
         }
     }
     #[cfg(not(windows))]
@@ -1833,7 +1837,7 @@ impl App {
                 });
             // The builder is a creation request, never a live geometry feedback loop.
             if w.applied.is_none() {
-                builder = builder.with_inner_size(size);
+                builder = builder.with_inner_size(size).with_active(w.focus);
                 // A reopened window is created where it goes, not first at
                 // the system's default spot.
                 if let Some(p) = w.place {
