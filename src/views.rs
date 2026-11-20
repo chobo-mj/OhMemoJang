@@ -313,11 +313,8 @@ impl App {
         let rect = ui.available_rect_before_wrap();
         let height = rect.height();
         let preview_max = (rect.width() - 360.).max(260.);
-        let preview_width = self
-            .catalog
-            .preview_width
-            .max(380.)
-            .clamp(260., preview_max);
+        let page = usize::from(self.page == 3);
+        let preview_width = self.prefs.main_widths.agenda_preview[page].clamp(260., preview_max);
         let list_rect = Rect::from_min_size(
             rect.min,
             Vec2::new((rect.width() - preview_width - 16.).max(200.), height),
@@ -354,7 +351,7 @@ impl App {
             );
         }
         if drag.dragged() {
-            self.catalog.preview_width =
+            self.prefs.main_widths.agenda_preview[page] =
                 (preview_width - drag.drag_delta().x).clamp(260., preview_max);
         }
         let mut preview = ui.new_child(
@@ -874,7 +871,10 @@ impl App {
         let handle_w = 12.;
         let min_right = 220.0_f32.min((total - handle_w) * 0.5);
         let max_right = (total - handle_w - 320.).max(min_right);
-        let right_w = (total * self.cal_side_frac).clamp(min_right, max_right);
+        let page = usize::from(work);
+        let saved = self.prefs.main_widths.calendar_detail[page];
+        let width = if saved > 0. { saved } else { total * 0.38 };
+        let right_w = width.clamp(min_right, max_right);
         let left_w = (total - handle_w - right_w).max(240.);
         let left_rect = Rect::from_min_size(rect.min, Vec2::new(left_w, height));
         let handle = Rect::from_min_max(
@@ -914,7 +914,7 @@ impl App {
         }
         if drag.dragged() {
             let new_right = (right_w - drag.drag_delta().x).clamp(min_right, max_right);
-            self.cal_side_frac = (new_right / total).clamp(0.15, 0.75);
+            self.prefs.main_widths.calendar_detail[page] = new_right;
         }
         let mut right = ui.new_child(
             egui::UiBuilder::new()

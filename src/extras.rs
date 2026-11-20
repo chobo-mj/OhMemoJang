@@ -133,7 +133,7 @@ pub struct Extra {
     pub wiki_left_width: f32,
     /// Split between the wiki's two content panes, as a fraction of the
     /// space to the right of the tree column. `0.5` is an even split.
-    pub wiki_pane_frac: f32,
+    pub wiki_detail_width: f32,
     /// A wiki tab awaiting the user's confirmation in the "탭 삭제" dialog
     /// before it's actually added to `deleted_wiki_tabs` - mirrors
     /// `delete_project`'s pending-confirmation pattern.
@@ -213,7 +213,7 @@ impl Default for Extra {
             my_holidays: vec![],
             holiday_form: (String::new(), String::new(), false),
             wiki_left_width: 0.,
-            wiki_pane_frac: 0.5,
+            wiki_detail_width: 0.,
             delete_wiki_tab: None,
         }
     }

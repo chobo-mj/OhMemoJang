@@ -4,9 +4,36 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+pub struct MainWidths {
+    pub work_calendar: [f32; 2],
+    pub calendar_detail: [f32; 2],
+    pub agenda_preview: [f32; 2],
+    pub memo_preview: f32,
+    pub memo_columns: [f32; crate::catalog::COLUMN_COUNT],
+    pub wiki_tree: f32,
+    pub wiki_detail: f32,
+}
+
+impl Default for MainWidths {
+    fn default() -> Self {
+        Self {
+            work_calendar: [560., 820.],
+            calendar_detail: [0.; 2],
+            agenda_preview: [380.; 2],
+            memo_preview: 0.,
+            memo_columns: [0.; crate::catalog::COLUMN_COUNT],
+            wiki_tree: 0.,
+            wiki_detail: 0.,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Prefs {
     pub sidebar_width: f32,
+    pub main_widths: MainWidths,
     pub drop_schedule_choice: bool,
     pub close_completed_sticker: bool,
     pub rearrange_completed_stickers: bool,
@@ -51,6 +78,7 @@ impl Default for Prefs {
     fn default() -> Self {
         Self {
             sidebar_width: 236.,
+            main_widths: MainWidths::default(),
             drop_schedule_choice: false,
             close_completed_sticker: true,
             rearrange_completed_stickers: false,
@@ -83,7 +111,7 @@ impl Prefs {
     pub fn to_text(&self) -> String {
         let hidden: Vec<String> = self.hidden_pages.iter().map(|p| p.to_string()).collect();
         format!(
-            "sidebar_width={}\ndrop_schedule_choice={}\nclose_completed_sticker={}\nrearrange_completed_stickers={}\nstart_page={}\nhidden_pages={}\ncal_theme={}\ncal_font={}\ncal_hide_done={}\ncal_strike={}\ncal_weeks={}\ndata_path={}\nfirst_run_done={}\ntray_hint_done={}\ncal_side_work={}\ncal_side_page={}\npaste_table_text={}\nstand_input={}\nstand_new_memo={}\nstand_range={}\nstand_drop={}\nstand_band={}\nstand_move={}\nsticker_reopen_position={}\nkeep_stickers_on_desktop={}\n",
+            "sidebar_width={}\ndrop_schedule_choice={}\nclose_completed_sticker={}\nrearrange_completed_stickers={}\nstart_page={}\nhidden_pages={}\ncal_theme={}\ncal_font={}\ncal_hide_done={}\ncal_strike={}\ncal_weeks={}\ndata_path={}\nfirst_run_done={}\ntray_hint_done={}\ncal_side_work={}\ncal_side_page={}\npaste_table_text={}\nstand_input={}\nstand_new_memo={}\nstand_range={}\nstand_drop={}\nstand_band={}\nstand_move={}\nsticker_reopen_position={}\nkeep_stickers_on_desktop={}\nmain_widths={}\n",
             self.sidebar_width,
             self.drop_schedule_choice,
             self.close_completed_sticker,
@@ -109,6 +137,7 @@ impl Prefs {
             self.stand_move,
             self.sticker_reopen_position,
             self.keep_stickers_on_desktop,
+            serde_json::to_string(&self.main_widths).unwrap_or_default(),
         )
     }
     /// Unknown keys and bad values fall back to the defaults.
@@ -122,6 +151,11 @@ impl Prefs {
             match key.trim() {
                 "sidebar_width" => {
                     p.sidebar_width = value.parse().unwrap_or(p.sidebar_width).clamp(64., 360.)
+                }
+                "main_widths" => {
+                    if let Ok(widths) = serde_json::from_str(value) {
+                        p.main_widths = widths;
+                    }
                 }
                 "drop_schedule_choice" => p.drop_schedule_choice = value == "true",
                 "close_completed_sticker" => p.close_completed_sticker = value == "true",

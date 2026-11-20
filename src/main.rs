@@ -95,7 +95,6 @@ struct App {
     editor: bool,
     sticky: bool,
     /// Share of the main calendar's width taken by the schedule beside the grid.
-    cal_side_frac: f32,
     /// Where each calendar window drew its dates last (screen points), by
     /// window and when: a sticker let go over one files its memo there.
     completed_stickers: Vec<usize>,
@@ -237,6 +236,7 @@ impl App {
         a.sidebar_width = a.prefs.sidebar_width;
         a.cal.theme = a.prefs.cal_theme;
         a.load_or_start();
+        a.restore_main_widths();
         a.prefs_saved = a.prefs.clone();
         a.tray = tray::Tray::new(&cc.egui_ctx);
         // Started with Windows: stay in the tray, stickers on the desktop.
@@ -281,7 +281,6 @@ impl App {
             search: String::new(),
             editor: false,
             sticky: false,
-            cal_side_frac: 0.38,
             completed_stickers: Vec::new(),
             schedule_drop_serial: 0,
             pending_date_drop: None,
@@ -508,6 +507,7 @@ impl eframe::App for App {
         [0., 0., 0., 0.]
     }
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.keep_prefs();
         self.autosave(0., true);
     }
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
@@ -561,7 +561,6 @@ impl eframe::App for App {
                 );
             }
         }
-        self.keep_prefs();
         // The host itself paints nothing.
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
@@ -586,6 +585,7 @@ impl eframe::App for App {
         self.tray_notice(ctx);
         // Last: every window has said where its parts are.
         self.tutorial_window(ctx);
+        self.keep_prefs();
         // The program stays in the tray for days: old trash is emptied and
         // unused picture textures are released while it runs.
         let now = ctx.input(|i| i.time);
@@ -894,11 +894,26 @@ impl App {
         self.settings_from = self.page;
         if self.split && self.page == 0 && !self.settings {
             // Side by side needs room for two panes; each layout keeps its own width.
-            let side = self.prefs.cal_side_work;
-            egui::SidePanel::right(if side { "split_side" } else { "split" })
-                .default_width(if side { 820. } else { 560. })
+            let side = usize::from(self.prefs.cal_side_work);
+            let id = egui::Id::new(if side == 1 { "split_side" } else { "split" });
+            let available = ctx.available_rect();
+            let max_width = (available.width() - 210.).max(380.);
+            let width = self.prefs.main_widths.work_calendar[side].clamp(380., max_width);
+            // SidePanel remembers the last layout even when the window gets
+            // narrower. Seed it from the saved user width, clamped for this frame.
+            if egui::containers::panel::PanelState::load(ctx, id)
+                .is_none_or(|state| (state.size().x - width).abs() >= 0.5)
+            {
+                let mut rect = available;
+                rect.min.x = rect.right() - width;
+                ctx.data_mut(|data| {
+                    data.insert_persisted(id, egui::containers::panel::PanelState { rect })
+                });
+            }
+            let panel = egui::SidePanel::right(id)
+                .default_width(width)
                 .min_width(380.)
-                .max_width((ctx.available_rect().width() - 210.).max(380.))
+                .max_width(max_width)
                 .resizable(true)
                 .show_separator_line(true)
                 .frame(egui::Frame::NONE.fill(tone.bg).inner_margin(egui::Margin {
@@ -908,6 +923,10 @@ impl App {
                     bottom: 8,
                 }))
                 .show(ctx, |ui| self.calendar_main(ui, true));
+            if ctx.is_being_dragged(id.with("__resize")) {
+                self.prefs.main_widths.work_calendar[side] =
+                    panel.response.rect.width().clamp(380., max_width);
+            }
         }
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(tone.bg).inner_margin(egui::Margin {
@@ -1395,8 +1414,21 @@ impl App {
             "트레이의 OhMemoJang 아이콘을 누르면 메인 창이 열려요",
         );
     }
+    fn restore_main_widths(&mut self) {
+        let widths = &self.prefs.main_widths;
+        self.catalog.preview_width = widths.memo_preview;
+        self.catalog.column_widths = widths.memo_columns;
+        self.extra.wiki_left_width = widths.wiki_tree;
+        self.extra.wiki_detail_width = widths.wiki_detail;
+    }
+
     /// Save changed settings, and leave a page whose menu was hidden.
     fn keep_prefs(&mut self) {
+        let widths = &mut self.prefs.main_widths;
+        widths.memo_preview = self.catalog.preview_width;
+        widths.memo_columns = self.catalog.column_widths;
+        widths.wiki_tree = self.extra.wiki_left_width;
+        widths.wiki_detail = self.extra.wiki_detail_width;
         self.prefs.cal_theme = self.cal.theme;
         if self.prefs.hidden_pages.contains(&self.page) || !PAGES.iter().any(|p| p.0 == self.page) {
             self.page = 0;
@@ -1537,6 +1569,86 @@ fn main() -> eframe::Result {
 #[cfg(test)]
 mod sidebar_edge_tests {
     use super::*;
+
+    #[test]
+    fn workspace_widths_restore_after_a_fresh_context() {
+        let today = Local::now().date_naive();
+        let mut app = App::sample(today);
+        app.sidebar = false;
+        app.split = true;
+        app.prefs.cal_side_work = true;
+        let ctx = egui::Context::default();
+        let id = egui::Id::new("split_side");
+        let panel = |ctx: &egui::Context| {
+            egui::containers::panel::PanelState::load(ctx, id)
+                .unwrap()
+                .rect
+        };
+        let draw = |app: &mut App, ctx: &egui::Context, width, time, events| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(width, 900.),
+                    )),
+                    events,
+                    time: Some(time),
+                    ..Default::default()
+                },
+                |ctx| app.main_ui(ctx),
+            );
+        };
+        draw(&mut app, &ctx, 1450., 0., vec![]);
+        let grab = panel(&ctx).left_center();
+        let end = grab - Vec2::new(100., 0.);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            pressed,
+            button: egui::PointerButton::Primary,
+            modifiers: egui::Modifiers::NONE,
+        };
+        draw(
+            &mut app,
+            &ctx,
+            1450.,
+            0.1,
+            vec![egui::Event::PointerMoved(grab), button(grab, true)],
+        );
+        draw(
+            &mut app,
+            &ctx,
+            1450.,
+            0.2,
+            vec![egui::Event::PointerMoved(end)],
+        );
+        draw(&mut app, &ctx, 1450., 0.3, vec![button(end, false)]);
+        let wanted = app.prefs.main_widths.work_calendar[1];
+        assert!((wanted - 920.).abs() < 1., "stored width was {wanted}");
+
+        app.catalog.preview_width = 371.;
+        app.catalog.column_widths[1] = 189.;
+        app.extra.wiki_left_width = 235.;
+        app.extra.wiki_detail_width = 340.;
+        app.prefs.main_widths.calendar_detail = [291., 301.];
+        app.prefs.main_widths.agenda_preview = [300., 320.];
+        app.keep_prefs();
+
+        let mut reopened = App::sample(today);
+        reopened.prefs = prefs::Prefs::from_text(&app.prefs.to_text());
+        reopened.restore_main_widths();
+        assert_eq!(reopened.prefs.main_widths, app.prefs.main_widths);
+        assert_eq!(reopened.catalog.preview_width, 371.);
+        assert_eq!(reopened.catalog.column_widths[1], 189.);
+        assert_eq!(reopened.extra.wiki_left_width, 235.);
+        assert_eq!(reopened.extra.wiki_detail_width, 340.);
+        reopened.split = true;
+        reopened.sidebar = false;
+        let fresh = egui::Context::default();
+        draw(&mut reopened, &fresh, 1000., 0., vec![]);
+        assert_eq!(reopened.prefs.main_widths.work_calendar[1], wanted);
+        draw(&mut reopened, &fresh, 1450., 0.1, vec![]);
+        assert!((panel(&fresh).width() - wanted).abs() < 1.);
+    }
     fn press(x: f32, down: bool) -> egui::Event {
         egui::Event::PointerButton {
             pos: egui::pos2(x, 300.),

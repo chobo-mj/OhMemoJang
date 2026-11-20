@@ -541,7 +541,12 @@ impl App {
         let right =
             egui::Rect::from_min_max(egui::pos2(left.right() + 12., inner.top()), inner.max);
         let gap = 10.;
-        let (pane0_w, pane1_w) = wiki_pane_widths(self.extra.wiki_pane_frac, right.width(), gap);
+        let fraction = if self.extra.wiki_detail_width > 0. {
+            self.extra.wiki_detail_width / (right.width() - gap).max(1.)
+        } else {
+            0.5
+        };
+        let (pane0_w, pane1_w) = wiki_pane_widths(fraction, right.width(), gap);
         let pane_rects = [
             egui::Rect::from_min_size(right.min, Vec2::new(pane0_w, right.height())),
             egui::Rect::from_min_size(
@@ -571,10 +576,10 @@ impl App {
             let pane_min = 160.;
             let new_pane0 = (pane0_w + drag.drag_delta().x)
                 .clamp(pane_min, (right.width() - gap - pane_min).max(pane_min));
-            self.extra.wiki_pane_frac = new_pane0 / (right.width() - gap);
+            self.extra.wiki_detail_width = new_pane0;
         }
         if drag.double_clicked() {
-            self.extra.wiki_pane_frac = 0.5;
+            self.extra.wiki_detail_width = 0.;
         }
         for (k, pane) in pane_rects.into_iter().enumerate() {
             self.in_rect(ui, pane, ("wiki_pane", k), |a, ui| a.wiki_pane(ui, k));
