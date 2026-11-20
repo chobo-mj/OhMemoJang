@@ -809,6 +809,10 @@ impl App {
                                         self.extra.delete_project = Some(p);
                                         self.extra.delete_notes = false;
                                     }
+                                    if ui.button("이름 바꾸기").clicked() {
+                                        self.project_rename =
+                                            Some((p, self.data.projects[p].clone()));
+                                    }
                                     if ui
                                         .button(if hidden {
                                             "다시 보이기"
@@ -845,6 +849,39 @@ impl App {
             },
         );
         self.extra.project_manager = open;
+        if let Some((p, mut name)) = self.project_rename.take() {
+            let mut open = true;
+            let mut keep_editing = true;
+            crate::ui::dialog(
+                ctx,
+                "rename_project",
+                "프로젝트 이름 바꾸기",
+                [380., 220.],
+                true,
+                &mut open,
+                |ui| {
+                    let field = ui.text_edit_singleline(&mut name);
+                    let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let merge = self.project_with_name(p, name.trim()).is_some();
+                    if merge {
+                        crate::ui::hint(ui, "기존 프로젝트에 연결된 메모를 합칩니다");
+                    }
+                    let (ok, cancel) = crate::ui::dialog_buttons(
+                        ui,
+                        if merge { "합치기" } else { "저장" },
+                        "취소",
+                    );
+                    if (ok || enter) && !name.trim().is_empty() {
+                        self.rename_project(p, name.trim());
+                        keep_editing = false;
+                    }
+                    keep_editing &= !cancel;
+                },
+            );
+            if open && keep_editing && self.extra.project_manager {
+                self.project_rename = Some((p, name));
+            }
+        }
         if let Some(p) = self.extra.delete_project {
             let mut open = true;
             crate::ui::dialog(
@@ -886,6 +923,39 @@ impl App {
             }
         }
     }
+    fn project_with_name(&self, source: usize, name: &str) -> Option<usize> {
+        self.data
+            .projects
+            .iter()
+            .enumerate()
+            .position(|(p, existing)| {
+                p != source && existing == name && !self.extra.deleted_projects.contains(&p)
+            })
+    }
+
+    fn rename_project(&mut self, source: usize, name: &str) {
+        if self.data.projects[source] == name {
+            return;
+        }
+        if let Some(target) = self.project_with_name(source, name) {
+            for note in &mut self.data.notes {
+                if note.project == Some(source) {
+                    note.project = Some(target);
+                }
+            }
+            self.extra.deleted_projects.insert(source);
+            self.extra.hidden_projects.remove(&source);
+            if self.project_filter == Some(source) {
+                self.project_filter =
+                    (!self.extra.hidden_projects.contains(&target)).then_some(target);
+            }
+            self.toast = format!("‘{name}’ 프로젝트에 메모를 합쳤습니다");
+        } else {
+            self.data.projects[source] = name.to_owned();
+            self.toast = format!("프로젝트 이름을 ‘{name}’(으)로 바꿨습니다");
+        }
+    }
+
     pub fn delete_project(&mut self, p: usize, delete_notes: bool) {
         self.extra.deleted_projects.insert(p);
         self.extra.hidden_projects.remove(&p);
