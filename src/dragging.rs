@@ -37,6 +37,12 @@ pub struct Drag {
     shift: bool,
     moved: bool,
 }
+impl Drag {
+    pub fn moving_note_in(&self, viewport: ViewportId, note: usize) -> bool {
+        self.moved && self.source.viewport == viewport && self.source.note == note
+    }
+}
+
 impl App {
     pub fn assign_dropped_date(
         &mut self,

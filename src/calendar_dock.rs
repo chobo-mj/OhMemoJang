@@ -1103,67 +1103,80 @@ mod standing_tests {
     }
 
     #[test]
-    fn standing_band_drag_preserves_the_span_with_other_band_actions_disabled() {
-        let start = chrono::NaiveDate::from_ymd_opt(2026, 11, 9).unwrap();
-        let mut app = App::sample(start);
-        app.data.notes.iter_mut().for_each(|n| n.clear_schedule());
-        let i = app.new_sticker_on(start);
-        app.data.notes[i].title = "Shift this schedule".into();
-        app.data.notes[i].duration = 3;
-        app.cal.standing = Some(Standing {
-            hwnd: 0,
-            rect: [0, 0, 1000, 800],
-            outer: [0, 0, 1000, 800],
-            button: [0; 4],
-            pinned: true,
-            wait: 0,
-            click: None,
-            over_icons: true,
-        });
-        app.cal.painting = true;
-        app.prefs.stand_input = true;
-        app.prefs.stand_band = false;
-        app.prefs.stand_drop = false;
+    fn moving_a_band_previews_its_position_and_preserves_its_span() {
+        for standing in [false, true] {
+            let start = chrono::NaiveDate::from_ymd_opt(2026, 11, 9).unwrap();
+            let mut app = App::sample(start);
+            app.data.notes.iter_mut().for_each(|n| n.clear_schedule());
+            let i = app.new_sticker_on(start);
+            let color = Color32::from_rgb(73, 151, 193);
+            app.data.notes[i].color = color;
+            app.data.notes[i].title = "Shift this schedule".into();
+            app.data.notes[i].duration = 3;
+            if standing {
+                app.cal.standing = Some(Standing {
+                    hwnd: 0,
+                    rect: [0, 0, 1000, 800],
+                    outer: [0, 0, 1000, 800],
+                    button: [0; 4],
+                    pinned: true,
+                    wait: 0,
+                    click: None,
+                    over_icons: true,
+                });
+                app.cal.painting = true;
+                app.prefs.stand_input = true;
+                app.prefs.stand_band = false;
+                app.prefs.stand_drop = false;
+            }
 
-        let ctx = egui::Context::default();
-        let frame = |app: &mut App, time, events| {
-            let _ = ctx.run(
-                egui::RawInput {
-                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000., 800.))),
-                    time: Some(time),
-                    events,
-                    ..Default::default()
-                },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| app.calendar_grid(ui));
-                },
-            );
-        };
-        frame(&mut app, 0., vec![]);
-        let point = |day| {
-            let (_, cells) = &app.cal_cells[&egui::ViewportId::ROOT];
-            let cell = cells.iter().find(|(_, date)| *date == day).unwrap().0;
-            Pos2::new(cell.center().x, cell.top() + 42.)
-        };
-        let grabbed = start.succ_opt().unwrap();
-        let dropped = start + chrono::Duration::days(8);
-        let from = point(grabbed);
-        let to = point(dropped);
-        let button = |pos, pressed| egui::Event::PointerButton {
-            pos,
-            pressed,
-            button: egui::PointerButton::Primary,
-            modifiers: egui::Modifiers::NONE,
-        };
-        frame(
-            &mut app,
-            0.1,
-            vec![egui::Event::PointerMoved(from), button(from, true)],
-        );
-        frame(&mut app, 0.2, vec![egui::Event::PointerMoved(to)]);
-        frame(&mut app, 0.3, vec![button(to, false)]);
-        assert_eq!(app.data.notes[i].date, dropped.pred_opt());
-        assert_eq!(app.data.notes[i].duration, 3);
+            let ctx = egui::Context::default();
+            let frame = |app: &mut App, time, events| {
+                ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000., 800.))),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        app.drag_input(ctx);
+                        egui::CentralPanel::default().show(ctx, |ui| app.calendar_grid(ui));
+                    },
+                )
+            };
+            let painted_band = |out: egui::FullOutput| {
+                out.shapes.into_iter().find_map(|item| match item.shape {
+                    egui::Shape::Rect(shape) if shape.fill == color => Some(shape.rect),
+                    _ => None,
+                })
+            };
+            let original = painted_band(frame(&mut app, 0., vec![])).unwrap();
+            let point = |day| {
+                let (_, cells) = &app.cal_cells[&egui::ViewportId::ROOT];
+                let cell = cells.iter().find(|(_, date)| *date == day).unwrap().0;
+                Pos2::new(cell.center().x, cell.top() + 42.)
+            };
+            let grabbed = start.succ_opt().unwrap();
+            let dropped = start + chrono::Duration::days(8);
+            let from = point(grabbed);
+            let to = point(dropped);
+            let button = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                pressed,
+                button: egui::PointerButton::Primary,
+                modifiers: egui::Modifiers::NONE,
+            };
+            frame(&mut app, 0.05, vec![egui::Event::PointerMoved(from)]);
+            frame(&mut app, 0.1, vec![button(from, true)]);
+            let preview = painted_band(frame(&mut app, 0.2, vec![egui::Event::PointerMoved(to)]))
+                .expect("the moving band is visible before release");
+            assert!((preview.min - original.min - (to - from)).length() < 0.01);
+            assert_eq!(app.data.notes[i].date, Some(start));
+            frame(&mut app, 0.3, vec![button(to, false)]);
+            assert_eq!(app.data.notes[i].date, dropped.pred_opt());
+            assert_eq!(app.data.notes[i].duration, 3);
+        }
     }
 
     #[test]

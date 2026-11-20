@@ -1267,24 +1267,6 @@ impl App {
             ne: r(open_right),
             se: r(open_right),
         };
-        ui.painter().rect_filled(
-            rect,
-            corners,
-            if response.hovered() {
-                ui::lerp_color(fill, Color32::BLACK, 0.06)
-            } else {
-                fill
-            },
-        );
-        if !self.dark && pale(fill) {
-            // Light gray and white bands would melt into the page.
-            ui.painter().rect_stroke(
-                rect,
-                corners,
-                Stroke::new(1.0_f32, ui::lerp_color(fill, Color32::BLACK, 0.42)),
-                egui::StrokeKind::Inside,
-            );
-        }
         let label = if n.title.trim().is_empty() {
             "제목 없음".to_owned()
         } else {
@@ -1320,11 +1302,6 @@ impl App {
         );
         job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - 12.);
         let galley = ui.fonts(|f| f.layout_job(job));
-        ui.painter().galley(
-            egui::pos2(rect.left() + 6., rect.center().y - galley.size().y / 2.),
-            galley,
-            INK,
-        );
         let day_at = |p: egui::Pos2| {
             let k = ((p.x - rect.left()) / (rect.width() / days.len() as f32)).floor();
             days[(k.max(0.) as usize).min(days.len() - 1)]
@@ -1339,6 +1316,53 @@ impl App {
                     },
                 );
             }
+        }
+        let moving = if standing {
+            egui::DragAndDrop::has_payload_of_type::<StandingScheduleDrag>(ui.ctx())
+        } else {
+            self.drag
+                .as_ref()
+                .is_some_and(|drag| drag.moving_note_in(ui.ctx().viewport_id(), i))
+        };
+        let movement = if moving && response.dragged_by(egui::PointerButton::Primary) {
+            ui.input(|input| {
+                let from = input.pointer.press_origin()?;
+                let at = input.pointer.interact_pos()?;
+                ((at - from).length_sq() > 16.).then_some(at - from)
+            })
+        } else {
+            None
+        };
+        let border = (!self.dark && pale(fill))
+            .then(|| Stroke::new(1.0_f32, ui::lerp_color(fill, Color32::BLACK, 0.42)));
+        let paint = |painter: &egui::Painter, rect: Rect, fill| {
+            painter.rect_filled(rect, corners, fill);
+            if let Some(border) = border {
+                painter.rect_stroke(rect, corners, border, egui::StrokeKind::Inside);
+            }
+            painter.galley(
+                egui::pos2(rect.left() + 6., rect.center().y - galley.size().y / 2.),
+                galley.clone(),
+                INK,
+            );
+        };
+        if let Some(delta) = movement {
+            let mut source = ui.painter().clone();
+            source.multiply_opacity(0.35);
+            paint(&source, rect, fill);
+            let floating = ui.ctx().layer_painter(egui::LayerId::new(
+                egui::Order::Tooltip,
+                ui.id().with("moving_calendar_band"),
+            ));
+            paint(&floating, rect.translate(delta), fill);
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        } else {
+            let fill = if response.hovered() {
+                ui::lerp_color(fill, Color32::BLACK, 0.06)
+            } else {
+                fill
+            };
+            paint(ui.painter(), rect, fill);
         }
         if !band_on {
             return;
