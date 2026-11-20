@@ -90,6 +90,7 @@ struct App {
     sidebar_drag: Option<f32>,
     split: bool,
     dark: bool,
+    dark_brighter: bool,
     search: String,
     editor: bool,
     sticky: bool,
@@ -276,6 +277,7 @@ impl App {
             sidebar_drag: None,
             split: true,
             dark: false,
+            dark_brighter: false,
             search: String::new(),
             editor: false,
             sticky: false,
@@ -336,16 +338,25 @@ impl App {
         }
     }
     fn theme(&self, ctx: &egui::Context) {
-        self.theme_with(ctx, self.dark);
+        self.theme_with(ctx, self.dark, self.dark_brighter);
     }
-    fn theme_with(&self, ctx: &egui::Context, dark: bool) {
+    fn app_tone(&self) -> ui::Tone {
+        ui::theme_tone(self.dark, self.dark_brighter)
+    }
+    fn theme_with(&self, ctx: &egui::Context, dark: bool, brighter: bool) {
         let selected = egui::FontFamily::Name(self.desktop.font.clone().into());
         let family = if ctx.fonts(|f| f.families().contains(&selected)) {
             selected
         } else {
             egui::FontFamily::Proportional
         };
-        ui::apply(ctx, dark, family, self.desktop.font_size * 4. / 3.);
+        ui::apply(
+            ctx,
+            dark,
+            brighter,
+            family,
+            self.desktop.font_size * 4. / 3.,
+        );
     }
     fn apply_shortcuts(&mut self) {
         let parsed = self
@@ -699,7 +710,7 @@ impl App {
             builder,
             |ctx, _| {
                 self.theme(ctx);
-                let tone = ui::tone(self.dark);
+                let tone = self.app_tone();
                 egui::CentralPanel::default()
                     .frame(
                         egui::Frame::NONE
@@ -825,7 +836,7 @@ impl App {
         self.settings = false;
     }
     fn main_ui(&mut self, ctx: &egui::Context) {
-        let tone = ui::tone(self.dark);
+        let tone = self.app_tone();
         if self.sidebar {
             let left = ctx.screen_rect().left();
             let edge = left + self.sidebar_width;

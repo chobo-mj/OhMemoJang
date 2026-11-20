@@ -351,7 +351,11 @@ impl App {
             builder,
             |ctx, _| {
                 let theme = self.cal.theme.checked_sub(1).and_then(|t| THEMES.get(t));
-                self.theme_with(ctx, theme.map_or(self.dark, |t| t.dark));
+                self.theme_with(
+                    ctx,
+                    theme.map_or(self.dark, |t| t.dark),
+                    theme.is_none() && self.dark_brighter,
+                );
                 // Painted once right after it was pinned under the desktop
                 // icons or let go, even though it looks the same: it moved
                 // to another layer (`vendor/eframe` skips same-looking frames).

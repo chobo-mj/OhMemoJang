@@ -57,21 +57,44 @@ pub fn tone(dark: bool) -> Tone {
         }
     }
 }
+const BRIGHTER_DARK_BG: Color32 = Color32::from_rgb(48, 48, 46);
+
+pub fn theme_tone(dark: bool, brighter: bool) -> Tone {
+    let base = tone(dark);
+    if dark && brighter {
+        Tone {
+            bg: BRIGHTER_DARK_BG,
+            sidebar: Color32::from_rgb(41, 41, 39),
+            field: Color32::from_rgb(60, 60, 57),
+            hover: Color32::from_rgb(68, 68, 65),
+            pressed: Color32::from_rgb(78, 78, 75),
+            line: Color32::from_rgb(68, 68, 65),
+            line_strong: Color32::from_rgb(87, 87, 83),
+            muted: Color32::from_rgb(176, 175, 169),
+            faint: Color32::from_rgb(138, 137, 131),
+            accent_soft: Color32::from_rgb(88, 54, 45),
+            ..base
+        }
+    } else {
+        base
+    }
+}
 pub fn t(ui: &Ui) -> Tone {
-    tone(ui.visuals().dark_mode)
+    let visuals = ui.visuals();
+    theme_tone(visuals.dark_mode, visuals.panel_fill == BRIGHTER_DARK_BG)
 }
 
 /// Install visuals and spacing for a whole context. `body` is the body size in points.
-pub fn apply(ctx: &egui::Context, dark: bool, family: egui::FontFamily, body: f32) {
+pub fn apply(ctx: &egui::Context, dark: bool, brighter: bool, family: egui::FontFamily, body: f32) {
     // Every window asks for its look every frame; the style is shared, so
     // build and install it only when what it is made of has changed.
     let key = egui::Id::new("ui-applied");
-    let want = (dark, family.clone(), body.to_bits());
-    if ctx.data(|d| d.get_temp::<(bool, egui::FontFamily, u32)>(key)) == Some(want.clone()) {
+    let want = (dark, brighter, family.clone(), body.to_bits());
+    if ctx.data(|d| d.get_temp::<(bool, bool, egui::FontFamily, u32)>(key)) == Some(want.clone()) {
         return;
     }
     ctx.data_mut(|d| d.insert_temp(key, want));
-    let c = tone(dark);
+    let c = theme_tone(dark, brighter);
     let mut v = if dark {
         egui::Visuals::dark()
     } else {
@@ -79,7 +102,9 @@ pub fn apply(ctx: &egui::Context, dark: bool, family: egui::FontFamily, body: f3
     };
     v.panel_fill = c.bg;
     v.window_fill = c.bg;
-    v.faint_bg_color = if dark {
+    v.faint_bg_color = if dark && brighter {
+        Color32::from_rgb(54, 54, 52)
+    } else if dark {
         Color32::from_rgb(35, 35, 34)
     } else {
         Color32::from_rgb(250, 250, 248)
@@ -1125,7 +1150,7 @@ mod tests {
     #[test]
     fn sweeping_over_a_toolbar_pops_no_tooltips_until_the_pointer_rests() {
         let ctx = egui::Context::default();
-        apply(&ctx, false, egui::FontFamily::Proportional, 14.);
+        apply(&ctx, false, false, egui::FontFamily::Proportional, 14.);
         let i = ctx.style().interaction.clone();
         assert!(!i.show_tooltips_only_when_still);
         assert_eq!(i.tooltip_grace_time, 0.);

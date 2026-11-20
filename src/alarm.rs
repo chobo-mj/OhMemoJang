@@ -344,7 +344,7 @@ impl App {
                 self.theme(ctx);
                 crate::win_style::shape(ctx, 1.);
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
-                let tone = ui::tone(self.dark);
+                let tone = self.app_tone();
                 egui::CentralPanel::default()
                     .frame(
                         egui::Frame::NONE

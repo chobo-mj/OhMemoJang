@@ -232,6 +232,7 @@ pub struct CatalogFolderRec {
 #[serde(default)]
 pub struct SettingsRec {
     pub dark: bool,
+    pub dark_brighter: bool,
     pub shortcuts: Vec<String>,
     pub hide_completed: bool,
     pub hide_locked: bool,
@@ -296,6 +297,7 @@ impl Default for SettingsRec {
         let d = crate::desktop::Desktop::default();
         let mut s = Self {
             dark: false,
+            dark_brighter: false,
             shortcuts: vec![],
             hide_completed: false,
             hide_locked: false,
@@ -973,6 +975,7 @@ impl App {
         let mut settings = SettingsRec::default();
         settings.read_desktop(&self.desktop);
         settings.dark = self.dark;
+        settings.dark_brighter = self.dark_brighter;
         settings.shortcuts = self.shortcuts.to_vec();
         settings.show_done = self.extra.show_done;
         settings.cal_box_color = color(self.cal.box_color);
@@ -1131,6 +1134,7 @@ impl App {
         let st = &s.settings;
         st.write_desktop(&mut self.desktop);
         self.dark = st.dark;
+        self.dark_brighter = st.dark_brighter;
         for (k, v) in st.shortcuts.iter().enumerate().take(3) {
             if !v.trim().is_empty() {
                 self.shortcuts[k] = v.clone();

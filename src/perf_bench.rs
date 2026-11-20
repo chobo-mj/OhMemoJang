@@ -37,7 +37,7 @@ fn frames(label: &str, a: &mut App, n: usize, mut show: impl FnMut(&mut App, &mu
             .insert(0, "malgun".into());
         ctx.set_fonts(fonts);
     }
-    crate::ui::apply(&ctx, false, egui::FontFamily::Proportional, 14.);
+    crate::ui::apply(&ctx, false, false, egui::FontFamily::Proportional, 14.);
     let mut run = |a: &mut App, moved: bool| {
         let events = if moved {
             vec![egui::Event::PointerMoved(egui::pos2(

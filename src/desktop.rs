@@ -1145,9 +1145,18 @@ impl App {
             }
             1 => {
                 section(ui, "테마");
-                let mut theme = usize::from(self.dark);
-                if segmented(ui, &mut theme, &["라이트 모드", "다크 모드"]) {
-                    self.dark = theme == 1;
+                let mut theme = if self.dark {
+                    1 + usize::from(self.dark_brighter)
+                } else {
+                    0
+                };
+                if segmented(
+                    ui,
+                    &mut theme,
+                    &["라이트 모드", "다크 모드 1", "다크 모드 2"],
+                ) {
+                    self.dark = theme != 0;
+                    self.dark_brighter = theme == 2;
                 }
                 section(ui, "글꼴");
                 font_choice(ui, "main_font", &mut self.desktop.font);
