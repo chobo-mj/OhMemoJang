@@ -126,6 +126,7 @@ pub struct Dock {
     unpinned_at: Option<f64>,
     /// Whether the calendar window last drew itself pinned to the desktop.
     drew_pinned: bool,
+    focus_requested: bool,
     /// True: the detached window shows the grid and the day's memos side by
     /// side instead of stacked.
     pub horizontal: bool,
@@ -177,6 +178,7 @@ impl Default for Dock {
             standing: None,
             unpinned_at: None,
             drew_pinned: false,
+            focus_requested: false,
             horizontal: false,
             split_frac: 1. / 3.,
             stand_on_start: 0,
@@ -289,6 +291,7 @@ impl App {
     pub fn show_calendar(&mut self) {
         self.restore_standing();
         self.cal.state = DockState::Window;
+        self.cal.focus_requested = true;
     }
     pub fn calendar_dock(&mut self, ctx: &egui::Context) {
         // Its window went with the desktop it stood on (Explorer restarted):
@@ -358,6 +361,10 @@ impl App {
                     });
                 }
                 self.cal.drew_pinned = pinned;
+                if !standing && std::mem::take(&mut self.cal.focus_requested) {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
                 self.drag_input(ctx);
                 if ctx.input(|i| i.viewport().close_requested()) {
                     // The window's close button closes the calendar; only
