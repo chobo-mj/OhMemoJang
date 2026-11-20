@@ -938,16 +938,19 @@ impl App {
             return;
         }
         if let Some(target) = self.project_with_name(source, name) {
-            for note in &mut self.data.notes {
+            for note in self.data.notes.iter_mut() {
                 if note.project == Some(source) {
                     note.project = Some(target);
                 }
             }
             self.extra.deleted_projects.insert(source);
             self.extra.hidden_projects.remove(&source);
+            let filter = (!self.extra.hidden_projects.contains(&target)).then_some(target);
             if self.project_filter == Some(source) {
-                self.project_filter =
-                    (!self.extra.hidden_projects.contains(&target)).then_some(target);
+                self.project_filter = filter;
+            }
+            if self.extra.search_project == Some(source) {
+                self.extra.search_project = filter;
             }
             self.toast = format!("‘{name}’ 프로젝트에 메모를 합쳤습니다");
         } else {
