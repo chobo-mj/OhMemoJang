@@ -70,6 +70,7 @@ pub struct Extra {
     pub wiki_blank: bool,
     pub wiki_comments: [bool; 2],
     pub wiki_rename: Option<WikiRename>,
+    pub wiki_rename_focus: bool,
     /// A wiki folder to delete once the tree has been drawn.
     pub wiki_folder_delete: Option<(usize, bool)>,
     pub tree_selected: Option<usize>,
@@ -169,6 +170,7 @@ impl Default for Extra {
             wiki_blank: false,
             wiki_comments: [false; 2],
             wiki_rename: None,
+            wiki_rename_focus: false,
             wiki_folder_delete: None,
             tree_selected: None,
             drafts: HashMap::new(),

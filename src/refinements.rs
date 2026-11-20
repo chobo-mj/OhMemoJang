@@ -661,8 +661,9 @@ impl App {
                     let r = ui.add(
                         egui::TextEdit::singleline(&mut self.extra.wiki_tabs[t]).desired_width(90.),
                     );
-                    r.request_focus();
-                    if r.lost_focus() {
+                    if std::mem::take(&mut self.extra.wiki_rename_focus) {
+                        r.request_focus();
+                    } else if r.lost_focus() {
                         self.extra.wiki_rename = None;
                     }
                     continue;
@@ -701,10 +702,12 @@ impl App {
                 }
                 if r.double_clicked() {
                     self.extra.wiki_rename = Some(crate::extras::WikiRename::Tab(t));
+                    self.extra.wiki_rename_focus = true;
                 }
                 r.context_menu(|ui| {
                     if ui.button("이름 바꾸기").clicked() {
                         self.extra.wiki_rename = Some(crate::extras::WikiRename::Tab(t));
+                        self.extra.wiki_rename_focus = true;
                         ui.close_menu();
                     }
                     ui.menu_button("색 바꾸기", |ui| {
@@ -1144,8 +1147,9 @@ impl App {
                 egui::TextEdit::singleline(&mut self.extra.folders[f].title)
                     .desired_width(f32::INFINITY),
             );
-            r.request_focus();
-            if r.lost_focus() {
+            if std::mem::take(&mut self.extra.wiki_rename_focus) {
+                r.request_focus();
+            } else if r.lost_focus() {
                 self.extra.wiki_rename = None;
             }
         } else {
@@ -1188,6 +1192,7 @@ impl App {
                 }
                 if ui.button("이름 바꾸기").clicked() {
                     self.extra.wiki_rename = Some(crate::extras::WikiRename::Folder(f));
+                    self.extra.wiki_rename_focus = true;
                     ui.close_menu();
                 }
                 if ui.button("폴더 삭제").clicked() {
