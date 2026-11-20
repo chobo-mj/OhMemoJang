@@ -1229,6 +1229,12 @@ impl App {
                         );
                     });
                     hint(ui, "새로 여는 스티커 메모에 적용됩니다");
+                    section(ui, "스티커 메모 다음에 열 때 위치");
+                    segmented(
+                        ui,
+                        &mut self.prefs.sticker_reopen_position,
+                        &["이전 위치", "오른쪽 정렬", "왼쪽 정렬", "화면 중앙"],
+                    );
                     ui.add_space(6.);
                     toggle_row(
                         ui,

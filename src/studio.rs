@@ -45,6 +45,7 @@ pub struct Window {
     applied: Option<(Mode, bool)>,
     focus: bool,
     center: bool,
+    reopening: bool,
     help: bool,
     native: crate::native_window::State,
     pub(crate) place: Option<Pos2>,
@@ -139,6 +140,7 @@ impl Window {
             applied: None,
             focus: true,
             center: true,
+            reopening: false,
             help: false,
             native: Default::default(),
             place: None,
@@ -305,11 +307,13 @@ pub struct FontDialog {
 }
 impl Studio {
     pub fn open(&mut self, i: usize, occurrence: Option<NaiveDate>) {
-        let w = self
-            .windows
-            .entry(i)
-            .or_insert_with(|| Window::new(Mode::Editor));
+        let w = self.windows.entry(i).or_insert_with(|| {
+            let mut w = Window::new(Mode::Editor);
+            w.reopening = true;
+            w
+        });
         if !w.open {
+            w.reopening = true;
             w.applied = None;
             w.native.cancel();
             // Back where it was last seen, wherever the user had dragged it:
@@ -1821,9 +1825,18 @@ impl App {
                         }
                     }
                 }
-                if changed || w.center {
+                let reopen_position = if std::mem::take(&mut w.reopening) && mode == Mode::Sticker {
+                    self.prefs.sticker_reopen_position
+                } else {
+                    0
+                };
+                if reopen_position != 0 {
+                    w.place = None;
+                    w.fit_place = false;
+                }
+                if changed || w.center || reopen_position != 0 {
                     // A new window opens on the monitor chosen in the settings.
-                    let chosen = if w.center {
+                    let chosen = if w.center || reopen_position != 0 {
                         self.desktop
                             .new_monitor
                             .and_then(|m| crate::native_window::monitors(ctx).get(m).copied())
@@ -1831,7 +1844,9 @@ impl App {
                         None
                     };
                     if let Some(area) = chosen.or_else(|| crate::native_window::work_area(ctx)) {
-                        let position = if w.center && self.desktop.new_right {
+                        let position = if matches!(reopen_position, 1 | 2)
+                            || (reopen_position == 0 && w.center && self.desktop.new_right)
+                        {
                             let others: Vec<Rect> = self
                                 .studio
                                 .windows
@@ -1843,7 +1858,24 @@ impl App {
                                     Some(Rect::from_min_size(at, o.outer_size(locked)))
                                 })
                                 .collect();
-                            right_slot(area, size, &others)
+                            if reopen_position == 2 {
+                                let mirror = |x| area.left() + area.right() - x;
+                                let mirrored: Vec<_> = others
+                                    .iter()
+                                    .map(|r| {
+                                        Rect::from_min_size(
+                                            Pos2::new(mirror(r.right()), r.top()),
+                                            r.size(),
+                                        )
+                                    })
+                                    .collect();
+                                let right = right_slot(area, size, &mirrored);
+                                Pos2::new(mirror(right.x + size.x), right.y)
+                            } else {
+                                right_slot(area, size, &others)
+                            }
+                        } else if reopen_position == 3 {
+                            area.center() - size * 0.5
                         } else if w.center {
                             // New windows step down-right so they do not
                             // cover the ones already open.
@@ -1855,7 +1887,7 @@ impl App {
                         };
                         let position = crate::native_window::fit_position(position, size, area);
                         ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(position));
-                        if w.center {
+                        if w.center || reopen_position != 0 {
                             // Seen by the windows opened after this one.
                             w.last_pos = Some(position);
                         }

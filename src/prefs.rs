@@ -43,6 +43,7 @@ pub struct Prefs {
     pub stand_drop: bool,
     pub stand_band: bool,
     pub stand_move: bool,
+    pub sticker_reopen_position: usize,
 }
 
 impl Default for Prefs {
@@ -71,6 +72,7 @@ impl Default for Prefs {
             stand_drop: true,
             stand_band: true,
             stand_move: true,
+            sticker_reopen_position: 0,
         }
     }
 }
@@ -79,7 +81,7 @@ impl Prefs {
     pub fn to_text(&self) -> String {
         let hidden: Vec<String> = self.hidden_pages.iter().map(|p| p.to_string()).collect();
         format!(
-            "sidebar_width={}\ndrop_schedule_choice={}\nclose_completed_sticker={}\nrearrange_completed_stickers={}\nstart_page={}\nhidden_pages={}\ncal_theme={}\ncal_font={}\ncal_hide_done={}\ncal_strike={}\ncal_weeks={}\ndata_path={}\nfirst_run_done={}\ntray_hint_done={}\ncal_side_work={}\ncal_side_page={}\npaste_table_text={}\nstand_input={}\nstand_new_memo={}\nstand_range={}\nstand_drop={}\nstand_band={}\nstand_move={}\n",
+            "sidebar_width={}\ndrop_schedule_choice={}\nclose_completed_sticker={}\nrearrange_completed_stickers={}\nstart_page={}\nhidden_pages={}\ncal_theme={}\ncal_font={}\ncal_hide_done={}\ncal_strike={}\ncal_weeks={}\ndata_path={}\nfirst_run_done={}\ntray_hint_done={}\ncal_side_work={}\ncal_side_page={}\npaste_table_text={}\nstand_input={}\nstand_new_memo={}\nstand_range={}\nstand_drop={}\nstand_band={}\nstand_move={}\nsticker_reopen_position={}\n",
             self.sidebar_width,
             self.drop_schedule_choice,
             self.close_completed_sticker,
@@ -103,6 +105,7 @@ impl Prefs {
             self.stand_drop,
             self.stand_band,
             self.stand_move,
+            self.sticker_reopen_position,
         )
     }
     /// Unknown keys and bad values fall back to the defaults.
@@ -145,6 +148,9 @@ impl Prefs {
                 "stand_drop" => p.stand_drop = value == "true",
                 "stand_band" => p.stand_band = value == "true",
                 "stand_move" => p.stand_move = value == "true",
+                "sticker_reopen_position" => {
+                    p.sticker_reopen_position = value.parse::<usize>().unwrap_or(0).min(3)
+                }
                 _ => {}
             }
         }
