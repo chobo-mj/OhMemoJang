@@ -43,6 +43,12 @@ pub enum Spot {
     NavUtilities,
     /// The 편의기능 page.
     Utilities,
+    /// The calendar window's grid (and its schedule list).
+    DockGrid,
+    /// The "클립보드 히스토리" button in the left menu.
+    NavClipboard,
+    /// The 클립보드 히스토리 page.
+    Clipboard,
 }
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -100,8 +106,15 @@ enum Role {
     Deadline,
     Arrange(usize),
     Complete,
+    /// Added in 2.1: dropped on the calendar window.
+    DockDrag,
+    DockDeadline,
 }
 
+/// How many memos the tutorial adds before 2.1 (roles, then two examples).
+const OLD_NOTES: usize = 9;
+const DOCK_TITLE: &str = "분리창 연습 · 자료 정리";
+const DOCK_DEADLINE_TITLE: &str = "분리창 연습 · 계약서 회신";
 const DRAG_TITLE: &str = "드래그 연습 · 회의 준비";
 const DEADLINE_TITLE: &str = "드래그 연습 · 보고서 제출";
 const ARRANGE_TITLES: [&str; 3] = ["정렬 연습 · 하나", "정렬 연습 · 둘", "정렬 연습 · 셋"];
@@ -121,7 +134,11 @@ enum K {
     Filter,
     Complete,
     Journal,
+    Clipboard,
     Detach,
+    DockDrag,
+    DockShift,
+    Range,
     Stand,
     End,
 }
@@ -138,7 +155,7 @@ impl Step {
     /// Moves on by itself once done (the rest wait for "다음" so the result
     /// can be looked at).
     fn auto(&self) -> bool {
-        !matches!(self.key, K::Journal | K::End)
+        !matches!(self.key, K::Journal | K::Clipboard | K::End)
     }
 }
 
@@ -216,10 +233,34 @@ const STEPS: &[Step] = &[
         todo: "왼쪽 메뉴의 ‘편의기능’을 눌러 방금 완료한 일을 찾아보세요.",
     },
     Step {
+        key: K::Clipboard,
+        title: "클립보드 히스토리",
+        text: "Ctrl+C로 복사한 글·링크·표·이미지가 ‘클립보드 히스토리’에 저절로 모여요. 항목을 한 번 누르면 다시 복사되니 Ctrl+V로 붙여 넣으면 돼요. 위쪽 검색과 필터로 찾고, 압정을 누르면 맨 위에 고정돼요. 비밀번호처럼 민감한 걸 복사할 땐 ‘일시 중지’를 눌러요.",
+        todo: "왼쪽 메뉴의 ‘클립보드 히스토리’를 눌러 보세요.",
+    },
+    Step {
         key: K::Detach,
         title: "캘린더 분리하기",
         text: "캘린더를 따로 띄워 두면 다른 일을 하면서도 일정을 볼 수 있어요. 단축키는 Ctrl+Alt+C예요.",
         todo: "밝게 보이는 ‘캘린더 분리창’ 버튼을 눌러 보세요.",
+    },
+    Step {
+        key: K::DockDrag,
+        title: "분리창에 끌어다 놓기",
+        text: "분리창에도 스티커를 끌어다 놓을 수 있어요. 날짜 칸에 놓으면 그날 일정이 되고, 오른쪽 일정 목록에 놓으면 보고 있는 날짜의 일정이 돼요.",
+        todo: "‘자료 정리’ 스티커의 달력 아이콘을 잡고 분리창의 날짜 칸에 놓아 보세요.",
+    },
+    Step {
+        key: K::DockShift,
+        title: "분리창에서 Shift + 끌어다 놓기",
+        text: "분리창에서도 Shift를 누른 채 놓으면 그 날짜가 마감인 ‘이날까지 할 일’이 돼요. 깃발과 D-day가 붙어요.",
+        todo: "‘계약서 회신’ 스티커의 달력 아이콘을 끌다가 Shift를 누른 채 분리창의 날짜 칸에 놓아 보세요.",
+    },
+    Step {
+        key: K::Range,
+        title: "날짜를 끌어 일정 추가하기",
+        text: "빈 날짜 칸을 누른 채 다른 날짜까지 끌었다 놓으면 그 기간의 새 일정 스티커가 생겨요. 하루짜리는 날짜 칸의 +를 눌러요. 메인 창의 캘린더에서도 똑같아요.",
+        todo: "분리창에서 한 날짜를 누른 채 이틀 뒤 날짜까지 끌었다 놓아 보세요.",
     },
     Step {
         key: K::Stand,
@@ -230,7 +271,7 @@ const STEPS: &[Step] = &[
     Step {
         key: K::End,
         title: "다 됐어요! 🎉",
-        text: "핵심 기능은 모두 해 봤어요. 일정·알람·잠금, 휴지통, 클립보드 히스토리, 나만의 위키는 ‘나만의 위키 › 사용법’에 정리돼 있어요. 나머지는 왼쪽 아래 ‘설정’에서 천천히 읽어 보세요.",
+        text: "핵심 기능은 모두 해 봤어요. 일정·알람·잠금, 휴지통, 나만의 위키는 ‘나만의 위키 › 사용법’에 정리돼 있어요. 나머지는 왼쪽 아래 ‘설정’에서 천천히 읽어 보세요.",
         todo: "",
     },
 ];
@@ -244,6 +285,10 @@ pub struct Live {
     done_at: Option<f64>,
     /// When the current step started.
     entered_at: f64,
+    /// How many memos there were then (the ones made since are new).
+    notes_at: usize,
+    /// The sticker of the step was put beside the calendar window.
+    placed: bool,
 }
 
 impl App {
@@ -274,6 +319,8 @@ impl App {
             Role::Deadline => 2,
             Role::Arrange(n) => 3 + n,
             Role::Complete => 6,
+            Role::DockDrag => OLD_NOTES,
+            Role::DockDeadline => OLD_NOTES + 1,
         };
         self.extra
             .tutorial_notes
@@ -287,20 +334,37 @@ impl App {
     }
     /// Add the example memos unless they are there.
     fn tutorial_install(&mut self) {
-        if self.role(Role::Practice).is_some() {
+        if self.role(Role::Practice).is_none() {
+            self.tutorial_install_first();
+        }
+        self.tutorial_install_dock();
+    }
+    /// The practice memos for the calendar window (2.1), also for a tour
+    /// whose memos came from an older version.
+    fn tutorial_install_dock(&mut self) {
+        if self.extra.tutorial_notes.len() != OLD_NOTES {
             return;
         }
+        let a = tutorial_add(
+            self,
+            DOCK_TITLE,
+            "위쪽 달력 아이콘을 잡고 캘린더 분리창의 날짜로 끌어다 놓아 보세요.",
+            None,
+        );
+        let b = tutorial_add(
+            self,
+            DOCK_DEADLINE_TITLE,
+            "위쪽 달력 아이콘을 잡고 Shift를 누른 채 분리창의 날짜로 끌어다 놓아 보세요.",
+            None,
+        );
+        self.extra.tutorial_notes.extend([a, b]);
+    }
+    fn tutorial_install_first(&mut self) {
         if self.tutorial_project().is_none() {
             self.data.projects.push(PROJECT.into());
         }
         let today = Local::now().date_naive();
-        let add = |a: &mut App, title: &str, body: &str, date: Option<NaiveDate>| {
-            let i = a.data.notes.len();
-            let mut n = Note::new(title, date, i);
-            n.body = body.into();
-            a.data.notes.push(n);
-            i
-        };
+        let add = tutorial_add;
         let mut ids = vec![
             add(self, "", "", None),
             add(
@@ -443,10 +507,38 @@ impl App {
                 self.show_main_page(ctx, 0);
             }
             K::Complete => self.show_main_page(ctx, 0),
-            K::Journal => {}
+            K::Journal | K::Clipboard => {}
             K::Detach => {
                 self.extra.utilities_tab = 0;
                 self.show_main_page(ctx, 5);
+            }
+            K::DockDrag | K::DockShift | K::Range => {
+                // A tour from an older version has no memos for these yet.
+                self.tutorial_install_dock();
+                // Dropped on and dragged over the window, not the desktop
+                // (a standing calendar may not take either), also when
+                // it stood at the last quit.
+                self.cal.stay_window();
+                if self.cal.standing_active() {
+                    self.restore_standing();
+                }
+                if self.cal.state == crate::calendar_dock::DockState::Hidden {
+                    self.show_calendar();
+                }
+                let key = STEPS[n].key;
+                if key != K::DockDrag {
+                    self.close_role(Role::DockDrag);
+                }
+                if key != K::DockShift {
+                    self.close_role(Role::DockDeadline);
+                }
+                // "다시 보여 주기" puts it beside the window again.
+                self.tutorial_live.placed = false;
+                match key {
+                    K::DockDrag => self.open_role(ctx, Role::DockDrag, false),
+                    K::DockShift => self.open_role(ctx, Role::DockDeadline, false),
+                    _ => {}
+                }
             }
             K::Stand if self.cal.state == crate::calendar_dock::DockState::Hidden => {
                 self.show_calendar();
@@ -481,9 +573,42 @@ impl App {
             K::Filter => self.project_filter.is_some_and(|p| p != NO_PROJECT),
             K::Complete => note(Role::Complete).is_some_and(|c| c.done),
             K::Journal => self.page == 6 && self.extra.utilities_tab == 0 && !self.settings,
+            K::Clipboard => self.page == 7 && !self.settings,
             K::Detach => self.cal.state != crate::calendar_dock::DockState::Hidden,
+            K::DockDrag => note(Role::DockDrag).is_some_and(|d| d.date.is_some() && !d.deadline),
+            K::DockShift => {
+                note(Role::DockDeadline).is_some_and(|d| d.date.is_some() && d.deadline)
+            }
+            K::Range => !self.range_notes().is_empty(),
             K::Stand => self.cal.standing_pinned(),
             K::End => false,
+        }
+    }
+    /// Schedules of several days made since the step started (dragged over
+    /// days), the examples aside.
+    fn range_notes(&self) -> Vec<usize> {
+        (self.tutorial_live.notes_at..self.data.notes.len())
+            .filter(|&i| {
+                let n = &self.data.notes[i];
+                !n.purged
+                    && n.date.is_some()
+                    && n.duration > 1
+                    && !self.extra.tutorial_notes.contains(&i)
+            })
+            .collect()
+    }
+    /// The schedule made by dragging over days in step `n` goes under the
+    /// tutorial project, so erasing the practice memos at the end takes it.
+    fn file_range_notes(&mut self, n: usize) {
+        if STEPS[n].key != K::Range {
+            return;
+        }
+        let project = self.tutorial_project();
+        for i in self.range_notes() {
+            let note = &mut self.data.notes[i];
+            if note.project.is_none() {
+                note.project = project;
+            }
         }
     }
     /// Which spots step `n` lights up.
@@ -502,7 +627,17 @@ impl App {
             K::Filter => vec![Spot::Filter, Spot::Projects],
             K::Complete => vec![Spot::List],
             K::Journal => vec![Spot::NavUtilities, Spot::Utilities],
+            K::Clipboard => vec![Spot::NavClipboard, Spot::Clipboard],
             K::Detach => vec![Spot::Detach],
+            K::DockDrag => note(Role::DockDrag)
+                .into_iter()
+                .chain([Spot::DockGrid])
+                .collect(),
+            K::DockShift => note(Role::DockDeadline)
+                .into_iter()
+                .chain([Spot::DockGrid])
+                .collect(),
+            K::Range => vec![Spot::DockGrid],
             K::Stand => vec![Spot::Stand],
             K::End => vec![],
         }
@@ -526,6 +661,8 @@ impl App {
                     entered: Some(state),
                     done_at: None,
                     entered_at: now,
+                    notes_at: self.data.notes.len(),
+                    placed: false,
                 };
                 self.enter_step(ctx, n);
             }
@@ -555,8 +692,27 @@ impl App {
                     }
                 }
             }
+            // The sticker to drop sits beside the calendar window, not
+            // under it: once both windows are there.
+            let role = match STEPS[n].key {
+                K::DockDrag => Some(Role::DockDrag),
+                K::DockShift => Some(Role::DockDeadline),
+                _ => None,
+            };
+            if let Some(i) = role
+                .filter(|_| !self.tutorial_live.placed)
+                .and_then(|r| self.role(r))
+            {
+                let id = crate::studio::viewport(i);
+                if let Some(at) = beside_calendar(ctx, id) {
+                    ctx.send_viewport_cmd_to(id, egui::ViewportCommand::OuterPosition(at));
+                    ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Focus);
+                    self.tutorial_live.placed = true;
+                }
+            }
             if self.tutorial_live.done_at.is_none() && self.step_done(n) {
                 self.tutorial_live.done_at = Some(now);
+                self.file_range_notes(n);
             }
         }
         // Where the lit parts are this frame.
@@ -780,6 +936,38 @@ impl App {
         });
         cmd
     }
+}
+
+/// Where sticker `id` goes to sit beside the calendar window: on its left
+/// when there is room on the screens, else on its right.
+fn beside_calendar(ctx: &egui::Context, id: egui::ViewportId) -> Option<egui::Pos2> {
+    let (cal, sticker) = ctx.input(|i| {
+        let r = |v| i.raw.viewports.get(&v).and_then(|v| v.outer_rect);
+        (r(egui::ViewportId::from_hash_of("calendar")), r(id))
+    });
+    // A window not there yet would miss the request.
+    let (cal, w) = (cal?, sticker?.width());
+    let left = virtual_screen()[0] as f32 / ctx.pixels_per_point();
+    Some(beside(cal, w, left))
+}
+
+fn beside(cal: egui::Rect, w: f32, screen_left: f32) -> egui::Pos2 {
+    let gap = 12.;
+    let x = if cal.min.x - gap - w >= screen_left {
+        cal.min.x - gap - w
+    } else {
+        cal.max.x + gap
+    };
+    egui::pos2(x, cal.min.y + 40.)
+}
+
+/// Add an example memo; its index.
+fn tutorial_add(a: &mut App, title: &str, body: &str, date: Option<NaiveDate>) -> usize {
+    let i = a.data.notes.len();
+    let mut n = Note::new(title, date, i);
+    n.body = body.into();
+    a.data.notes.push(n);
+    i
 }
 
 fn next_state(state: u32) -> u32 {
@@ -1320,7 +1508,20 @@ fn draw_demo(ui: &mut egui::Ui, demo: K, now: f64) {
         K::Project | K::Title | K::MultiList | K::ListUp | K::Strike | K::Check => {
             sticker_demo(&p, rect, demo, t)
         }
-        K::Drag | K::ShiftDrag => drag_demo(&p, rect, demo == K::ShiftDrag, t),
+        K::Drag => drag_demo(&p, rect, false, t, "회의 준비"),
+        K::ShiftDrag => drag_demo(&p, rect, true, t, "보고서 제출"),
+        K::DockDrag | K::DockShift => {
+            let shift = demo == K::DockShift;
+            let label = if shift {
+                "계약서 회신"
+            } else {
+                "자료 정리"
+            };
+            drag_demo(&p, rect, shift, t, label);
+            window_caption(&p, rect, "캘린더 분리창");
+        }
+        K::Range => range_demo(&p, rect, t),
+        K::Clipboard => clipboard_demo(&p, rect, t),
         K::Filter => filter_demo(&p, rect, t),
         K::Complete => complete_demo(&p, rect, t),
         K::Journal => journal_demo(&p, rect, t),
@@ -1542,7 +1743,7 @@ fn cursor(p: &egui::Painter, at: egui::Pos2) {
     ));
 }
 
-fn drag_demo(p: &egui::Painter, rect: egui::Rect, shift: bool, t: f64) {
+fn drag_demo(p: &egui::Painter, rect: egui::Rect, shift: bool, t: f64, label: &str) {
     let cal = egui::Rect::from_min_size(
         rect.min + Vec2::new(150., 18.),
         Vec2::new(rect.width() - 166., 100.),
@@ -1574,11 +1775,7 @@ fn drag_demo(p: &egui::Painter, rect: egui::Rect, shift: bool, t: f64) {
         p.text(
             r.min + Vec2::new(5., 16.),
             egui::Align2::LEFT_TOP,
-            if shift {
-                "보고서 제출"
-            } else {
-                "회의 준비"
-            },
+            label,
             font(10.),
             INK,
         );
@@ -1636,6 +1833,139 @@ fn drag_demo(p: &egui::Painter, rect: egui::Rect, shift: bool, t: f64) {
             font(11.),
             Color32::WHITE,
         );
+    }
+}
+
+/// A small window title over the demo's calendar (as in `drag_demo`).
+fn window_caption(p: &egui::Painter, rect: egui::Rect, s: &str) {
+    p.text(
+        rect.min + Vec2::new(150., 4.),
+        egui::Align2::LEFT_TOP,
+        s,
+        font(9.),
+        SOFT,
+    );
+}
+
+/// Pressing a day and dragging to another: the days light up, then a band.
+fn range_demo(p: &egui::Painter, rect: egui::Rect, t: f64) {
+    let cal = egui::Rect::from_min_size(
+        rect.min + Vec2::new(16., 18.),
+        Vec2::new(rect.width() - 32., 84.),
+    );
+    let cells = mini_calendar(p, cal);
+    let (from, to) = (8, 10);
+    let k = ease((t - 0.8) / 1.4);
+    let reach = from + ((to - from) as f32 * k).round() as usize;
+    if t < 2.5 {
+        if t > 0.6 {
+            for c in &cells[from..=reach] {
+                p.rect_filled(c.shrink(1.), 3., crate::ui::ACCENT.gamma_multiply(0.22));
+            }
+        }
+        let at = cells[from].center().lerp(cells[to].center(), k);
+        cursor(p, at);
+    } else {
+        let band = egui::Rect::from_min_max(
+            cells[from].min + Vec2::new(1., 11.),
+            egui::pos2(cells[to].max.x - 1., cells[from].min.y + 21.),
+        );
+        p.rect_filled(band, 2., Color32::from_rgb(120, 160, 230));
+        p.text(
+            band.left_center() + Vec2::new(3., 0.),
+            egui::Align2::LEFT_CENTER,
+            "새 일정",
+            font(8.),
+            Color32::WHITE,
+        );
+    }
+    p.text(
+        egui::pos2(rect.min.x + 16., rect.max.y - 16.),
+        egui::Align2::LEFT_CENTER,
+        if t < 2.5 {
+            "날짜를 누른 채 끌어요"
+        } else {
+            "9일 ~ 11일 일정이 생겨요"
+        },
+        font(12.),
+        crate::ui::ACCENT,
+    );
+}
+
+/// Ctrl+C on some text, the copy joins the top of the list; one click on
+/// it copies it again.
+fn clipboard_demo(p: &egui::Painter, rect: egui::Rect, t: f64) {
+    let src = egui::Rect::from_min_size(rect.min + Vec2::new(16., 22.), Vec2::new(120., 50.));
+    p.rect_filled(src, 6., Color32::WHITE);
+    let word = text(p, src.min + Vec2::new(8., 8.), "회의실 B동 3층", 11., INK);
+    if t > 0.3 {
+        p.rect_filled(word.expand(1.), 2., crate::ui::ACCENT.gamma_multiply(0.25));
+    }
+    if (0.5..1.6).contains(&t) {
+        let key =
+            egui::Rect::from_min_size(src.left_bottom() + Vec2::new(0., 10.), Vec2::new(54., 22.));
+        p.rect_filled(key, 4., INK);
+        p.text(
+            key.center(),
+            egui::Align2::CENTER_CENTER,
+            "Ctrl+C",
+            font(11.),
+            Color32::WHITE,
+        );
+    }
+    let list = egui::Rect::from_min_max(
+        egui::pos2(src.right() + 16., rect.top() + 18.),
+        egui::pos2(rect.right() - 16., rect.bottom() - 14.),
+    );
+    p.rect_filled(list, 6., Color32::WHITE);
+    let row_h = 22.;
+    let k = ease((t - 1.4) / 0.5);
+    let new = t > 1.4;
+    let shift = if new { row_h * k } else { 0. };
+    for (r, s) in [
+        "https://example.com/plan",
+        "3분기 매출 표",
+        "주간 보고 초안",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let at = list.min + Vec2::new(8., 6. + shift + r as f32 * row_h);
+        // Clear of the line under the list.
+        if at.y + 14. < list.bottom() - 18. {
+            text(p, at, s, 10., SOFT);
+        }
+    }
+    if new {
+        let row = egui::Rect::from_min_size(
+            list.min + Vec2::new(4., 3.),
+            Vec2::new(list.width() - 8., row_h - 2.),
+        );
+        let lit = t > 3.0;
+        p.rect_filled(
+            row,
+            4.,
+            crate::ui::ACCENT.gamma_multiply(if lit { 0.3 } else { 0.15 * k }),
+        );
+        text(
+            p,
+            row.min + Vec2::new(4., 3.),
+            "회의실 B동 3층",
+            10.,
+            INK.gamma_multiply(k),
+        );
+        if t > 2.4 {
+            cursor(p, row.center() + Vec2::new(30., 2.));
+        }
+        if lit {
+            p.text(
+                egui::pos2(list.min.x + 8., list.max.y - 12.),
+                egui::Align2::LEFT_CENTER,
+                "다시 복사됐어요 · Ctrl+V",
+                font(11.),
+                crate::ui::ACCENT,
+            );
+        }
     }
 }
 
@@ -2032,6 +2362,83 @@ mod tests {
         }
         assert!(a.role(Role::Practice).is_some());
         assert!(a.role(Role::Arrange(2)).is_some());
+        assert!(a.role(Role::DockDrag).is_some());
+        assert!(a.role(Role::DockDeadline).is_some());
+    }
+    #[test]
+    fn the_sticker_to_drop_sits_beside_the_calendar_window() {
+        let cal = egui::Rect::from_min_max(egui::pos2(500., 100.), egui::pos2(900., 600.));
+        // Room on the left.
+        assert_eq!(beside(cal, 300., 0.), egui::pos2(188., 140.));
+        // None: on the right.
+        assert_eq!(beside(cal, 600., 0.), egui::pos2(912., 140.));
+        // A screen on the left of the main one counts.
+        assert_eq!(beside(cal, 600., -1920.), egui::pos2(-112., 140.));
+    }
+    #[test]
+    fn a_tour_from_an_older_version_gets_the_calendar_window_memos_once() {
+        let mut a = app();
+        a.tutorial_start();
+        // As 2.0 left it: the first nine memos only.
+        a.extra.tutorial_notes.truncate(OLD_NOTES);
+        assert!(a.role(Role::DockDrag).is_none());
+        let before = a.data.notes.len();
+        a.tutorial_start();
+        assert_eq!(a.data.notes.len(), before + 2);
+        let d = a.role(Role::DockDrag).unwrap();
+        assert_eq!(a.data.notes[d].title, DOCK_TITLE);
+        let d = a.role(Role::DockDeadline).unwrap();
+        assert_eq!(a.data.notes[d].title, DOCK_DEADLINE_TITLE);
+        // Already there: nothing more.
+        a.tutorial_start();
+        a.tutorial_install_dock();
+        assert_eq!(a.data.notes.len(), before + 2);
+        assert_eq!(a.extra.tutorial_notes.len(), OLD_NOTES + 2);
+    }
+    #[test]
+    fn calendar_window_steps_notice_drops_and_a_dragged_stretch() {
+        let mut a = app();
+        a.tutorial_start();
+        let at = |k: K| STEPS.iter().position(|s| s.key == k).unwrap();
+        // In order: after the window opens, before it stands.
+        assert!(at(K::Detach) < at(K::DockDrag));
+        assert!(at(K::DockDrag) < at(K::DockShift));
+        assert!(at(K::DockShift) < at(K::Range));
+        assert!(at(K::Range) < at(K::Stand));
+        assert!(at(K::Journal) < at(K::Clipboard));
+        let today = Local::now().date_naive();
+        a.tutorial_live.notes_at = a.data.notes.len();
+        assert!(!a.step_done(at(K::DockDrag)));
+        assert!(!a.step_done(at(K::DockShift)));
+        // The example trip of several days does not count.
+        assert!(!a.step_done(at(K::Range)));
+        let d = a.role(Role::DockDrag).unwrap();
+        a.assign_dropped_date(d, today, false, true, None);
+        assert!(a.step_done(at(K::DockDrag)));
+        // A plain drop is not a deadline.
+        let d = a.role(Role::DockDeadline).unwrap();
+        a.assign_dropped_date(d, today, false, true, None);
+        assert!(!a.step_done(at(K::DockShift)));
+        a.assign_dropped_date(d, today, true, true, None);
+        assert!(a.step_done(at(K::DockShift)));
+        // A new one-day memo is not a stretch either.
+        let one = a.new_sticker_on(today);
+        assert!(!a.step_done(at(K::Range)));
+        assert!(a.data.notes[one].project.is_none());
+        // What letting go after dragging over three days makes.
+        let i = a.new_sticker_on(today);
+        a.data.notes[i].duration = 3;
+        assert!(a.step_done(at(K::Range)));
+        a.file_range_notes(at(K::Range));
+        assert_eq!(a.data.notes[i].project, a.tutorial_project());
+        assert!(a.tutorial_notes().contains(&i));
+        // Opening the clipboard page; it waits for "다음".
+        a.page = 7;
+        assert!(a.step_done(at(K::Clipboard)));
+        a.settings = true;
+        assert!(!a.step_done(at(K::Clipboard)));
+        assert!(!STEPS[at(K::Clipboard)].auto());
+        assert!(STEPS[at(K::Range)].auto());
     }
     #[test]
     fn steps_notice_what_the_user_did() {

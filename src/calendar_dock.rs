@@ -153,6 +153,10 @@ impl Dock {
     pub fn standing_active(&self) -> bool {
         self.standing.is_some()
     }
+    /// Stay a window: a stand still waiting from the last run is dropped.
+    pub fn stay_window(&mut self) {
+        self.stand_on_start = 0;
+    }
 }
 
 impl Default for Dock {
@@ -536,7 +540,7 @@ impl App {
         }
     }
     /// Pin, poll and unpin the standing calendar.
-    fn restore_standing(&mut self) {
+    pub(crate) fn restore_standing(&mut self) {
         if let Some(s) = self.cal.standing.as_ref() {
             if s.pinned {
                 if !crate::win_style::window_alive(s.hwnd) {

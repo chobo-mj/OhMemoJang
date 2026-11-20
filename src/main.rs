@@ -914,6 +914,12 @@ impl App {
                     self.calendar_main(ui, false);
                 } else if self.page == 7 {
                     self.clipboard.ui(ui);
+                    // The page the tutorial lights.
+                    tutorial::mark(
+                        ui.ctx(),
+                        tutorial::Spot::Clipboard,
+                        ui.min_rect().intersect(ui.clip_rect()),
+                    );
                 } else if matches!(self.page, 2 | 3) {
                     self.agenda_preview(ui);
                 } else {
@@ -1199,6 +1205,9 @@ impl App {
             );
             if page == 6 {
                 tutorial::mark(ui.ctx(), tutorial::Spot::NavUtilities, r.rect);
+            }
+            if page == 7 {
+                tutorial::mark(ui.ctx(), tutorial::Spot::NavClipboard, r.rect);
             }
             if r.clicked() {
                 self.open_page(page);

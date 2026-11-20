@@ -795,13 +795,17 @@ impl App {
                 }
             }
         }
-        if side.is_some() {
-            // The main window's grid: a drop target the tutorial points at.
-            crate::tutorial::mark(
-                ui.ctx(),
-                crate::tutorial::Spot::Grid,
-                ui.min_rect().intersect(ui.clip_rect()),
-            );
+        // The main window's grid or the calendar window's: drop targets
+        // the tutorial points at.
+        let spot = if side.is_some() {
+            Some(crate::tutorial::Spot::Grid)
+        } else if self.cal.painting {
+            Some(crate::tutorial::Spot::DockGrid)
+        } else {
+            None
+        };
+        if let Some(spot) = spot {
+            crate::tutorial::mark(ui.ctx(), spot, ui.min_rect().intersect(ui.clip_rect()));
         }
         toggled
     }
