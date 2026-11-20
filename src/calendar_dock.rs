@@ -503,6 +503,7 @@ impl App {
         left.set_clip_rect(ui.clip_rect().intersect(left_rect));
         egui::ScrollArea::vertical()
             .id_salt("cal_grid_scroll")
+            .drag_to_scroll(false)
             .show(&mut left, |ui| self.calendar_grid(ui));
 
         let drag = ui
@@ -1098,6 +1099,70 @@ mod standing_tests {
     }
 
     #[test]
+    fn standing_band_drag_preserves_the_span_with_other_band_actions_disabled() {
+        let start = chrono::NaiveDate::from_ymd_opt(2026, 11, 9).unwrap();
+        let mut app = App::sample(start);
+        app.data.notes.iter_mut().for_each(|n| n.clear_schedule());
+        let i = app.new_sticker_on(start);
+        app.data.notes[i].title = "Shift this schedule".into();
+        app.data.notes[i].duration = 3;
+        app.cal.standing = Some(Standing {
+            hwnd: 0,
+            rect: [0, 0, 1000, 800],
+            outer: [0, 0, 1000, 800],
+            button: [0; 4],
+            pinned: true,
+            wait: 0,
+            click: None,
+            over_icons: true,
+        });
+        app.cal.painting = true;
+        app.prefs.stand_input = true;
+        app.prefs.stand_band = false;
+        app.prefs.stand_drop = false;
+
+        let ctx = egui::Context::default();
+        let frame = |app: &mut App, time, events| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000., 800.))),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| app.calendar_grid(ui));
+                },
+            );
+        };
+        frame(&mut app, 0., vec![]);
+        let point = |day| {
+            let (_, cells) = &app.cal_cells[&egui::ViewportId::ROOT];
+            let cell = cells.iter().find(|(_, date)| *date == day).unwrap().0;
+            Pos2::new(cell.center().x, cell.top() + 42.)
+        };
+        let grabbed = start.succ_opt().unwrap();
+        let dropped = start + chrono::Duration::days(8);
+        let from = point(grabbed);
+        let to = point(dropped);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            pressed,
+            button: egui::PointerButton::Primary,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(
+            &mut app,
+            0.1,
+            vec![egui::Event::PointerMoved(from), button(from, true)],
+        );
+        frame(&mut app, 0.2, vec![egui::Event::PointerMoved(to)]);
+        frame(&mut app, 0.3, vec![button(to, false)]);
+        assert_eq!(app.data.notes[i].date, dropped.pred_opt());
+        assert_eq!(app.data.notes[i].duration, 3);
+    }
+
+    #[test]
     fn the_standing_calendar_lets_through_only_what_is_turned_on() {
         let mut app = App::sample(chrono::NaiveDate::from_ymd_opt(2026, 11, 20).unwrap());
         let all = [
@@ -1122,7 +1187,7 @@ mod standing_tests {
         // Off by default: nothing.
         assert!(!app.prefs.stand_input);
         assert!(all.iter().all(|&f| !app.stand_feature_on(f)));
-        // Turned on: all four by default, each one can be left out.
+        // Turned on: each option is enabled by default and can be left out.
         app.prefs.stand_input = true;
         assert!(all.iter().all(|&f| app.stand_feature_on(f)));
         app.prefs.stand_drop = false;

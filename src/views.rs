@@ -1236,6 +1236,7 @@ impl App {
             && self.stand_feature_on(crate::calendar_dock::StandFeature::Move)
             && self.desktop.calendar_basis == 1
             && n.date.is_some();
+        let band_drag = if standing { standing_move } else { band_on };
         let done = days.iter().all(|&d| n.done_on(Some(d)));
         let fill = if self.dark {
             Color32::from_rgb(52, 50, 46)
@@ -1246,7 +1247,7 @@ impl App {
             .interact(
                 rect,
                 ui.id().with(("band", i, days[0])),
-                match (band_on, !standing && band_on || standing_move) {
+                match (band_on, band_drag) {
                     (true, true) => Sense::click_and_drag(),
                     (true, false) => Sense::click(),
                     (false, true) => Sense::drag(),
