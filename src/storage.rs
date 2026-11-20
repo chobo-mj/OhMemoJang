@@ -240,6 +240,13 @@ pub struct SettingsRec {
     pub skip_title: bool,
     /// Width of the title line folded once; 0 in saves made before it.
     pub title_width: f32,
+    pub skip_swatch: bool,
+    /// Size of the color box (step 2); zero in saves made before it.
+    pub swatch_size: [f32; 2],
+    /// Saved inverted, so saves made before it have the magnets on.
+    pub magnet_off: bool,
+    /// Zero in saves made before it: the default.
+    pub magnet_pt: f32,
     pub unpin_minimized: bool,
     pub default_color: [u8; 4],
     pub font: String,
@@ -292,6 +299,10 @@ impl Default for SettingsRec {
             auto_toolbar: false,
             skip_title: false,
             title_width: 0.,
+            skip_swatch: false,
+            swatch_size: [0.; 2],
+            magnet_off: false,
+            magnet_pt: 0.,
             unpin_minimized: false,
             default_color: [0; 4],
             font: String::new(),
@@ -339,6 +350,10 @@ impl SettingsRec {
         self.auto_toolbar = d.auto_toolbar;
         self.skip_title = d.skip_title;
         self.title_width = d.title_width;
+        self.skip_swatch = d.skip_swatch;
+        self.swatch_size = [d.swatch_size.x, d.swatch_size.y];
+        self.magnet_off = !d.magnet;
+        self.magnet_pt = d.magnet_pt;
         self.unpin_minimized = d.unpin_minimized;
         self.default_color = color(d.default_color);
         self.font = d.font.clone();
@@ -371,6 +386,22 @@ impl SettingsRec {
         d.show_preview = self.show_preview;
         d.auto_toolbar = self.auto_toolbar;
         d.skip_title = self.skip_title;
+        d.skip_swatch = self.skip_swatch && !self.skip_title;
+        d.swatch_size = if self.swatch_size[0] > 0. && self.swatch_size[1] > 0. {
+            eframe::egui::Vec2::from(self.swatch_size).clamp(
+                eframe::egui::Vec2::splat(crate::studio::SWATCH_MIN),
+                eframe::egui::Vec2::splat(crate::studio::SWATCH_MAX),
+            )
+        } else {
+            eframe::egui::Vec2::splat(crate::studio::SWATCH_SIZE)
+        };
+        d.magnet = !self.magnet_off;
+        d.magnet_pt = if self.magnet_pt > 0. {
+            self.magnet_pt
+                .clamp(crate::magnet::SNAP_MIN, crate::magnet::SNAP_MAX)
+        } else {
+            crate::magnet::SNAP
+        };
         d.title_width = if self.title_width > 0. {
             self.title_width
                 .clamp(crate::studio::TITLE_MIN, crate::studio::TITLE_MAX)

@@ -18,6 +18,7 @@ mod guide_stage;
 mod holidays;
 mod icons;
 mod lists;
+mod magnet;
 mod media;
 mod model;
 mod native_window;
@@ -559,6 +560,7 @@ impl eframe::App for App {
         self.size_probe_window(ctx);
         self.title_probe_window(ctx);
         self.font_dialog_window(ctx);
+        self.swatch_probe_window(ctx);
         self.apply_arrangement(ctx);
         self.detached_note(ctx);
         self.finish_completed_stickers(ctx);

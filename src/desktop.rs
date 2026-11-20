@@ -70,6 +70,17 @@ pub struct Desktop {
     /// drawn.
     pub title_probe: bool,
     pub title_probe_last: Option<f32>,
+    /// Folding stops at the title line: no color box. Never on together
+    /// with `skip_title` (nothing would be left to fold to).
+    pub skip_swatch: bool,
+    /// Size of a memo folded into a color box (step 2).
+    pub swatch_size: Vec2,
+    /// The window for setting that size is open, and the size it shows.
+    pub swatch_probe: bool,
+    pub swatch_probe_last: Option<Vec2>,
+    /// Folded memos snap to each other's edges within `magnet_pt` points.
+    pub magnet: bool,
+    pub magnet_pt: f32,
     /// The window for setting the size of new stickers is open.
     pub size_probe: bool,
     /// The size the size window had when it was last drawn.
@@ -133,6 +144,12 @@ impl Default for Desktop {
             title_width: crate::studio::TITLE_WIDTH,
             title_probe: false,
             title_probe_last: None,
+            skip_swatch: false,
+            swatch_size: Vec2::splat(crate::studio::SWATCH_SIZE),
+            swatch_probe: false,
+            swatch_probe_last: None,
+            magnet: true,
+            magnet_pt: crate::magnet::SNAP,
             size_probe: false,
             size_probe_last: None,
         }
@@ -1310,12 +1327,33 @@ impl App {
                 });
                 ui.add_space(10.);
                 settings_group(ui, "접기", |ui| {
-                    toggle_row(
-                        ui,
-                        &mut self.desktop.skip_title,
-                        "접기 1단계 건너뛰기",
-                        "스티커에서 바로 색상 상자로 접습니다",
-                    );
+                    // Not both: a memo would have nothing left to fold to.
+                    let (skip_title, skip_swatch) =
+                        (self.desktop.skip_title, self.desktop.skip_swatch);
+                    ui.add_enabled_ui(!skip_swatch, |ui| {
+                        toggle_row(
+                            ui,
+                            &mut self.desktop.skip_title,
+                            "접기 1단계 건너뛰기",
+                            if skip_swatch {
+                                "‘컬러박스 생략’과 함께 켤 수 없어요"
+                            } else {
+                                "스티커에서 바로 색상 상자로 접습니다"
+                            },
+                        );
+                    });
+                    ui.add_enabled_ui(!skip_title, |ui| {
+                        toggle_row(
+                            ui,
+                            &mut self.desktop.skip_swatch,
+                            "컬러박스 생략",
+                            if skip_title {
+                                "‘접기 1단계 건너뛰기’와 함께 켤 수 없어요"
+                            } else {
+                                "제목줄(1단)까지만 접고 색상 상자로는 접지 않습니다"
+                            },
+                        );
+                    });
                     ui.horizontal(|ui| {
                         if ui
                             .add_enabled(
@@ -1333,6 +1371,43 @@ impl App {
                             RichText::new(format!("지금 너비 {} px", self.desktop.title_width.round()))
                                 .color(crate::ui::t(ui).muted),
                         );
+                    });
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(
+                                !self.desktop.swatch_probe && !self.desktop.skip_swatch,
+                                egui::Button::new("컬러박스 크기 조절하기"),
+                            )
+                            .on_hover_text(
+                                "색상 상자가 하나 뜹니다 · 모서리를 끌어 크기를 바꾸고 닫으면 2단 접기의 상자 크기가 됩니다",
+                            )
+                            .clicked()
+                        {
+                            self.desktop.swatch_probe = true;
+                        }
+                        let s = self.desktop.swatch_size;
+                        ui.label(
+                            RichText::new(format!("지금 {} × {} px", s.x.round(), s.y.round()))
+                                .color(crate::ui::t(ui).muted),
+                        );
+                    });
+                    toggle_row(
+                        ui,
+                        &mut self.desktop.magnet,
+                        "접힌 메모 자석 정렬",
+                        "제목줄·색상 상자로 접힌 메모를 끌면 가까운 다른 접힌 메모의 가장자리에 붙습니다",
+                    );
+                    ui.add_enabled_ui(self.desktop.magnet, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("붙는 거리");
+                            ui.add(
+                                egui::DragValue::new(&mut self.desktop.magnet_pt)
+                                    .range(crate::magnet::SNAP_MIN..=crate::magnet::SNAP_MAX)
+                                    .speed(0.2)
+                                    .fixed_decimals(0)
+                                    .suffix(" pt"),
+                            );
+                        });
                     });
                     toggle_row(
                         ui,

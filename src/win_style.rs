@@ -33,6 +33,17 @@ pub fn hwnd(ctx: &egui::Context) -> Option<isize> {
     }
 }
 
+/// Native handle of the window `ctx` draws as [`shape`] found it (no search).
+pub fn shaped_hwnd(ctx: &egui::Context) -> Option<isize> {
+    #[cfg(windows)]
+    return imp::cached(ctx);
+    #[cfg(not(windows))]
+    {
+        let _ = ctx;
+        None
+    }
+}
+
 /// A screen rectangle in physical pixels: left, top, right, bottom.
 pub type PxRect = [i32; 4];
 
@@ -1026,6 +1037,13 @@ mod imp {
         alpha: Option<u8>,
         native_round: Option<bool>,
         region: (i32, i32),
+    }
+
+    pub fn cached(ctx: &egui::Context) -> Option<isize> {
+        let key = egui::Id::new(("win_style", ctx.viewport_id()));
+        ctx.data(|d| d.get_temp::<State>(key))
+            .map(|s| s.hwnd)
+            .filter(|&h| h != 0)
     }
 
     pub fn shape(ctx: &egui::Context, opacity: f32) {

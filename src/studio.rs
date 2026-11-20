@@ -13,6 +13,11 @@ pub const STICKER_MIN: Vec2 = Vec2::new(290., 220.);
 pub const TITLE_WIDTH: f32 = 360.;
 pub const TITLE_MIN: f32 = 160.;
 pub const TITLE_MAX: f32 = 1600.;
+/// Size of the color box a memo folds to (step 2) unless set otherwise, and
+/// the range it can be set in.
+pub const SWATCH_SIZE: f32 = 48.;
+pub const SWATCH_MIN: f32 = 16.;
+pub const SWATCH_MAX: f32 = 640.;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     Editor,
@@ -29,8 +34,12 @@ pub struct Window {
     full_size: Vec2,
     title_width: f32,
     skip_title: bool,
+    /// Folding stops at the title line (the setting "컬러박스 생략").
+    skip_swatch: bool,
     /// The title line width a fold into step 1 starts with (the setting).
     title_default: f32,
+    /// The color box size a fold into step 2 starts with (the setting).
+    swatch_default: Vec2,
     pub sticker_size: Vec2,
     swatch_size: Vec2,
     applied: Option<(Mode, bool)>,
@@ -120,6 +129,8 @@ impl Window {
             full_size: Vec2::new(620., 720.),
             title_width: 360.,
             skip_title: false,
+            skip_swatch: false,
+            swatch_default: Vec2::splat(SWATCH_SIZE),
             title_default: TITLE_WIDTH,
             sticker_size: Vec2::splat(360.),
             swatch_size: Vec2::splat(48.),
@@ -210,21 +221,29 @@ impl Window {
     }
     pub fn fold(&mut self) {
         self.mode = match self.mode {
-            Mode::Editor | Mode::Sticker if self.skip_title => Mode::Swatch,
+            Mode::Editor | Mode::Sticker if self.skip_title => self.fold_to_swatch(),
             Mode::Editor | Mode::Sticker => {
                 // Folded into the title line, at the width set for it.
                 self.title_width = self.title_default;
                 Mode::Title
             }
-            Mode::Title => Mode::Swatch,
-            Mode::Swatch => {
-                if self.sticker_preferred {
-                    Mode::Sticker
-                } else {
-                    Mode::Editor
-                }
-            }
+            // No color box: the title line opens up again.
+            Mode::Title if self.skip_swatch => self.unfolded(),
+            Mode::Title => self.fold_to_swatch(),
+            Mode::Swatch => self.unfolded(),
         };
+    }
+    /// Folded into the color box, at the size set for it.
+    fn fold_to_swatch(&mut self) -> Mode {
+        self.swatch_size = self.swatch_default;
+        Mode::Swatch
+    }
+    fn unfolded(&self) -> Mode {
+        if self.sticker_preferred {
+            Mode::Sticker
+        } else {
+            Mode::Editor
+        }
     }
     pub fn sticker(&mut self) {
         self.sticker_preferred = true;
@@ -519,6 +538,83 @@ impl App {
             }
         }
     }
+    /// The window for setting the color box size: a box whose corner is
+    /// dragged to the size wanted; closing the window keeps that size.
+    pub fn swatch_probe_window(&mut self, ctx: &egui::Context) {
+        if !self.desktop.swatch_probe {
+            return;
+        }
+        let mut size = self
+            .desktop
+            .swatch_probe_last
+            .unwrap_or(self.desktop.swatch_size);
+        let fill = self.desktop.default_color;
+        let mut open = true;
+        let mut escape = false;
+        crate::ui::dialog(
+            ctx,
+            "swatch_probe",
+            "컬러박스 크기 설정",
+            [460., 460.],
+            true,
+            &mut open,
+            |ui| {
+                escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                ui.label("상자의 오른쪽 아래 모서리를 끌어 크기를 바꾼 뒤 창을 닫으세요.");
+                crate::ui::caption(
+                    ui,
+                    "닫으면 이 크기가 2단 접기(색상 상자)의 크기가 됩니다 (Esc로도 닫힙니다).",
+                );
+                ui.horizontal(|ui| {
+                    for (label, v) in [("너비", &mut size.x), ("높이", &mut size.y)] {
+                        ui.label(label);
+                        ui.add(
+                            egui::DragValue::new(v)
+                                .range(SWATCH_MIN..=SWATCH_MAX)
+                                .speed(1.)
+                                .fixed_decimals(0)
+                                .suffix(" px"),
+                        );
+                    }
+                });
+                ui.add_space(8.);
+                egui::ScrollArea::both()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        let (rect, _) =
+                            ui.allocate_exact_size(size + Vec2::splat(12.), Sense::hover());
+                        let rect = Rect::from_min_size(rect.min, size);
+                        ui.painter().rect_filled(rect, 6., fill);
+                        let grip = Rect::from_center_size(rect.max, Vec2::splat(18.));
+                        let r = ui
+                            .interact(grip, ui.id().with("swatch_grip"), Sense::drag())
+                            .on_hover_cursor(egui::CursorIcon::ResizeNwSe);
+                        if r.dragged() {
+                            size += r.drag_delta();
+                        }
+                        let ink =
+                            INK.gamma_multiply(if r.hovered() || r.dragged() { 0.9 } else { 0.5 });
+                        for k in [4., 8.] {
+                            ui.painter().line_segment(
+                                [rect.max - Vec2::new(k, 1.), rect.max - Vec2::new(1., k)],
+                                egui::Stroke::new(1.5_f32, ink),
+                            );
+                        }
+                    });
+            },
+        );
+        let size = size
+            .round()
+            .clamp(Vec2::splat(SWATCH_MIN), Vec2::splat(SWATCH_MAX));
+        self.desktop.swatch_probe_last = Some(size);
+        if !open || escape {
+            self.desktop.swatch_probe = false;
+            if let Some(s) = self.desktop.swatch_probe_last.take() {
+                self.desktop.swatch_size = s;
+                self.toast = format!("색상 상자 크기를 {} × {} px로 정했습니다", s.x, s.y);
+            }
+        }
+    }
     pub fn finish_completed_stickers(&mut self, ctx: &egui::Context) {
         let completed = std::mem::take(&mut self.completed_stickers);
         if !self.prefs.close_completed_sticker {
@@ -579,7 +675,10 @@ impl App {
             let w = self.studio.windows.get_mut(&i).unwrap();
             match a.fold {
                 Some(Mode::Title) if !locked => w.mode = Mode::Title,
-                Some(Mode::Swatch) => w.mode = Mode::Swatch,
+                Some(Mode::Swatch) if w.mode != Mode::Swatch => {
+                    w.swatch_size = self.desktop.swatch_size;
+                    w.mode = Mode::Swatch
+                }
                 Some(Mode::Sticker) if !locked => {
                     w.mode = if w.sticker_preferred {
                         Mode::Sticker
@@ -1554,6 +1653,7 @@ impl App {
     }
     pub fn render_note_windows(&mut self, root: &egui::Context) {
         self.drop_blank_drafts();
+        crate::magnet::configure(self.desktop.magnet, self.desktop.magnet_pt);
         let mut rested = false;
         let ids: Vec<_> = self
             .studio
@@ -1576,6 +1676,8 @@ impl App {
             w.reconcile(&self.data.notes[i]);
             w.skip_title = self.desktop.skip_title;
             w.title_default = self.desktop.title_width;
+            w.skip_swatch = self.desktop.skip_swatch && !self.desktop.skip_title;
+            w.swatch_default = self.desktop.swatch_size;
             let locked = self.data.notes[i].locked;
             if locked {
                 w.mode = Mode::Swatch;
@@ -1794,6 +1896,9 @@ impl App {
                 // On Windows the OS applies opacity and rounds the corners, so
                 // the paper is painted opaque and square (see `win_style`).
                 crate::win_style::shape(ctx, opacity);
+                if let Some(h) = crate::win_style::shaped_hwnd(ctx) {
+                    crate::magnet::track(h, matches!(mode, Mode::Title | Mode::Swatch));
+                }
                 let alpha = if crate::win_style::NATIVE {
                     1.
                 } else {
@@ -1830,7 +1935,9 @@ impl App {
                                 if starred {
                                     ui.label(RichText::new("★").color(STAR).size(15.));
                                 }
-                                let width = (ui.available_width() - 2. * button).max(40.);
+                                // No fold button with the color box left out.
+                                let buttons = if w.skip_swatch { 1. } else { 2. };
+                                let width = (ui.available_width() - buttons * button).max(40.);
                                 let r = ui.add_sized(
                                     [width, 26.],
                                     egui::Label::new({
@@ -1869,7 +1976,8 @@ impl App {
                                     open_menu(ctx, &mut w);
                                 }
                                 if hover {
-                                    if icon_button(ui, Icon::Fold, "색상 상자로 접기").clicked()
+                                    if !w.skip_swatch
+                                        && icon_button(ui, Icon::Fold, "색상 상자로 접기").clicked()
                                     {
                                         w.fold();
                                     }
@@ -3797,6 +3905,87 @@ mod size_window_tests {
         assert_eq!(app.desktop.sticker_size, Vec2::new(900., 220.));
     }
 
+    #[test]
+    fn closing_the_color_box_window_sets_the_size_folds_start_with() {
+        let mut app = App::sample(Local::now().date_naive());
+        let ctx = egui::Context::default();
+        assert_eq!(app.desktop.swatch_size, Vec2::splat(SWATCH_SIZE));
+        app.desktop.swatch_probe = true;
+        let run = |app: &mut App, events| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1200., 800.))),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| app.swatch_probe_window(ctx),
+            );
+        };
+        run(&mut app, vec![]);
+        assert!(app.desktop.swatch_probe, "stays open until closed");
+        app.desktop.swatch_probe_last = Some(Vec2::new(80.4, 30.));
+        run(&mut app, escape());
+        assert!(!app.desktop.swatch_probe);
+        assert_eq!(app.desktop.swatch_size, Vec2::new(80., 30.));
+        // Out of range sizes come inside it.
+        app.desktop.swatch_probe = true;
+        app.desktop.swatch_probe_last = Some(Vec2::new(4., 900.));
+        run(&mut app, escape());
+        assert_eq!(app.desktop.swatch_size, Vec2::new(SWATCH_MIN, SWATCH_MAX));
+        // A memo folded into the box takes that size, also after its box
+        // was resized before.
+        let mut w = Window::new(Mode::Title);
+        w.swatch_default = Vec2::new(80., 30.);
+        w.swatch_size = Vec2::splat(200.);
+        w.fold();
+        assert_eq!((w.mode, w.size()), (Mode::Swatch, Vec2::new(80., 30.)));
+    }
+    #[test]
+    fn leaving_out_the_color_box_folds_only_to_the_title_line_and_back() {
+        let mut w = Window::new(Mode::Sticker);
+        w.skip_swatch = true;
+        w.fold();
+        assert_eq!(w.mode, Mode::Title);
+        w.fold();
+        assert_eq!(w.mode, Mode::Sticker);
+        // Without it: the title line, the color box, then back.
+        w.skip_swatch = false;
+        w.fold();
+        w.fold();
+        assert_eq!(w.mode, Mode::Swatch);
+        w.fold();
+        assert_eq!(w.mode, Mode::Sticker);
+    }
+    #[test]
+    fn the_fold_settings_are_saved_and_older_saves_keep_the_magnets_on() {
+        use crate::storage::SettingsRec;
+        let load = |rec: &SettingsRec| {
+            let json = serde_json::to_string(rec).unwrap();
+            let back: SettingsRec = serde_json::from_str(&json).unwrap();
+            let mut d = crate::desktop::Desktop::default();
+            back.write_desktop(&mut d);
+            d
+        };
+        let old: SettingsRec = serde_json::from_str("{}").unwrap();
+        let d = load(&old);
+        assert!(d.magnet && !d.skip_swatch);
+        assert_eq!(d.magnet_pt, crate::magnet::SNAP);
+        assert_eq!(d.swatch_size, Vec2::splat(SWATCH_SIZE));
+        let mut app = App::sample(Local::now().date_naive());
+        app.desktop.skip_swatch = true;
+        app.desktop.swatch_size = Vec2::new(70., 40.);
+        app.desktop.magnet = false;
+        app.desktop.magnet_pt = 20.;
+        let mut rec = SettingsRec::default();
+        rec.read_desktop(&app.desktop);
+        let d = load(&rec);
+        assert!(d.skip_swatch && !d.magnet);
+        assert_eq!((d.swatch_size, d.magnet_pt), (Vec2::new(70., 40.), 20.));
+        // Both steps skipped (a file edited by hand): the color box stays.
+        rec.skip_title = true;
+        let d = load(&rec);
+        assert!(d.skip_title && !d.skip_swatch);
+    }
     #[test]
     fn closing_the_title_width_window_sets_the_width_folds_start_with() {
         let mut app = App::sample(Local::now().date_naive());
