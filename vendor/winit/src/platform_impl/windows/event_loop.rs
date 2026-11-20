@@ -1138,6 +1138,19 @@ pub(super) unsafe extern "system" fn public_window_callback(
     result
 }
 
+/// A key press the IME processed (VK_PROCESSKEY) belongs to it: a jamo being
+/// composed, Backspace inside a syllable, or Enter, arrows and Esc while its
+/// Hanja/symbol candidate list (ㅁ + 한자) is open. Passed on, egui-winit
+/// fell back to the physical key, so the Enter that picked "※" also broke the
+/// line and the Esc that closed the list also left the text box. Keys the
+/// IME lets through after committing (Enter, Space, arrows, Ctrl+…) arrive
+/// as themselves and are kept.
+fn ime_took_key(event: &crate::event::KeyEvent) -> bool {
+    use crate::keyboard::{Key, NamedKey};
+    event.state == crate::event::ElementState::Pressed
+        && event.logical_key == Key::Named(NamedKey::Process)
+}
+
 unsafe fn public_window_callback_inner(
     window: HWND,
     msg: u32,
@@ -1165,6 +1178,9 @@ unsafe fn public_window_callback_inner(
         let events =
             userdata.key_event_builder.process_message(window, msg, wparam, lparam, &mut result);
         for event in events {
+            if ime_took_key(&event.event) {
+                continue;
+            }
             userdata.send_event(Event::WindowEvent {
                 window_id: RootWindowId(WindowId(window)),
                 event: KeyboardInput {

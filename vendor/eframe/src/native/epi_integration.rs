@@ -90,6 +90,19 @@ pub fn viewport_builder(
     }
 }
 
+/// Puts the IME candidate list next to the caret, not below the whole text
+/// box. egui-winit hands the IME `rect` (the text box) as the area to keep
+/// clear, so a Hangul symbol or Hanja list (ㅁ + 한자) opened under the
+/// bottom of a tall memo, far from where the user was typing.
+pub fn ime_at_caret(mut output: egui::PlatformOutput) -> egui::PlatformOutput {
+    if let Some(ime) = &mut output.ime {
+        if ime.cursor_rect.is_finite() && ime.cursor_rect.height() > 0.0 {
+            ime.rect = ime.cursor_rect;
+        }
+    }
+    output
+}
+
 pub fn apply_window_settings(
     window: &winit::window::Window,
     window_settings: Option<WindowSettings>,

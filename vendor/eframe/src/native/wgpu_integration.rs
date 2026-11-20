@@ -658,7 +658,7 @@ impl WgpuWinitRunning<'_> {
             return Ok(EventResult::Wait);
         };
 
-        egui_winit.handle_platform_output(window, platform_output);
+        egui_winit.handle_platform_output(window, epi_integration::ime_at_caret(platform_output));
 
         let clipped_primitives = egui_ctx.tessellate(shapes, pixels_per_point);
 
@@ -1023,7 +1023,7 @@ fn render_immediate_viewport(
         vec![],
     );
 
-    egui_winit.handle_platform_output(window, platform_output);
+    egui_winit.handle_platform_output(window, epi_integration::ime_at_caret(platform_output));
 
     handle_viewport_output(
         &egui_ctx,

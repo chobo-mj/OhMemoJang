@@ -728,7 +728,7 @@ impl GlowWinitRunning<'_> {
         let gl_surface = viewport.gl_surface.as_ref().unwrap();
         let egui_winit = viewport.egui_winit.as_mut().unwrap();
 
-        egui_winit.handle_platform_output(&window, platform_output);
+        egui_winit.handle_platform_output(&window, epi_integration::ime_at_caret(platform_output));
 
         let clipped_primitives = integration.egui_ctx.tessellate(shapes, pixels_per_point);
 
@@ -1669,7 +1669,7 @@ fn render_immediate_viewport(
                 painter.free_texture(*id);
             }
         }
-        egui_winit.handle_platform_output(window, platform_output);
+        egui_winit.handle_platform_output(window, epi_integration::ime_at_caret(platform_output));
         event_loop_context::with_current_event_loop(|event_loop| {
             glutin.handle_viewport_output(event_loop, egui_ctx, &viewport_output);
         });
@@ -1696,7 +1696,7 @@ fn render_immediate_viewport(
         && viewport.painted == signature
     {
         // Looks the same as what the window shows: nothing to draw or swap.
-        egui_winit.handle_platform_output(window, platform_output);
+        egui_winit.handle_platform_output(window, epi_integration::ime_at_caret(platform_output));
         event_loop_context::with_current_event_loop(|event_loop| {
             glutin.handle_viewport_output(event_loop, egui_ctx, &viewport_output);
         });
@@ -1750,7 +1750,7 @@ fn render_immediate_viewport(
     }
     viewport.painted = signature;
 
-    egui_winit.handle_platform_output(window, platform_output);
+    egui_winit.handle_platform_output(window, epi_integration::ime_at_caret(platform_output));
 
     event_loop_context::with_current_event_loop(|event_loop| {
         glutin.handle_viewport_output(event_loop, egui_ctx, &viewport_output);

@@ -7017,6 +7017,69 @@ mod inline_table_tests {
         assert_eq!(doc.tabs[0].body, "  1. ", "{:?}", doc.tabs[0].body);
     }
     #[test]
+    fn a_symbol_or_hanja_picked_from_the_ime_list_replaces_the_composition() {
+        // ㅁ + 한자 opens the symbol list; the Enter, arrows or digit that pick
+        // from it stay with the IME (vendor winit drops VK_PROCESSKEY presses),
+        // so the frame carries only what egui-winit makes of the commit.
+        let ctx = egui::Context::default();
+        let mut doc = Document::default();
+        let mut body = String::new();
+        let mut t = 0.0;
+        let mut run = |doc: &mut Document, body: &mut String, ev: Vec<egui::Event>| {
+            t += 0.2;
+            ui_frame(&ctx, doc, body, ev, t);
+        };
+        run(&mut doc, &mut body, vec![]);
+        doc.requested_selection = Some(0..0);
+        run(&mut doc, &mut body, vec![]);
+        let ime = |e: egui::ImeEvent| egui::Event::Ime(e);
+        let pre = |s: &str| ime(egui::ImeEvent::Preedit(s.into()));
+        let picked = |s: &str| {
+            vec![
+                ime(egui::ImeEvent::Disabled),
+                ime(egui::ImeEvent::Commit(s.into())),
+                ime(egui::ImeEvent::Disabled),
+                ime(egui::ImeEvent::Disabled),
+            ]
+        };
+        for e in ["1", ".", " "] {
+            run(&mut doc, &mut body, vec![egui::Event::Text(e.into())]);
+        }
+        run(&mut doc, &mut body, vec![ime(egui::ImeEvent::Enabled)]);
+        run(&mut doc, &mut body, vec![pre("ㅁ")]);
+        // the list is open: the jamo stays as the composition
+        run(&mut doc, &mut body, vec![pre("ㅁ")]);
+        assert!(doc.ime);
+        run(&mut doc, &mut body, picked("※"));
+        assert!(!doc.ime);
+        assert_eq!(doc.tabs[0].body, "  1. ※", "{:?}", doc.tabs[0].body);
+        // a syllable converted to Hanja, then plain Hangul after it
+        run(&mut doc, &mut body, vec![ime(egui::ImeEvent::Enabled)]);
+        run(&mut doc, &mut body, vec![pre("ㅎ")]);
+        run(&mut doc, &mut body, vec![pre("한")]);
+        run(&mut doc, &mut body, picked("韓"));
+        run(&mut doc, &mut body, vec![ime(egui::ImeEvent::Enabled)]);
+        run(&mut doc, &mut body, vec![pre("ㄱ")]);
+        run(&mut doc, &mut body, vec![pre("글")]);
+        run(
+            &mut doc,
+            &mut body,
+            vec![
+                ime(egui::ImeEvent::Disabled),
+                ime(egui::ImeEvent::Commit("글".into())),
+                ime(egui::ImeEvent::Disabled),
+            ],
+        );
+        assert_eq!(doc.tabs[0].body, "  1. ※韓글", "{:?}", doc.tabs[0].body);
+        // the list helpers still work after a picked symbol
+        run(&mut doc, &mut body, vec![key(Key::Enter, Modifiers::NONE)]);
+        assert_eq!(
+            doc.tabs[0].body, "  1. ※韓글\n  2. ",
+            "{:?}",
+            doc.tabs[0].body
+        );
+    }
+    #[test]
     fn a_caret_moved_by_undo_scrolls_into_view() {
         let ctx = egui::Context::default();
         let mut doc = Document::default();
