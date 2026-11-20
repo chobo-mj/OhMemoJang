@@ -180,7 +180,7 @@ OhMemoJang(`C:\work\MEMONOKING`, main 브랜치)의 2.1 기능·버그 목록을
   - 시험 도구(이 세션 임시 폴더 `C:\Users\corea\AppData\Local\Temp\claude\9763208642e35975\8b63bbe6-cb01-4641-a4b8-616b51776d60\scratchpad`): `kb.ps1 -front 제목 [-cx -cy] -keys "0x41,0x19,w,0x0D"`(합성 키, s=Shift·c=Ctrl 접두, w=0.4초 쉼; 한/영 0x15, 한자 0x19). 앱을 새로 띄우면 영문 상태라 0x15로 바꾼다.
 - 12 C7: 자세한 내용은 작업일지 '2.1 작업 12'. 닫았다 다시 연 창은 마지막 자리(`last_pos`)에, 닫힌 창 위치도 세션에 `closed`로 저장. 시험용 프로필에서 세션 안·재시작 뒤 모두 옮긴 자리로 다시 뜨는 것 확인.
 - 2026-11-20 10:30 기준: 사용자 요청("지금 단계가 끝나면 전부 push하고 릴리즈 배포, 검증 목록을 minjae1.oh@samsung.com으로 메일, 그 뒤 후속 작업 계속")으로 12번까지 끝낸 상태를 2.1.0으로 릴리즈(태그 v2.1.0 push → GitHub Actions가 설치 파일 게시). 릴리즈 노트 `docs/releases/2.1.0.md`. 이후 항목은 2.1.1 이후 버전으로 낸다(푸시·릴리즈는 다시 요청이 있을 때만).
-  - 메일: 이 세션에 Gmail 커넥터가 없고(No URL configured) 앱 브라우저의 Gmail은 로그인 전이라 사용자 로그인을 요청했다. 보낼 글은 시작 세션 임시 폴더의 `verify-mail.txt`(위 '미검증' 목록을 항목별 방법과 함께 정리).
+  - 메일 보냄(앱 브라우저 Gmail, 2026-11-20, 제목 "OhMemoJang 2.1.0 수동 검증 요청 목록"). 보낸 글은 시작 세션 임시 폴더의 `verify-mail.txt`(위 '미검증' 목록을 항목별 방법과 함께 정리).
   - 5시간 34%, 주간 84%. 컨텍스트 메시지 63%로 13번부터 새 세션.
 - 13 C1·C2·C9: 자세한 내용은 작업일지 '2.1 작업 13'. 제목줄 우클릭 메뉴, 메모마다 '닫기 버튼 잠금'(X·Esc 두 번·Alt+F4 막음, 메뉴 닫기만), 스티커 하단 서식 줄 제거(편집 창은 유지), 우클릭 '글꼴…' 창(미리보기, 바꾼 것만 적용), 우클릭 메뉴 투명도. 메뉴 창 체크박스 네모가 안 보이던 것('위키에 보관' 포함)과 안내 줄에 겹치던 모서리 아이콘도 고침. GUIDE_VERSION 19.
   - 시험 도구(이 세션 임시 폴더 `C:\Users\corea\AppData\Local\Temp\claude\9763208642e35975\66b523d6-46a3-481d-b4be-4fd930b84ce9\scratchpad`): 앞 세션 도구를 모아 둠(`launch.ps1 -log "" [-real]`, `trayquit.ps1`, `wins.ps1`, `shot.ps1`, `kb.ps1`(-right 우클릭), `drag.ps1`, `setclip.ps1`, `placemain.ps1`). 시험용 프로필은 그대로 앞 세션 `df880ac5…\scratchpad\stage`.
