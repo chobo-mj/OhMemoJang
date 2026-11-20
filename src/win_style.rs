@@ -22,6 +22,22 @@ pub fn shape(ctx: &egui::Context, opacity: f32) {
     let _ = (ctx, opacity);
 }
 
+/// Keeps a mouse-operated popup from taking keyboard focus from its editor.
+pub fn without_activation(ctx: &egui::Context) {
+    #[cfg(windows)]
+    imp::without_activation(ctx);
+    #[cfg(not(windows))]
+    let _ = ctx;
+}
+
+/// Use a shallow app-drawn edge for stickers instead of the system shadow.
+pub fn sticker_shadow(ctx: &egui::Context, small: bool) {
+    #[cfg(windows)]
+    imp::sticker_shadow(ctx, small);
+    #[cfg(not(windows))]
+    let _ = (ctx, small);
+}
+
 /// Native handle of the window `ctx` draws, if it can be found.
 pub fn hwnd(ctx: &egui::Context) -> Option<isize> {
     #[cfg(windows)]
@@ -1194,13 +1210,17 @@ mod imp {
     use windows_sys::Win32::{
         Foundation::{BOOL, HWND, LPARAM, RECT},
         Graphics::{
-            Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND},
+            Dwm::{
+                DwmSetWindowAttribute, DWMNCRP_DISABLED, DWMNCRP_USEWINDOWSTYLE,
+                DWMWA_NCRENDERING_POLICY, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+            },
             Gdi::{CreateRoundRectRgn, SetWindowRgn},
         },
         System::Threading::GetCurrentThreadId,
         UI::WindowsAndMessaging::{
             EnumThreadWindows, GetWindowLongPtrW, GetWindowRect, GetWindowTextW, IsWindow,
             SetLayeredWindowAttributes, SetWindowLongPtrW, GWL_EXSTYLE, LWA_ALPHA, WS_EX_LAYERED,
+            WS_EX_NOACTIVATE,
         },
     };
 
@@ -1210,6 +1230,7 @@ mod imp {
         alpha: Option<u8>,
         native_round: Option<bool>,
         region: (i32, i32),
+        small_shadow: bool,
     }
 
     pub fn cached(ctx: &egui::Context) -> Option<isize> {
@@ -1217,6 +1238,45 @@ mod imp {
         ctx.data(|d| d.get_temp::<State>(key))
             .map(|s| s.hwnd)
             .filter(|&h| h != 0)
+    }
+
+    pub fn without_activation(ctx: &egui::Context) {
+        if let Some(hwnd) = cached(ctx) {
+            unsafe {
+                let h = hwnd as HWND;
+                let style = GetWindowLongPtrW(h, GWL_EXSTYLE);
+                if style & WS_EX_NOACTIVATE as isize == 0 {
+                    SetWindowLongPtrW(h, GWL_EXSTYLE, style | WS_EX_NOACTIVATE as isize);
+                }
+            }
+        }
+    }
+
+    pub fn sticker_shadow(ctx: &egui::Context, small: bool) {
+        let key = egui::Id::new(("win_style", ctx.viewport_id()));
+        let Some(mut state) = ctx.data(|d| d.get_temp::<State>(key)) else {
+            return;
+        };
+        if state.small_shadow == small {
+            return;
+        }
+        let policy = if small {
+            DWMNCRP_DISABLED
+        } else {
+            DWMNCRP_USEWINDOWSTYLE
+        };
+        let result = unsafe {
+            DwmSetWindowAttribute(
+                state.hwnd as HWND,
+                DWMWA_NCRENDERING_POLICY as u32,
+                &policy as *const _ as *const _,
+                std::mem::size_of_val(&policy) as u32,
+            )
+        };
+        if result >= 0 {
+            state.small_shadow = small;
+            ctx.data_mut(|d| d.insert_temp(key, state));
+        }
     }
 
     pub fn shape(ctx: &egui::Context, opacity: f32) {

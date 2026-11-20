@@ -2024,6 +2024,30 @@ impl App {
                 // On Windows the OS applies opacity and rounds the corners, so
                 // the paper is painted opaque and square (see `win_style`).
                 crate::win_style::shape(ctx, opacity);
+                crate::win_style::sticker_shadow(ctx, mode == Mode::Sticker);
+                if mode == Mode::Sticker {
+                    let rect = ctx.screen_rect();
+                    let shadow = ctx.layer_painter(egui::LayerId::new(
+                        egui::Order::Foreground,
+                        egui::Id::new("sticker_edge_shadow"),
+                    ));
+                    shadow.rect_filled(
+                        Rect::from_min_max(
+                            egui::pos2(rect.left() + 6., rect.bottom() - 2.),
+                            rect.max,
+                        ),
+                        0.,
+                        Color32::from_black_alpha(32),
+                    );
+                    shadow.rect_filled(
+                        Rect::from_min_max(
+                            egui::pos2(rect.right() - 2., rect.top() + 6.),
+                            egui::pos2(rect.right(), rect.bottom() - 2.),
+                        ),
+                        0.,
+                        Color32::from_black_alpha(24),
+                    );
+                }
                 if let Some(h) = crate::win_style::shaped_hwnd(ctx) {
                     crate::magnet::track(h, matches!(mode, Mode::Title | Mode::Swatch));
                     w.hwnd = Some(h);

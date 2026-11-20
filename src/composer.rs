@@ -447,6 +447,8 @@ enum UndoKind {
         text: String,
         spans: Vec<Span>,
     },
+    /// Body formatting can change without editing the text.
+    Style { tab: usize, spans: Vec<Span> },
     /// A table as it was before a cell edit, paste, row/column change, merge ...
     Table { tab: usize, bi: usize, table: Table },
     /// A table was pasted into the text: undo removes it again.
@@ -652,6 +654,7 @@ impl Document {
         };
         let tab = match &e.kind {
             UndoKind::Body { tab, .. }
+            | UndoKind::Style { tab, .. }
             | UndoKind::Table { tab, .. }
             | UndoKind::TableInserted { tab, .. }
             | UndoKind::TableDeleted { tab, .. } => *tab,
@@ -661,6 +664,10 @@ impl Document {
             UndoKind::Body { .. } => UndoKind::Body {
                 tab,
                 text: current.body.clone(),
+                spans: current.spans.clone(),
+            },
+            UndoKind::Style { .. } => UndoKind::Style {
+                tab,
                 spans: current.spans.clone(),
             },
             UndoKind::Table { bi, .. } => {
@@ -732,6 +739,10 @@ impl Document {
                 self.undo_focus = true;
                 t.body = text;
                 t.spans = spans;
+                self.active = tab;
+            }
+            UndoKind::Style { tab, spans } => {
+                self.tabs.get_mut(tab)?.spans = spans;
                 self.active = tab;
             }
             UndoKind::Table { tab, bi, table } => {
@@ -823,7 +834,11 @@ impl Document {
                 Some(&w) if w != u32::MAX => tab.spans[w as usize].format.clone(),
                 _ => Format::default(),
             };
+            let old = f.clone();
             edit(&mut f);
+            if f == old {
+                continue;
+            }
             match runs.last_mut() {
                 Some(r) if r.range.end == i && r.format == f => r.range.end = i + 1,
                 _ => runs.push(Span {
@@ -850,6 +865,23 @@ impl Document {
             self.restyle(set);
         }
     }
+    fn paint_selection_with_history(&mut self, highlight: bool, index: u8, now: f64) {
+        if self.selection.is_empty() || self.selected_cell.is_some() {
+            self.paint_selection(highlight, index);
+            return;
+        }
+        let tab = self.active;
+        let spans = self.tabs[tab].spans.clone();
+        self.paint_selection(highlight, index);
+        if spans != self.tabs[tab].spans {
+            self.undo.push(
+                if highlight { "형광펜" } else { "글자색" },
+                UndoKind::Style { tab, spans },
+                now,
+            );
+        }
+    }
+
     pub fn toggle_format(&mut self, kind: usize) {
         // On a selection: on unless every selected character has it.
         let on = if self.selected_cell.is_none() && !self.selection.is_empty() {
@@ -2035,7 +2067,7 @@ fn content_impl(
 struct SelectionPopup {
     text_id: Id,
     range: CCursorRange,
-    rect: egui::Rect,
+    rect: Option<egui::Rect>,
 }
 
 fn sticker_selection_popup(
@@ -2047,7 +2079,6 @@ fn sticker_selection_popup(
 ) {
     let ctx = ui.ctx();
     let key = id.with("selection_popup");
-    let hover_key = Id::new("eframe_stable_hover_rects").with(ctx.viewport_id());
     let text_id = output.response.id;
     let old = ui.data_mut(|d| d.remove_temp::<Option<SelectionPopup>>(key).flatten());
     let (focused, escaped, pressed, clicking, pointer, extend) = ui.input(|i| {
@@ -2071,7 +2102,11 @@ fn sticker_selection_popup(
         return;
     }
     let using_popup = old.as_ref().is_some_and(|p| {
-        clicking && p.text_id == text_id && pointer.is_some_and(|point| p.rect.contains(point))
+        clicking
+            && p.text_id == text_id
+            && p.rect
+                .zip(pointer)
+                .is_some_and(|(r, point)| r.contains(point))
     });
     if pressed && !using_popup {
         return;
@@ -2094,71 +2129,126 @@ fn sticker_selection_popup(
     };
     let Some(range) = range else { return };
 
-    let caret = output
-        .galley
-        .pos_from_ccursor(range.primary)
-        .translate(output.galley_pos.to_vec2());
+    let [start, end] = range.sorted();
+    let caret_rect = |cursor| {
+        output
+            .galley
+            .pos_from_ccursor(cursor)
+            .translate(output.galley_pos.to_vec2())
+    };
+    let caret = caret_rect(range.primary);
     let clip = output.text_clip_rect;
-    if caret.bottom() < clip.top() || caret.top() > clip.bottom() {
+    let (first, last) = (caret_rect(start), caret_rect(end));
+    let selected = if first.top() == last.top() {
+        first.union(last)
+    } else {
+        egui::Rect::from_min_max(
+            egui::pos2(clip.left(), first.top()),
+            egui::pos2(clip.right(), last.bottom()),
+        )
+    }
+    .intersect(clip);
+    if selected.height() <= 0. {
         return;
     }
-    let screen = ctx.screen_rect().shrink(4.);
-    let width = 231.;
-    let height = 84.;
-    let at = egui::pos2(
-        (caret.left().clamp(clip.left(), clip.right()) - width * 0.5)
-            .clamp(screen.left(), (screen.right() - width).max(screen.left())),
-        if caret.bottom() + 5. + height <= screen.bottom() {
-            caret.bottom() + 5.
-        } else {
-            (caret.top() - 5. - height).max(screen.top())
-        },
-    );
+    let native_sticker = ctx
+        .input(|i| i.viewport().inner_rect)
+        .filter(|_| !ctx.embed_viewports());
+    let embedded = native_sticker.is_none();
+    let sticker = native_sticker.unwrap_or_else(|| ctx.screen_rect());
+    let origin = native_sticker.map_or(Vec2::ZERO, |r| r.min.to_vec2());
+    let work = if embedded {
+        sticker
+    } else {
+        crate::native_window::work_area(ctx).unwrap_or(sticker)
+    };
+    let size = Vec2::new(232., 86.);
+    let Some(at) = selection_popup_position(
+        sticker,
+        clip.translate(origin),
+        selected.translate(origin),
+        caret.center() + origin,
+        work.shrink(4.),
+        size,
+    ) else {
+        return;
+    };
     let mut controls = Vec::with_capacity(15);
     let mut clipboard = None;
     let mut color = None;
-    let popup = egui::Area::new(key)
-        .order(egui::Order::Foreground)
-        .fixed_pos(at)
-        .default_size(Vec2::new(width, height))
-        .fade_in(false)
-        .show(ctx, |ui| {
-            let tone = crate::ui::t(ui);
-            egui::Frame::NONE
-                .fill(tone.bg)
-                .stroke(Stroke::new(1.0_f32, tone.line))
-                .inner_margin(egui::Margin::same(6))
-                .corner_radius(8.)
-                .show(ui, |ui| {
-                    ui.spacing_mut().item_spacing = Vec2::splat(2.);
+    let draw = |ui: &mut egui::Ui| {
+        let tone = crate::ui::t(ui);
+        egui::Frame::NONE
+            .fill(tone.bg)
+            .stroke(Stroke::new(1.0_f32, tone.line))
+            .inner_margin(egui::Margin::same(6))
+            .corner_radius(8.)
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing = Vec2::splat(2.);
+                ui.horizontal(|ui| {
+                    for (label, event) in
+                        [("잘라내기", egui::Event::Cut), ("복사", egui::Event::Copy)]
+                    {
+                        let button = ui.add_sized([108., 22.], egui::Button::new(label));
+                        controls.push(button.rect);
+                        if button.clicked() {
+                            clipboard = Some(event);
+                        }
+                    }
+                });
+                for (highlight, label, colors) in [
+                    (false, "글자색", &TEXT_COLORS[..]),
+                    (true, "형광펜", &HIGHLIGHTS[..]),
+                ] {
                     ui.horizontal(|ui| {
-                        for (label, event) in
-                            [("잘라내기", egui::Event::Cut), ("복사", egui::Event::Copy)]
-                        {
-                            let button = ui.add_sized([108., 22.], egui::Button::new(label));
+                        ui.add_sized([48., 22.], egui::Label::new(label).extend());
+                        for (index, &(_, swatch)) in colors.iter().enumerate() {
+                            let button = paint_color_chip(ui, swatch, highlight);
                             controls.push(button.rect);
                             if button.clicked() {
-                                clipboard = Some(event);
+                                color = Some((highlight, index as u8));
                             }
                         }
                     });
-                    for (highlight, label, colors) in [
-                        (false, "글자색", &TEXT_COLORS[..]),
-                        (true, "형광펜", &HIGHLIGHTS[..]),
-                    ] {
-                        ui.horizontal(|ui| {
-                            ui.add_sized([48., 22.], egui::Label::new(label).extend());
-                            for (index, &(_, swatch)) in colors.iter().enumerate() {
-                                let button = paint_color_chip(ui, swatch, highlight);
-                                controls.push(button.rect);
-                                if button.clicked() {
-                                    color = Some((highlight, index as u8));
-                                }
-                            }
-                        });
+                }
+            });
+    };
+    let popup_rect = if embedded {
+        Some(
+            egui::Area::new(key)
+                .order(egui::Order::Foreground)
+                .fixed_pos(at)
+                .default_size(size)
+                .fade_in(false)
+                .show(ctx, draw)
+                .response
+                .rect,
+        )
+    } else {
+        let popup_id = egui::ViewportId(key);
+        let builder = egui::ViewportBuilder::default()
+            .with_title("선택한 글 서식")
+            .with_position(at)
+            .with_inner_size(size)
+            .with_active(false)
+            .with_decorations(false)
+            .with_resizable(false)
+            .with_taskbar(false)
+            .with_window_level(egui::WindowLevel::AlwaysOnTop);
+        let mut draw = Some(draw);
+        ctx.show_viewport_immediate(popup_id, builder, |popup_ctx, _| {
+            crate::win_style::shape(popup_ctx, 1.);
+            crate::win_style::without_activation(popup_ctx);
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE.fill(popup_ctx.style().visuals.panel_fill))
+                .show(popup_ctx, |ui| {
+                    if let Some(mut draw) = draw.take() {
+                        draw(ui);
                     }
                 });
         });
+        None
+    };
     if let Some(event) = clipboard {
         output.state.cursor.set_char_range(Some(range));
         ui.data_mut(|d| d.insert_temp(id.with("edit_menu_events"), vec![event]));
@@ -2168,21 +2258,66 @@ fn sticker_selection_popup(
         doc.selection = a.index..b.index;
         output.state.cursor.set_char_range(Some(range));
         ctx.memory_mut(|m| m.request_focus(text_id));
-        doc.paint_selection(highlight, index);
+        doc.paint_selection_with_history(highlight, index, ui.input(|i| i.time));
         ctx.request_repaint();
     } else {
+        let viewport = if embedded {
+            ctx.viewport_id()
+        } else {
+            egui::ViewportId(key)
+        };
         ui.data_mut(|d| {
             d.insert_temp(
                 key,
                 Some(SelectionPopup {
                     text_id,
                     range,
-                    rect: popup.response.rect,
+                    rect: popup_rect,
                 }),
             );
-            d.insert_temp(hover_key, std::sync::Arc::new(controls));
+            d.insert_temp(
+                Id::new("eframe_stable_hover_rects").with(viewport),
+                std::sync::Arc::new(controls),
+            );
         });
     }
+}
+
+fn selection_popup_position(
+    sticker: egui::Rect,
+    body: egui::Rect,
+    selection: egui::Rect,
+    caret: egui::Pos2,
+    work: egui::Rect,
+    size: Vec2,
+) -> Option<egui::Pos2> {
+    let gap = 5.;
+    let x = (caret.x - size.x * 0.5).clamp(work.left(), (work.right() - size.x).max(work.left()));
+    let y = (caret.y - size.y * 0.5).clamp(work.top(), (work.bottom() - size.y).max(work.top()));
+    let body_work = body.intersect(work);
+    let body_x = x.clamp(
+        body_work.left(),
+        (body_work.right() - size.x).max(body_work.left()),
+    );
+    [
+        egui::pos2(sticker.right() + gap, y),
+        egui::pos2(sticker.left() - gap - size.x, y),
+        egui::pos2(x, sticker.bottom() + gap),
+        egui::pos2(x, sticker.top() - gap - size.y),
+        egui::pos2(body_x, selection.bottom() + gap),
+        egui::pos2(body_x, selection.top() - gap - size.y),
+    ]
+    .into_iter()
+    .filter(|&pos| {
+        let rect = egui::Rect::from_min_size(pos, size);
+        work.contains_rect(rect)
+            && (!rect.intersects(sticker) || body.contains_rect(rect))
+            && !rect.intersects(selection)
+    })
+    .min_by(|&a, &b| {
+        let distance = |pos| egui::Rect::from_min_size(pos, size).distance_sq_to_pos(caret);
+        distance(a).total_cmp(&distance(b))
+    })
 }
 
 /// Read-only rendering for a saved comment. The document and legacy text are
@@ -2781,7 +2916,11 @@ fn toolbar(ui: &mut egui::Ui, doc: &mut Document, id: Id, opacity: bool) -> egui
                                                         if color_chip(ui, name, c, highlight)
                                                             .clicked()
                                                         {
-                                                            doc.paint_selection(highlight, k as u8);
+                                                            doc.paint_selection_with_history(
+                                                                highlight,
+                                                                k as u8,
+                                                                ui.input(|i| i.time),
+                                                            );
                                                             ui.memory_mut(|m| m.close_popup());
                                                         }
                                                     }
@@ -7098,6 +7237,53 @@ mod inline_table_tests {
         ui_frame(&ctx, &mut doc, &mut body, vec![egui::Event::Copy], 0.4);
         assert_eq!(doc.selection, 0..body.chars().count());
         assert_eq!(body, "클립보드 ABC");
+    }
+
+    #[test]
+    fn popup_can_move_outside_when_the_body_has_no_free_space() {
+        let rect = |a: (f32, f32), b: (f32, f32)| {
+            egui::Rect::from_min_max(egui::pos2(a.0, a.1), egui::pos2(b.0, b.1))
+        };
+        let sticker = rect((500., 120.), (800., 400.));
+        let body = rect((514., 205.), (786., 362.));
+        let selection = rect((514., 210.), (786., 358.));
+        let work = rect((0., 0.), (802., 450.));
+        let size = Vec2::new(232., 86.);
+        let at = selection_popup_position(sticker, body, selection, selection.center(), work, size)
+            .unwrap();
+        let popup = egui::Rect::from_min_size(at, size);
+        assert!(work.contains_rect(popup));
+        assert!(!sticker.intersects(popup));
+        assert!(popup.right() < sticker.left());
+    }
+
+    #[test]
+    fn undo_and_redo_walk_through_color_and_highlighter_before_typing() {
+        let mut doc = Document::default();
+        doc.undo.push_body(0, String::new(), vec![], 0.);
+        doc.tabs[0].body = "색연습".into();
+        doc.selection = 1..3;
+
+        doc.paint_selection_with_history(false, 1, 0.1);
+        doc.paint_selection_with_history(true, 2, 0.2);
+        let styled = doc.tabs[0].spans.clone();
+        assert_eq!(
+            (
+                styled.last().unwrap().format.color,
+                styled.last().unwrap().format.highlight
+            ),
+            (1, 2)
+        );
+        doc.undo().unwrap();
+        assert_eq!(doc.tabs[0].body, "색연습");
+        assert_eq!(doc.tabs[0].spans.last().unwrap().format.highlight, 0);
+        doc.undo().unwrap();
+        assert_eq!(doc.tabs[0].body, "색연습");
+        assert!(doc.tabs[0].spans.is_empty());
+        doc.redo().unwrap();
+        doc.redo().unwrap();
+        assert_eq!(doc.tabs[0].body, "색연습");
+        assert_eq!(doc.tabs[0].spans, styled);
     }
 
     #[test]
