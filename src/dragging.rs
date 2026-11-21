@@ -28,6 +28,13 @@ pub struct Target {
     pub rect: Rect,
     pub kind: Destination,
 }
+#[derive(Clone, Copy)]
+pub struct ScheduleHit {
+    pub viewport: ViewportId,
+    pub date: NaiveDate,
+    pub grid: bool,
+}
+
 pub struct Drag {
     source: Source,
     origin: Pos2,
@@ -143,7 +150,13 @@ impl App {
             self.pending_date_drop = None;
         }
     }
+    /// Resolve a desktop point in physical pixels against the visible calendars.
     pub fn schedule_target_at(&self, point: Pos2, now: f64) -> Option<(NaiveDate, bool)> {
+        self.schedule_hit_at(point, now)
+            .map(|hit| (hit.date, hit.grid))
+    }
+
+    pub fn schedule_hit_at(&self, point: Pos2, now: f64) -> Option<ScheduleHit> {
         let days = self
             .day_cells
             .iter()
@@ -174,13 +187,26 @@ impl App {
                 .iter()
                 .map(|(id, _, _)| self.schedule_origins.get(id).map(|o| (o.x, o.y)))
                 .collect();
-            match crate::system::window_seen_under_pointer(&origins) {
+            let standing_handle = self.cal.standing_handle().and_then(|hwnd| {
+                found
+                    .iter()
+                    .position(|(id, _, _)| *id == ViewportId::from_hash_of("calendar"))
+                    .map(|index| (index, hwnd))
+            });
+            match crate::system::window_seen_at(point, &origins, standing_handle) {
                 None => return None,
-                Some(Some(k)) => return Some((found[k].1, found[k].2)),
+                Some(Some(k)) => {
+                    let (viewport, date, grid) = found[k];
+                    return Some(ScheduleHit {
+                        viewport,
+                        date,
+                        grid,
+                    });
+                }
                 Some(None) => {}
             }
         }
-        // Only on release: resolve overlapping calendars by native window order.
+        // Resolve overlapping calendars by native window order.
         // HashMap iteration order must never decide which date receives a memo.
         found
             .into_iter()
@@ -190,7 +216,11 @@ impl App {
                     .and_then(|origin| crate::system::window_rank_at_origin(origin.x, origin.y))
                     .unwrap_or(usize::MAX)
             })
-            .map(|(_, date, calendar)| (date, calendar))
+            .map(|(viewport, date, grid)| ScheduleHit {
+                viewport,
+                date,
+                grid,
+            })
     }
     /// Finish a drag outside its original viewport, where egui may not receive release.
     pub fn finish_note_drag(&mut self, ctx: &egui::Context) {
@@ -203,15 +233,15 @@ impl App {
         let Some((x, y)) = crate::system::cursor_pos() else {
             return;
         };
-        let p = Pos2::new(x as f32, y as f32) / ctx.pixels_per_point().max(0.5);
+        let p = Pos2::new(x as f32, y as f32);
+        let zoom = ctx.zoom_factor();
         // Local release events are handled by drag_input with their exact modifiers.
         let source_viewport = d.source.viewport;
         if ctx.input(|i| {
-            i.raw
-                .viewports
-                .get(&source_viewport)
-                .and_then(|v| v.inner_rect)
-                .is_some_and(|r| r.contains(p))
+            i.raw.viewports.get(&source_viewport).is_some_and(|v| {
+                let scale = v.native_pixels_per_point.unwrap_or(1.) * zoom;
+                v.inner_rect.is_some_and(|r| r.contains(p / scale))
+            })
         }) {
             return;
         }
@@ -421,9 +451,10 @@ impl App {
                                                 .map_or(Vec2::ZERO, |r| r.min.to_vec2())
                                         })
                                     };
-                                if let Some((date, calendar)) =
-                                    self.schedule_target_at(screen, ctx.input(|i| i.time))
-                                {
+                                if let Some((date, calendar)) = self.schedule_target_at(
+                                    screen * ctx.pixels_per_point(),
+                                    ctx.input(|i| i.time),
+                                ) {
                                     self.assign_dropped_date(
                                         d.source.note,
                                         date,

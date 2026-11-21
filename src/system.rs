@@ -43,41 +43,80 @@ pub fn window_rank_at_origin(x: f32, y: f32) -> Option<usize> {
 /// hides what is below. `None` when no listed window shows there; `Some(None)`
 /// when it cannot be told (not Windows).
 #[cfg_attr(test, allow(dead_code))]
-pub fn window_seen_under_pointer(origins: &[Option<(f32, f32)>]) -> Option<Option<usize>> {
+pub fn window_seen_at(
+    point: eframe::egui::Pos2,
+    origins: &[Option<(f32, f32)>],
+    standing: Option<(usize, isize)>,
+) -> Option<Option<usize>> {
     #[cfg(windows)]
     unsafe {
         use windows_sys::Win32::Foundation::{POINT, RECT};
         use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
-        use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
+        use windows_sys::Win32::Graphics::Gdi::{ClientToScreen, ScreenToClient};
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            GetCursorPos, GetTopWindow, GetWindow, GetWindowLongW, GetWindowRect,
-            GetWindowThreadProcessId, IsIconic, IsWindowVisible, GWL_EXSTYLE, GW_HWNDNEXT,
+            ChildWindowFromPointEx, GetAncestor, GetTopWindow, GetWindow, GetWindowLongW,
+            GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible, CWP_SKIPDISABLED,
+            CWP_SKIPINVISIBLE, CWP_SKIPTRANSPARENT, GA_ROOT, GWL_EXSTYLE, GW_HWNDNEXT,
             WS_EX_TRANSPARENT,
         };
-        let mut p = POINT { x: 0, y: 0 };
-        if GetCursorPos(&mut p) == 0 {
-            return Some(None);
-        }
+        let p = POINT {
+            x: point.x.round() as i32,
+            y: point.y.round() as i32,
+        };
+        let standing = standing.and_then(|(index, hwnd)| {
+            let child = hwnd as windows_sys::Win32::Foundation::HWND;
+            let root = GetAncestor(child, GA_ROOT);
+            (!root.is_null() && IsWindowVisible(child) != 0).then_some((index, child, root))
+        });
         let mut window = GetTopWindow(std::ptr::null_mut());
         while !window.is_null() {
             let mut r: RECT = std::mem::zeroed();
-            let mut cloaked = 0u32;
-            DwmGetWindowAttribute(
-                window,
-                DWMWA_CLOAKED as u32,
-                &mut cloaked as *mut u32 as *mut _,
-                4,
-            );
             let seen = IsWindowVisible(window) != 0
                 && IsIconic(window) == 0
-                && cloaked == 0
-                && GetWindowLongW(window, GWL_EXSTYLE) as u32 & WS_EX_TRANSPARENT == 0
                 && GetWindowRect(window, &mut r) != 0
                 && p.x >= r.left
                 && p.x < r.right
                 && p.y >= r.top
-                && p.y < r.bottom;
+                && p.y < r.bottom
+                && GetWindowLongW(window, GWL_EXSTYLE) as u32 & WS_EX_TRANSPARENT == 0;
             if seen {
+                let mut cloaked = 0u32;
+                DwmGetWindowAttribute(
+                    window,
+                    DWMWA_CLOAKED as u32,
+                    &mut cloaked as *mut u32 as *mut _,
+                    4,
+                );
+                if cloaked != 0 {
+                    window = GetWindow(window, GW_HWNDNEXT);
+                    continue;
+                }
+                if let Some((index, calendar, root)) =
+                    standing.filter(|(_, _, root)| *root == window)
+                {
+                    // An interactive standing calendar can be a child of
+                    // Explorer. Check that child before treating Explorer as
+                    // a different program covering the calendar.
+                    let mut child = root;
+                    loop {
+                        if child == calendar {
+                            return Some(Some(index));
+                        }
+                        let mut local = p;
+                        if ScreenToClient(child, &mut local) == 0 {
+                            break;
+                        }
+                        let next = ChildWindowFromPointEx(
+                            child,
+                            local,
+                            CWP_SKIPDISABLED | CWP_SKIPINVISIBLE | CWP_SKIPTRANSPARENT,
+                        );
+                        if next.is_null() || next == child {
+                            break;
+                        }
+                        child = next;
+                    }
+                }
                 let mut process = 0;
                 GetWindowThreadProcessId(window, &mut process);
                 if process != std::process::id() {
@@ -101,7 +140,7 @@ pub fn window_seen_under_pointer(origins: &[Option<(f32, f32)>]) -> Option<Optio
     }
     #[cfg(not(windows))]
     {
-        let _ = origins;
+        let _ = (point, origins, standing);
         Some(None)
     }
 }

@@ -6,6 +6,24 @@ struct StandingScheduleDrag {
     note: usize,
     from: NaiveDate,
 }
+
+fn sticker_bar_in_cell(cell: Rect, pointer_y: f32, height: f32) -> Option<Rect> {
+    if !cell.is_positive() {
+        return None;
+    }
+    let body = cell.shrink((cell.size().min_elem() * 0.15).min(4.));
+    let height = height.round().min(body.height());
+    let top = if body.height() >= height + 24. {
+        body.top() + 24.
+    } else {
+        body.top()
+    };
+    let y = (pointer_y - height / 2.).clamp(top, body.bottom() - height);
+    Some(Rect::from_min_size(
+        egui::pos2(body.left(), y),
+        Vec2::new(body.width(), height),
+    ))
+}
 impl App {
     pub fn filters(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
@@ -945,7 +963,12 @@ impl App {
         });
         self.day_cells.insert(
             ui.ctx().viewport_id(),
-            (ui.input(|i| i.time), drop_rect.translate(origin), self.day),
+            (
+                ui.input(|i| i.time),
+                egui::emath::TSTransform::from_scaling(ui.ctx().pixels_per_point())
+                    * drop_rect.translate(origin),
+                self.day,
+            ),
         );
         self.schedule_origins.insert(
             ui.ctx().viewport_id(),
@@ -1047,6 +1070,7 @@ impl App {
                 .map(|r| r.min.to_vec2())
                 .unwrap_or_default();
             let clip = ui.clip_rect();
+            let scale = egui::emath::TSTransform::from_scaling(ctx.pixels_per_point());
             let mut cells = Vec::with_capacity(rows * 7);
             for row in 0..rows {
                 for c in 0..7 {
@@ -1057,7 +1081,7 @@ impl App {
                     .intersect(clip);
                     if r.is_positive() {
                         cells.push((
-                            r.translate(origin),
+                            scale * r.translate(origin),
                             first + Duration::days((row * 7 + c) as i64),
                         ));
                     }
@@ -1171,6 +1195,91 @@ impl App {
             }
         }
         self.band_resize_step(ui, all, first, rows, col, height);
+        self.paint_sticker_schedule_preview(ui);
+    }
+
+    fn paint_sticker_schedule_preview(&self, ui: &egui::Ui) {
+        let Some(drag) = &self.studio.drag else {
+            return;
+        };
+        let Some(carry) = &drag.carry else { return };
+        let Some((hit, pointer)) = carry.preview.zip(carry.pointer) else {
+            return;
+        };
+        let ctx = ui.ctx();
+        if hit.viewport != ctx.viewport_id() {
+            return;
+        }
+        let Some((_, cells)) = self.cal_cells.get(&hit.viewport) else {
+            return;
+        };
+        let Some((cell, _)) = cells
+            .iter()
+            .find(|(r, date)| *date == hit.date && r.contains(pointer))
+        else {
+            return;
+        };
+        let ppp = ctx.pixels_per_point();
+        let origin = ui.input(|i| {
+            i.viewport()
+                .inner_rect
+                .map_or(Vec2::ZERO, |r| r.min.to_vec2())
+        });
+        let local = egui::emath::TSTransform::from_scaling(1. / ppp) * *cell;
+        let cell = local.translate(-origin);
+        let Some(rect) =
+            sticker_bar_in_cell(cell, pointer.y / ppp - origin.y, self.prefs.cal_font + 8.5)
+        else {
+            return;
+        };
+        let Some(note) = self.data.notes.get(drag.note) else {
+            return;
+        };
+        let title = if note.title.trim().is_empty() {
+            "제목 없음"
+        } else {
+            &note.title
+        };
+        let title = if drag.shift {
+            format!("🚩 {title}")
+        } else {
+            title.to_owned()
+        };
+        let painter = ctx
+            .layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                ui.id().with("sticker_calendar_preview"),
+            ))
+            .with_clip_rect(ui.clip_rect());
+        painter.rect_filled(rect, 4., note.color);
+        painter.rect_stroke(
+            rect,
+            4.,
+            Stroke::new(1.0_f32, ACCENT),
+            egui::StrokeKind::Inside,
+        );
+        let ink = if egui::Rgba::from(note.color).intensity() < 0.18 {
+            Color32::WHITE
+        } else {
+            INK
+        };
+        if rect.width() <= 10. || rect.height() < self.prefs.cal_font {
+            return;
+        }
+        let mut job = egui::text::LayoutJob::simple_singleline(
+            title,
+            egui::FontId::proportional(self.prefs.cal_font),
+            ink,
+        );
+        job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - 10.);
+        let galley = ui.fonts(|fonts| fonts.layout_job(job));
+        painter
+            .with_clip_rect(rect.intersect(ui.clip_rect()))
+            .galley(
+                egui::pos2(rect.left() + 5., rect.center().y - galley.size().y * 0.5),
+                galley,
+                ink,
+            );
     }
     /// A band's end held and moved: the memo covers the days from the end
     /// that stays put to the day under the pointer, shown as it moves.
@@ -2394,6 +2503,49 @@ mod calendar_side_tests {
 #[cfg(test)]
 mod sticker_drop_tests {
     use super::*;
+
+    #[test]
+    fn sticker_preview_chooses_a_grid_and_stays_inside_its_date_cell() {
+        let today = Local::now().date_naive();
+        let mut app = App::sample(today);
+        let main = crate::ui::main_viewport();
+        let detached = egui::ViewportId::from_hash_of("calendar");
+        let work_cell = Rect::from_min_size(egui::pos2(20., 40.), Vec2::new(90., 95.));
+        let dock_cell = Rect::from_min_size(egui::pos2(1700., 60.), Vec2::new(180., 150.));
+        app.cal_cells.insert(main, (0., vec![(work_cell, today)]));
+        app.cal_cells
+            .insert(detached, (0., vec![(dock_cell, today.succ_opt().unwrap())]));
+        app.day_cells.insert(
+            detached,
+            (0., dock_cell.translate(Vec2::new(200., 0.)), today),
+        );
+
+        assert_eq!(
+            app.sticker_preview_at(work_cell.center(), 0.1)
+                .unwrap()
+                .viewport,
+            main
+        );
+        assert_eq!(
+            app.sticker_preview_at(dock_cell.center(), 0.1)
+                .unwrap()
+                .viewport,
+            detached
+        );
+        assert!(app
+            .sticker_preview_at(work_cell.left_top() - Vec2::splat(1.), 0.1)
+            .is_none());
+        assert!(app
+            .sticker_preview_at(dock_cell.center() + Vec2::new(200., 0.), 0.1)
+            .is_none());
+
+        for pointer_y in [work_cell.top(), work_cell.center().y, work_cell.bottom()] {
+            let preview = sticker_bar_in_cell(work_cell, pointer_y, 22.).unwrap();
+            assert!(work_cell.contains_rect(preview));
+            assert!(preview.top() >= work_cell.top() + 24.);
+            assert_eq!(preview.height(), 22.);
+        }
+    }
     #[test]
     fn the_pointer_picks_the_grid_day_and_stays_inside_the_grid() {
         let first = NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
@@ -2422,6 +2574,7 @@ mod sticker_drop_tests {
             always_restore: true,
             started: 0.,
             saw_down: true,
+            carry: None,
         };
         a.drop_sticker(&d, Some(date));
         assert_eq!(a.data.notes[i].date, Some(date));

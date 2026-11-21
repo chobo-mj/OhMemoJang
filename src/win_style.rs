@@ -52,6 +52,27 @@ pub fn main_without_shadow(ctx: &egui::Context) {
     let _ = ctx;
 }
 
+/// Move the native sticker without entering the Windows modal window-drag loop.
+pub fn move_carried_sticker(hwnd: isize, position: egui::Pos2) {
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+        };
+        SetWindowPos(
+            hwnd as _,
+            std::ptr::null_mut(),
+            position.x.round() as i32,
+            position.y.round() as i32,
+            0,
+            0,
+            SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER,
+        );
+    }
+    #[cfg(not(windows))]
+    let _ = (hwnd, position);
+}
+
 /// Native handle of the window `ctx` draws, if it can be found.
 pub fn hwnd(ctx: &egui::Context) -> Option<isize> {
     #[cfg(windows)]

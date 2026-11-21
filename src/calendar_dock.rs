@@ -151,6 +151,11 @@ impl Dock {
     pub fn standing_pinned(&self) -> bool {
         self.standing.as_ref().is_some_and(|s| s.pinned)
     }
+    #[cfg(not(test))]
+    pub fn standing_handle(&self) -> Option<isize> {
+        self.standing.as_ref().filter(|s| s.pinned).map(|s| s.hwnd)
+    }
+
     /// The calendar is standing on the desktop (or about to).
     pub fn standing_active(&self) -> bool {
         self.standing.is_some()
@@ -1227,12 +1232,19 @@ mod standing_tests {
             (0., vec![(cell, day)]),
         );
         assert_eq!(app.schedule_target_at(cell.center(), 0.2), None);
+        assert!(app.sticker_preview_at(cell.center(), 0.2).is_none());
         app.prefs.stand_input = true;
         app.prefs.stand_drop = true;
         assert_eq!(
             app.schedule_target_at(cell.center(), 0.2),
             Some((day, true))
         );
+        assert_eq!(
+            app.sticker_preview_at(cell.center(), 0.2).unwrap().date,
+            day
+        );
+        app.prefs.stand_drop = false;
+        assert!(app.sticker_preview_at(cell.center(), 0.2).is_none());
     }
 
     #[test]

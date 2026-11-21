@@ -51,6 +51,7 @@ pub struct Window {
     native: crate::native_window::State,
     pub(crate) place: Option<Pos2>,
     swatch_drag: Option<(Vec2, Pos2, Vec2)>,
+    calendar_bar: bool,
     menu: Option<Menu>,
     /// Where the window was last seen on screen, for reopening it there.
     pub(crate) last_pos: Option<Pos2>,
@@ -147,6 +148,7 @@ impl Window {
             native: Default::default(),
             place: None,
             swatch_drag: None,
+            calendar_bar: false,
             menu: None,
             last_pos: None,
             fit_place: false,
@@ -296,7 +298,16 @@ pub struct StickerDrag {
     pub always_restore: bool,
     pub started: f64,
     pub saw_down: bool,
+    pub(crate) carry: Option<CarriedSticker>,
 }
+
+pub(crate) struct CarriedSticker {
+    hwnd: isize,
+    grab: Vec2,
+    pub(crate) pointer: Option<Pos2>,
+    pub(crate) preview: Option<crate::dragging::ScheduleHit>,
+}
+
 #[derive(Default)]
 pub struct Studio {
     raw_date_drop: Option<(usize, f64)>,
@@ -1525,11 +1536,33 @@ impl App {
         note: usize,
         mode: Mode,
         restore: bool,
-    ) {
+    ) -> bool {
         self.drag = None;
-        let origin = ctx
-            .input(|v| v.viewport().outer_rect.map(|r| r.min))
-            .unwrap_or(Pos2::ZERO);
+        let (origin, grab) = ctx.input(|i| {
+            let v = i.viewport();
+            let origin = v.outer_rect.map_or(Pos2::ZERO, |r| r.min);
+            let grab = if v.maximized == Some(true) {
+                None
+            } else {
+                v.inner_rect
+                    .zip(i.pointer.press_origin())
+                    .map(|(inner, press)| inner.min - origin + press.to_vec2())
+            };
+            (origin, grab)
+        });
+        let carry = if crate::system::left_button_down() {
+            crate::win_style::shaped_hwnd(ctx)
+                .zip(grab)
+                .map(|(hwnd, grab)| CarriedSticker {
+                    hwnd,
+                    grab: grab * ctx.pixels_per_point(),
+                    pointer: None,
+                    preview: None,
+                })
+        } else {
+            None
+        };
+        let tracked = carry.is_some();
         self.studio.drag = Some(StickerDrag {
             shift: ctx.input(|v| v.modifiers.shift) || crate::system::shift_down(),
             note,
@@ -1537,9 +1570,13 @@ impl App {
             mode,
             always_restore: restore,
             started: ctx.input(|v| v.time),
-            saw_down: false,
+            saw_down: tracked,
+            carry,
         });
+        ctx.request_repaint();
+        tracked
     }
+
     /// Watches a sticker being carried: when the button is let go over a date
     /// of a calendar window, the memo gets that date and the sticker goes
     /// back to its place and size.
@@ -1547,12 +1584,24 @@ impl App {
         let Some(mut d) = self.studio.drag.take() else {
             return;
         };
+        if !self.studio.windows.get(&d.note).is_some_and(|w| w.open) {
+            return;
+        }
         let now = ctx.input(|v| v.time);
+        let at = crate::system::cursor_pos().map(|(x, y)| Pos2::new(x as f32, y as f32));
         if crate::system::left_button_down() {
+            if let Some(carry) = &mut d.carry {
+                carry.preview = at.and_then(|p| self.sticker_preview_at(p, now));
+                if let Some(p) = at.filter(|p| Some(*p) != carry.pointer) {
+                    crate::win_style::move_carried_sticker(carry.hwnd, p - carry.grab);
+                }
+                carry.pointer = at;
+            }
             d.shift |= crate::system::shift_down();
             d.saw_down = true;
+            let interval = if d.carry.is_some() { 16 } else { 30 };
             self.studio.drag = Some(d);
-            ctx.request_repaint_after(std::time::Duration::from_millis(30));
+            ctx.request_repaint_after(std::time::Duration::from_millis(interval));
             return;
         }
         if !d.saw_down && now - d.started < 0.4 {
@@ -1561,10 +1610,14 @@ impl App {
             ctx.request_repaint_after(std::time::Duration::from_millis(30));
             return;
         }
-        let ppp = ctx.pixels_per_point().max(0.5);
-        let at =
-            crate::system::cursor_pos().map(|(x, y)| Pos2::new(x as f32 / ppp, y as f32 / ppp));
         let target = at.and_then(|p| self.schedule_target_at(p, now));
+        if target.is_none() && !d.always_restore {
+            if let (Some(carry), Some(p)) = (&d.carry, at) {
+                if Some(p) != carry.pointer {
+                    crate::win_style::move_carried_sticker(carry.hwnd, p - carry.grab);
+                }
+            }
+        }
         self.drop_sticker(&d, None);
         if let Some((date, calendar)) = target {
             self.assign_dropped_date(
@@ -1596,7 +1649,15 @@ impl App {
             }
         }
     }
-    /// The calendar date shown under a screen point (points), if a calendar
+    pub(crate) fn sticker_preview_at(
+        &self,
+        point: Pos2,
+        now: f64,
+    ) -> Option<crate::dragging::ScheduleHit> {
+        self.schedule_hit_at(point, now).filter(|hit| hit.grid)
+    }
+
+    /// The calendar date shown under a screen point (physical pixels), if a calendar
     /// drew its grid there lately.
     #[cfg(test)]
     pub fn calendar_date_at(&self, p: Pos2, now: f64) -> Option<NaiveDate> {
@@ -2045,7 +2106,25 @@ impl App {
                 let opacity = self.data.notes[i].document.opacity.clamp(0.2, 1.);
                 // On Windows the OS applies opacity and rounds the corners, so
                 // the paper is painted opaque and square (see `win_style`).
-                crate::win_style::shape_memo(ctx, opacity, mode != Mode::Editor);
+                let showing_calendar_bar = self.studio.drag.as_ref().is_some_and(|drag| {
+                    drag.note == i
+                        && drag
+                            .carry
+                            .as_ref()
+                            .is_some_and(|carry| carry.preview.is_some())
+                });
+                if std::mem::replace(&mut w.calendar_bar, showing_calendar_bar)
+                    != showing_calendar_bar
+                {
+                    // A change in layering may discard the previous GL frame.
+                    let paint_once = egui::Id::new("eframe_paint_once").with(ctx.viewport_id());
+                    ctx.data_mut(|data| data.insert_temp(paint_once, true));
+                }
+                crate::win_style::shape_memo(
+                    ctx,
+                    if showing_calendar_bar { 0. } else { opacity },
+                    mode != Mode::Editor,
+                );
                 if let Some(h) = crate::win_style::shaped_hwnd(ctx) {
                     crate::magnet::track(h, matches!(mode, Mode::Title | Mode::Swatch));
                     w.hwnd = Some(h);
@@ -2117,11 +2196,13 @@ impl App {
                                 } else if (r.drag_started() || r.drag_stopped())
                                     && self.studio.raw_date_drop != Some((i, ctx.input(|v| v.time)))
                                 {
-                                    if r.drag_started() {
-                                        // Carried over a calendar date, it files the memo there.
-                                        self.begin_sticker_drag(ctx, i, Mode::Title, false);
+                                    if r.drag_started()
+                                        && self.begin_sticker_drag(ctx, i, Mode::Title, false)
+                                    {
+                                        w.native.cancel();
+                                    } else {
+                                        w.native.start_drag(ctx);
                                     }
-                                    w.native.start_drag(ctx);
                                 }
                                 if r.secondary_clicked() {
                                     open_menu(ctx, &mut w);
@@ -2161,7 +2242,11 @@ impl App {
                                     INK,
                                 );
                             }
-                            if r.drag_started() || r.drag_stopped() {
+                            if r.drag_started()
+                                && self.begin_sticker_drag(ctx, i, Mode::Swatch, false)
+                            {
+                                w.native.cancel();
+                            } else if r.drag_started() || r.drag_stopped() {
                                 w.native.start_drag(ctx);
                             }
                             // A click (no movement) unfolds; moving the pointer
@@ -2572,6 +2657,7 @@ impl App {
             || w.place.is_some()
             || w.move_caret_to_body
             || w.swatch_drag.is_some()
+            || w.calendar_bar
             || w.applied != Some(key)
             || !w.native.idle()
             || doc.requested_selection.is_some()
@@ -2629,6 +2715,17 @@ impl App {
         // Leave Escape available for egui menu buttons, which close their own
         // menu state after this header handles the sticker shortcuts.
         if ctx.input(|v| v.key_pressed(egui::Key::Escape) && v.modifiers.is_none()) {
+            if self
+                .studio
+                .drag
+                .as_ref()
+                .is_some_and(|d| d.note == i && d.carry.is_some())
+            {
+                let drag = self.studio.drag.take().unwrap();
+                w.mode = drag.mode;
+                w.place = Some(drag.origin);
+                return;
+            }
             if ctx.memory(|m| m.any_popup_open()) {
                 ctx.memory_mut(|m| m.close_popup());
                 return;
@@ -2702,13 +2799,10 @@ impl App {
             if response.drag_started()
                 && mode == Mode::Sticker
                 && self.studio.raw_date_drop != Some((i, ctx.input(|v| v.time)))
+                && self.begin_sticker_drag(ctx, i, Mode::Sticker, false)
             {
-                // Carried by its top bar over a calendar date, the sticker
-                // takes that date (and goes back to its place); dropped
-                // anywhere else it just stays where it was moved.
-                self.begin_sticker_drag(ctx, i, Mode::Sticker, false);
-            }
-            if response.drag_started() || response.drag_stopped() {
+                w.native.cancel();
+            } else if response.drag_started() || response.drag_stopped() {
                 w.native.start_drag(ctx);
             }
             if response.secondary_clicked() {
@@ -2763,7 +2857,10 @@ impl App {
                 {
                     // Shown as the title-only sticker while it is carried; it
                     // comes back as the sticker, where it was.
-                    self.begin_sticker_drag(ctx, i, Mode::Sticker, true);
+                    if self.begin_sticker_drag(ctx, i, Mode::Sticker, true) {
+                        w.native.cancel();
+                        return;
+                    }
                     w.mode = Mode::Title;
                     // Fold it right now, before the drag begins, not on the next frame.
                     w.native.cancel();
