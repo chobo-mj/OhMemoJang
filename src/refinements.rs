@@ -306,6 +306,7 @@ impl App {
             card: false,
             folder: true,
             clear_on_miss: false,
+            calendar_band: false,
             occurrence: None,
         });
     }

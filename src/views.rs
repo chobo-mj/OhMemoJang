@@ -7,22 +7,11 @@ struct StandingScheduleDrag {
     from: NaiveDate,
 }
 
-fn sticker_bar_in_cell(cell: Rect, pointer_y: f32, height: f32) -> Option<Rect> {
-    if !cell.is_positive() {
-        return None;
-    }
-    let body = cell.shrink((cell.size().min_elem() * 0.15).min(4.));
-    let height = height.round().min(body.height());
-    let top = if body.height() >= height + 24. {
-        body.top() + 24.
-    } else {
-        body.top()
-    };
-    let y = (pointer_y - height / 2.).clamp(top, body.bottom() - height);
-    Some(Rect::from_min_size(
-        egui::pos2(body.left(), y),
-        Vec2::new(body.width(), height),
-    ))
+fn dragged_sticker_bar(cell: Rect, pointer: egui::Pos2, height: f32) -> Rect {
+    Rect::from_min_size(
+        pointer - Vec2::new(12., height * 0.5),
+        Vec2::new((cell.width() - 8.).clamp(28., 220.), height),
+    )
 }
 impl App {
     pub fn filters(&mut self, ui: &mut egui::Ui) {
@@ -817,6 +806,19 @@ impl App {
                 });
             }
         }
+        if self.cal.painting
+            && self.cal.standing_pinned()
+            && ui.input(|i| i.pointer.primary_released())
+        {
+            let ctx = ui.ctx();
+            let outside = crate::system::cursor_pos()
+                .is_some_and(|(x, y)| dragging::outside_app(ctx, egui::pos2(x as f32, y as f32)));
+            if outside {
+                if let Some(drag) = egui::DragAndDrop::take_payload::<StandingScheduleDrag>(ctx) {
+                    self.unschedule(drag.note);
+                }
+            }
+        }
         self.calendar_bands(ui, all, first, rows, col, height);
         // Let go after dragging over several days: a new sticker for them.
         if let Some((owner, a, b)) = self.range_drag {
@@ -949,31 +951,7 @@ impl App {
     }
     /// The selected day's title bar and its list of memos.
     pub fn calendar_day_detail(&mut self, ui: &mut egui::Ui) {
-        let drop_rect = ui.available_rect_before_wrap().intersect(ui.clip_rect());
-        self.targets.push(dragging::Target {
-            viewport: ui.ctx().viewport_id(),
-            layer: ui.layer_id(),
-            rect: drop_rect,
-            kind: dragging::Destination::DayList(self.day),
-        });
-        let origin = ui.ctx().input(|i| {
-            i.viewport()
-                .inner_rect
-                .map_or(Vec2::ZERO, |r| r.min.to_vec2())
-        });
-        self.day_cells.insert(
-            ui.ctx().viewport_id(),
-            (
-                ui.input(|i| i.time),
-                egui::emath::TSTransform::from_scaling(ui.ctx().pixels_per_point())
-                    * drop_rect.translate(origin),
-                self.day,
-            ),
-        );
-        self.schedule_origins.insert(
-            ui.ctx().viewport_id(),
-            (origin * ui.ctx().pixels_per_point()).to_pos2(),
-        );
+        let drop_area = ui.available_rect_before_wrap().intersect(ui.clip_rect());
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new(format!(
@@ -1022,6 +1000,34 @@ impl App {
             self.task_row_on(ui, i, Some(self.day));
         }
         ui.add_space(16.);
+        let drop_rect = Rect::from_min_max(
+            drop_area.min,
+            egui::pos2(drop_area.right(), ui.cursor().top().min(drop_area.bottom())),
+        );
+        self.targets.push(dragging::Target {
+            viewport: ui.ctx().viewport_id(),
+            layer: ui.layer_id(),
+            rect: drop_rect,
+            kind: dragging::Destination::DayList(self.day),
+        });
+        let origin = ui.ctx().input(|i| {
+            i.viewport()
+                .inner_rect
+                .map_or(Vec2::ZERO, |r| r.min.to_vec2())
+        });
+        self.day_cells.insert(
+            ui.ctx().viewport_id(),
+            (
+                ui.input(|i| i.time),
+                egui::emath::TSTransform::from_scaling(ui.ctx().pixels_per_point())
+                    * drop_rect.translate(origin),
+                self.day,
+            ),
+        );
+        self.schedule_origins.insert(
+            ui.ctx().viewport_id(),
+            (origin * ui.ctx().pixels_per_point()).to_pos2(),
+        );
         ui.label(RichText::new("🚩 이날까지 업무").strong().size(16.));
         ui::divider(ui);
         let mut cache = std::mem::take(&mut self.lists);
@@ -1199,14 +1205,26 @@ impl App {
     }
 
     fn paint_sticker_schedule_preview(&self, ui: &egui::Ui) {
-        let Some(drag) = &self.studio.drag else {
-            return;
-        };
-        let Some(carry) = &drag.carry else { return };
-        let Some((hit, pointer)) = carry.preview.zip(carry.pointer) else {
-            return;
-        };
         let ctx = ui.ctx();
+        let native = self.studio.drag.as_ref().and_then(|drag| {
+            let carry = drag.carry.as_ref()?;
+            let (hit, pointer) = carry.preview.zip(carry.pointer)?;
+            Some((drag.note, drag.shift, hit, pointer))
+        });
+        let list = || {
+            let note = self.drag.as_ref()?.list_preview()?;
+            let (x, y) = crate::system::cursor_pos()?;
+            let pointer = egui::pos2(x as f32, y as f32);
+            Some((
+                note,
+                ui.input(|i| i.modifiers.shift),
+                self.sticker_preview_at(pointer, ui.input(|i| i.time))?,
+                pointer,
+            ))
+        };
+        let Some((note_index, shift, hit, pointer)) = native.or_else(list) else {
+            return;
+        };
         if hit.viewport != ctx.viewport_id() {
             return;
         }
@@ -1227,30 +1245,30 @@ impl App {
         });
         let local = egui::emath::TSTransform::from_scaling(1. / ppp) * *cell;
         let cell = local.translate(-origin);
-        let Some(rect) =
-            sticker_bar_in_cell(cell, pointer.y / ppp - origin.y, self.prefs.cal_font + 8.5)
-        else {
+        let rect = dragged_sticker_bar(cell, pointer / ppp - origin, self.prefs.cal_font + 8.5);
+        let Some(note) = self.data.notes.get(note_index) else {
             return;
         };
-        let Some(note) = self.data.notes.get(drag.note) else {
-            return;
-        };
+        ui.painter().rect_stroke(
+            cell.shrink(2.),
+            4.,
+            Stroke::new(2.0_f32, ACCENT),
+            egui::StrokeKind::Inside,
+        );
         let title = if note.title.trim().is_empty() {
             "제목 없음"
         } else {
             &note.title
         };
-        let title = if drag.shift {
+        let title = if shift {
             format!("🚩 {title}")
         } else {
             title.to_owned()
         };
-        let painter = ctx
-            .layer_painter(egui::LayerId::new(
-                egui::Order::Foreground,
-                ui.id().with("sticker_calendar_preview"),
-            ))
-            .with_clip_rect(ui.clip_rect());
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            ui.id().with("sticker_calendar_preview"),
+        ));
         painter.rect_filled(rect, 4., note.color);
         painter.rect_stroke(
             rect,
@@ -1274,7 +1292,7 @@ impl App {
         job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - 10.);
         let galley = ui.fonts(|fonts| fonts.layout_job(job));
         painter
-            .with_clip_rect(rect.intersect(ui.clip_rect()))
+            .with_clip_rect(rect.intersect(ctx.screen_rect()))
             .galley(
                 egui::pos2(rect.left() + 5., rect.center().y - galley.size().y * 0.5),
                 galley,
@@ -1494,6 +1512,7 @@ impl App {
             if let Some(s) = self.sources.last_mut() {
                 // The grips at the ends resize; only the middle carries the memo.
                 s.rect = grips.intersect(ui.clip_rect());
+                s.calendar_band = true;
             }
         }
         if response.clicked() {
@@ -2505,7 +2524,7 @@ mod sticker_drop_tests {
     use super::*;
 
     #[test]
-    fn sticker_preview_chooses_a_grid_and_stays_inside_its_date_cell() {
+    fn sticker_preview_chooses_a_grid_and_follows_the_pointer() {
         let today = Local::now().date_naive();
         let mut app = App::sample(today);
         let main = crate::ui::main_viewport();
@@ -2540,9 +2559,10 @@ mod sticker_drop_tests {
             .is_none());
 
         for pointer_y in [work_cell.top(), work_cell.center().y, work_cell.bottom()] {
-            let preview = sticker_bar_in_cell(work_cell, pointer_y, 22.).unwrap();
-            assert!(work_cell.contains_rect(preview));
-            assert!(preview.top() >= work_cell.top() + 24.);
+            let pointer = egui::pos2(work_cell.right() - 1., pointer_y);
+            let preview = dragged_sticker_bar(work_cell, pointer, 22.);
+            assert_eq!(preview.center().y, pointer_y);
+            assert!(preview.right() > work_cell.right());
             assert_eq!(preview.height(), 22.);
         }
     }

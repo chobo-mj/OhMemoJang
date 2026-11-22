@@ -9,6 +9,7 @@ pub struct Source {
     pub card: bool,
     pub folder: bool,
     pub clear_on_miss: bool,
+    pub calendar_band: bool,
     pub occurrence: Option<NaiveDate>,
 }
 #[derive(Clone)]
@@ -45,9 +46,27 @@ pub struct Drag {
     moved: bool,
 }
 impl Drag {
+    pub fn list_preview(&self) -> Option<usize> {
+        (self.moved && self.source.clear_on_miss).then_some(self.source.note)
+    }
+
     pub fn moving_note_in(&self, viewport: ViewportId, note: usize) -> bool {
         self.moved && self.source.viewport == viewport && self.source.note == note
     }
+}
+
+/// The point is outside every visible app viewport, in desktop pixels.
+pub fn outside_app(ctx: &egui::Context, point: Pos2) -> bool {
+    let zoom = ctx.zoom_factor();
+    ctx.input(|input| {
+        !input.raw.viewports.iter().any(|(id, v)| {
+            *id != ViewportId::ROOT
+                && v.minimized != Some(true)
+                && v.outer_rect.or(v.inner_rect).is_some_and(|r| {
+                    r.contains(point / (v.native_pixels_per_point.unwrap_or(1.) * zoom))
+                })
+        })
+    })
 }
 
 impl App {
@@ -254,8 +273,8 @@ impl App {
                 calendar,
                 d.source.occurrence,
             );
-        } else if d.source.clear_on_miss {
-            self.data.notes[d.source.note].clear_schedule();
+        } else if d.source.clear_on_miss || (d.source.calendar_band && outside_app(ctx, p)) {
+            self.unschedule(d.source.note);
         }
     }
     pub fn drag_source(&mut self, ui: &egui::Ui, r: &egui::Response, note: usize, card: bool) {
@@ -267,6 +286,7 @@ impl App {
             card,
             folder: false,
             clear_on_miss: false,
+            calendar_band: false,
             occurrence: None,
         });
     }
@@ -462,6 +482,10 @@ impl App {
                                         calendar,
                                         d.source.occurrence,
                                     );
+                                } else if d.source.calendar_band
+                                    && outside_app(ctx, screen * ctx.pixels_per_point())
+                                {
+                                    self.unschedule(d.source.note);
                                 } else if d.source.clear_on_miss && !d.source.rect.contains(pos) {
                                     self.data.notes[d.source.note].clear_schedule();
                                     self.toast = "일정을 지웠습니다".into();
@@ -526,6 +550,7 @@ mod tests {
             card: false,
             folder: false,
             clear_on_miss: false,
+            calendar_band: false,
             occurrence: None,
         }
     }
@@ -583,6 +608,19 @@ mod tests {
         assert!(a.data.notes[0].date.is_none());
         assert!(!a.data.notes[0].deadline);
         assert!(a.data.notes[0].repeat.is_none());
+    }
+    #[test]
+    fn dropping_a_calendar_band_outside_keeps_the_memo() {
+        let day = NaiveDate::from_ymd_opt(2026, 11, 17).unwrap();
+        let mut a = App::sample(day);
+        let title = a.data.notes[0].title.clone();
+        let mut source = source();
+        source.calendar_band = true;
+        a.sources.push(source);
+        simulate(&mut a, Pos2::new(30., 30.), Pos2::new(500., 500.));
+        assert_eq!(a.data.notes[0].date, None);
+        assert_eq!(a.data.notes[0].title, title);
+        assert!(!a.data.notes[0].deleted);
     }
     #[test]
     fn fast_sticker_drag_uses_screen_space_calendar_cells() {
@@ -708,6 +746,7 @@ mod zoom_tests {
             card: true,
             folder: false,
             clear_on_miss: false,
+            calendar_band: false,
             occurrence: None,
         });
         let initial = a.data.notes[0].pos;
