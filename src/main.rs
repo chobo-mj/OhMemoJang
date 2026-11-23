@@ -852,6 +852,17 @@ impl App {
         self.page = page;
         self.settings = false;
     }
+
+    fn reset_workspace_interactions(&mut self) {
+        self.clear_catalog_transients();
+        self.clear_trash_listing();
+        self.content_selection.clear();
+        self.content_purge.clear();
+        self.desktop.trash_selection.clear();
+        self.desktop.trash_selected_groups.clear();
+        self.desktop.purge_target = None;
+        self.desktop.purge_save = None;
+    }
     fn main_ui(&mut self, ctx: &egui::Context) {
         let tone = self.app_tone();
         if self.sidebar {
@@ -1452,6 +1463,7 @@ impl App {
         if self.prefs != self.prefs_saved {
             // A new data folder gets a full save right away.
             if self.prefs_saved.data_path != self.prefs.data_path {
+                self.reset_workspace_interactions();
                 self.saving.rewrite();
             }
             self.prefs.save();

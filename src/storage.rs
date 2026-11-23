@@ -68,6 +68,20 @@ pub struct Saved {
     pub session: Vec<SessionRec>,
 }
 
+impl Saved {
+    fn needs_tab_id_upgrade(&self) -> bool {
+        self.pinned_content_by_tab.is_none()
+            || self.notes.iter().any(|note| {
+                let mut ids = HashSet::new();
+                note.document
+                    .tabs
+                    .iter()
+                    .chain(&note.document.trash)
+                    .any(|tab| tab.id == 0 || !ids.insert(tab.id))
+            })
+    }
+}
+
 /// An open memo window (sticker, title bar, color box or editor).
 #[derive(Serialize, Deserialize, Default, Clone, PartialEq)]
 #[serde(default)]
@@ -1096,14 +1110,7 @@ impl App {
     }
     /// Replace the workspace with saved data.
     pub fn restore(&mut self, s: &Saved) {
-        self.clear_catalog_transients();
-        self.clear_trash_listing();
-        self.content_selection.clear();
-        self.content_purge.clear();
-        self.desktop.trash_selection.clear();
-        self.desktop.trash_selected_groups.clear();
-        self.desktop.purge_target = None;
-        self.desktop.purge_save = None;
+        self.reset_workspace_interactions();
         self.data.notes = s
             .notes
             .iter()
@@ -1529,8 +1536,17 @@ impl App {
         use_image_dir(&dir);
         match read(&dir) {
             Ok(Some(saved)) => {
+                let upgrade_tabs = saved.needs_tab_id_upgrade();
                 self.restore(&saved);
                 self.mark_saved(&dir);
+                if upgrade_tabs {
+                    match backup_named(&dir, "before-tab-ids-") {
+                        Ok(_) => self.saving.rewrite(),
+                        Err(e) => {
+                            self.toast = format!("탭 ID 갱신 전에 백업하지 못했습니다: {e}");
+                        }
+                    }
+                }
                 // A newer guide replaces the old pages (saved with the next save).
                 self.refresh_guide();
             }
@@ -1855,6 +1871,62 @@ impl Saving {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_tab_ids_are_backed_up_and_written_once() {
+        let dir = temp(242);
+        let first = TabRec {
+            title: "본문".into(),
+            ..Default::default()
+        };
+        let trash = TabRec {
+            title: "삭제한 탭".into(),
+            ..Default::default()
+        };
+        let legacy = Saved {
+            notes: vec![NoteRec {
+                title: "구형 메모".into(),
+                document: DocRec {
+                    tabs: vec![first],
+                    trash: vec![trash],
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+            pinned_content: vec![(0, 0, 4, false)],
+            ..Default::default()
+        };
+        write_all(&dir, &legacy).unwrap();
+        let mut app = App::sample(NaiveDate::from_ymd_opt(2026, 11, 23).unwrap());
+        app.prefs.data_path = dir.display().to_string();
+        app.prefs.first_run_done = true;
+        app.load_or_start();
+        app.autosave(3., true);
+        let saved = read(&dir).unwrap().unwrap();
+        assert!(!saved.needs_tab_id_upgrade());
+        let doc = &saved.notes[0].document;
+        assert_ne!(doc.tabs[0].id, doc.trash[0].id);
+        assert_eq!(
+            saved.pinned_content_by_tab,
+            Some(vec![(0, doc.tabs[0].id, 4, false)])
+        );
+        let backups = dir.join("backups");
+        let old = std::fs::read_dir(&backups)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        assert!(read_db(&old.path().join(DB))
+            .unwrap()
+            .needs_tab_id_upgrade());
+        drop(app);
+        let mut again = App::sample(NaiveDate::from_ymd_opt(2026, 11, 23).unwrap());
+        again.prefs.data_path = dir.display().to_string();
+        again.prefs.first_run_done = true;
+        again.load_or_start();
+        assert_eq!(std::fs::read_dir(backups).unwrap().count(), 1);
+        assert_eq!(again.data.notes[0].document.tabs[0].id, doc.tabs[0].id);
+    }
     #[test]
     fn deadline_roundtrip_and_legacy_default() {
         let old: NoteRec = serde_json::from_str("{\"title\":\"old\"}").unwrap();
