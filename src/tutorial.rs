@@ -432,7 +432,7 @@ impl App {
         self.project_filter = None;
         self.picked.retain(|i| !set.contains(i));
         self.catalog.selected = self.catalog.selected.filter(|i| !set.contains(i));
-        self.catalog.selected_many.retain(|i| !set.contains(i));
+        self.catalog.selection.items.retain(|i| !set.contains(i));
         if set.contains(&self.active) {
             self.editor = false;
             self.sticky = false;

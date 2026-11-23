@@ -29,6 +29,7 @@ mod quit;
 mod refinements;
 mod repeat;
 mod schedule;
+mod selection;
 mod storage;
 mod studio;
 mod system;
@@ -833,6 +834,9 @@ impl App {
     /// A page chosen in the menu. It also leaves the settings, even when it
     /// is the page that was open behind them.
     fn open_page(&mut self, page: usize) {
+        if self.page != page {
+            self.catalog.selection.clear();
+        }
         self.page = page;
         self.settings = false;
     }

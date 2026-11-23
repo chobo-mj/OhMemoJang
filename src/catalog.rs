@@ -8,6 +8,10 @@ use std::ops::Range;
 
 type FindHit = (usize, Option<(usize, Range<usize>)>);
 
+fn catalog_list_focus() -> egui::Id {
+    egui::Id::new("catalog_memo_list")
+}
+
 /// One memo in the "모두 찾기" results: its title and the first body line
 /// containing the text, with the found text's byte range in each.
 #[derive(Clone, Debug)]
@@ -48,7 +52,9 @@ pub struct Catalog {
     pub assignments: BTreeMap<usize, usize>,
     pub selected: Option<usize>,
     pub selected_day: Option<NaiveDate>,
-    pub selected_many: BTreeSet<usize>,
+    pub selection: crate::selection::Selection<usize>,
+    selection_order: Vec<usize>,
+    selection_ui: bool,
     pub folder_selected: Option<usize>,
     pub find_selection: Option<(usize, usize, Range<usize>)>,
     pub query: String,
@@ -370,14 +376,20 @@ fn action(ui: &mut egui::Ui, kind: Action, tooltip: &str, selected: bool) -> egu
 
 impl App {
     pub fn catalog_ui(&mut self, ui: &mut egui::Ui) {
+        self.catalog.selection_ui = true;
         self.catalog.drag_sources.clear();
         self.catalog.drag_targets.clear();
+        let previous_tab = self.catalog.tab;
         ui::tabs(
             ui,
             &mut self.catalog.tab,
             &["폴더 보기", "전체 메모 보기", "관계 보드"],
         );
         ui.add_space(12.);
+        if self.catalog.tab != previous_tab {
+            self.catalog.selection.clear();
+            self.catalog.dragging = None;
+        }
         if self.catalog.tab == 2 {
             self.board(ui);
             return;
@@ -392,6 +404,17 @@ impl App {
             self.lists = cache;
             let ids = (*ids).clone();
             self.catalog_find_bar(ui, &ids);
+            let ids = if self.catalog.query.trim().is_empty() {
+                ids
+            } else {
+                let matches: BTreeSet<_> = self
+                    .catalog_find_hits(&ids)
+                    .into_iter()
+                    .map(|(id, _)| id)
+                    .collect();
+                ids.into_iter().filter(|id| matches.contains(id)).collect()
+            };
+            self.catalog_selection_bar(ui, ids.clone());
             let rows: Vec<_> = ids
                 .into_iter()
                 .map(|i| (i, self.data.notes[i].date))
@@ -403,6 +426,7 @@ impl App {
     }
 
     pub fn detail_workspace(&mut self, ui: &mut egui::Ui, mode: usize) {
+        self.catalog.selection_ui = false;
         self.filters(ui);
         ui.add_space(10.);
         let today = Local::now().date_naive();
@@ -609,7 +633,6 @@ impl App {
             if reset || direction != 0 {
                 let (id, location) = hits[self.catalog.find_index].clone();
                 self.catalog.selected = Some(id);
-                self.catalog.selected_many = BTreeSet::from([id]);
                 // Typing a query must keep focus in the search field. Only an
                 // explicit next/previous action moves the editor's caret.
                 self.catalog.find_selection = if direction != 0 {
@@ -701,7 +724,6 @@ impl App {
                 let next = (at as isize + direction).clamp(0, rows.len() as isize - 1) as usize;
                 self.catalog.selected = Some(rows[next].0);
                 self.catalog.selected_day = rows[next].1;
-                self.catalog.selected_many = BTreeSet::from([rows[next].0]);
             }
         }
         let height = panel_height(ui);
@@ -818,7 +840,13 @@ impl App {
                     .context_menu(|ui| self.column_choices(ui));
                 let cells = table_cells(rect, &self.catalog);
                 for (col, title) in [
-                    if trash { "복원" } else { "표시" },
+                    if trash {
+                        "복원"
+                    } else if self.catalog_selecting() {
+                        "선택"
+                    } else {
+                        "표시"
+                    },
                     "완료",
                     "제목",
                     "내용",
@@ -1013,7 +1041,12 @@ impl App {
             .unwrap_or("—".into());
         let mut done = n.done_on(day);
         let locked = n.locked;
-        let selected = self.catalog.selected == Some(i) || self.catalog.selected_many.contains(&i);
+        let memo_selecting = !trash && self.catalog_selecting();
+        let selected = if memo_selecting {
+            self.catalog.selection.items.contains(&i)
+        } else {
+            self.catalog.selected == Some(i)
+        };
         let height = match self.desktop.row_spacing {
             0 => 34.,
             2 => 52.,
@@ -1060,8 +1093,22 @@ impl App {
                         });
                     }
                 } else {
-                    let opened = self.studio.windows.get(&i).is_some_and(|w| w.open);
-                    if action(&mut c, Action::Eye, "스티커 표시 / 숨기기", opened).clicked()
+                    if memo_selecting {
+                        if self
+                            .catalog
+                            .selection
+                            .checkbox(&mut c, i, &self.catalog.selection_order)
+                        {
+                            c.ctx()
+                                .memory_mut(|m| m.request_focus(catalog_list_focus()));
+                        }
+                    } else if action(
+                        &mut c,
+                        Action::Eye,
+                        "스티커 표시 / 숨기기",
+                        self.studio.windows.get(&i).is_some_and(|w| w.open),
+                    )
+                    .clicked()
                     {
                         pending.push(TableCommand::Toggle(i));
                     }
@@ -1069,7 +1116,7 @@ impl App {
             }
             {
                 let mut c = table_cell(ui, cells[1], "done");
-                if c.add_enabled(!trash, |ui: &mut egui::Ui| {
+                if c.add_enabled(!trash && !memo_selecting, |ui: &mut egui::Ui| {
                     ui::round_check(ui, &mut done, None)
                 })
                 .on_hover_text("완료 상태")
@@ -1327,36 +1374,70 @@ impl App {
         day: Option<NaiveDate>,
         open_editor: bool,
     ) {
+        let modifiers = ui.input(|input| input.modifiers);
+        let selecting = self.catalog.selection_ui
+            && (self.catalog_selecting() || modifiers.command || modifiers.ctrl || modifiers.shift);
         if r.clicked() {
-            self.catalog_select(ui, i, day);
-            if open_editor {
-                self.open_note_on(i, day);
+            if self.catalog.selection_ui {
+                ui.ctx()
+                    .memory_mut(|m| m.request_focus(catalog_list_focus()));
+            }
+            if selecting {
+                self.catalog
+                    .selection
+                    .click(i, &self.catalog.selection_order, modifiers);
+            } else {
+                self.catalog_select(ui, i, day);
+                if open_editor {
+                    self.open_note_on(i, day);
+                }
             }
         }
-        if r.drag_started() && !self.catalog.selected_many.contains(&i) {
-            self.catalog.selected_many = BTreeSet::from([i]);
+        if !selecting {
+            self.drag_source_on(ui, r, i, day);
         }
-        let notes = if self.catalog.selected_many.contains(&i) {
-            self.catalog.selected_many.iter().copied().collect()
-        } else {
-            vec![i]
-        };
-        self.drag_source_on(ui, r, i, day);
-        self.catalog
-            .drag_sources
-            .push((r.rect.intersect(ui.clip_rect()), FolderDrag::Notes(notes)));
+        if self.catalog.selection_ui {
+            self.catalog
+                .drag_sources
+                .push((r.rect.intersect(ui.clip_rect()), FolderDrag::Notes(vec![i])));
+        }
     }
 
-    fn catalog_select(&mut self, ui: &egui::Ui, i: usize, day: Option<NaiveDate>) {
+    fn catalog_select(&mut self, _ui: &egui::Ui, i: usize, day: Option<NaiveDate>) {
         self.catalog.selected = Some(i);
         self.catalog.selected_day = day;
-        if ui.input(|i| i.modifiers.command) {
-            if !self.catalog.selected_many.remove(&i) {
-                self.catalog.selected_many.insert(i);
+    }
+
+    fn catalog_selecting(&self) -> bool {
+        self.catalog.selection_ui && self.catalog.selection.active
+    }
+
+    fn catalog_selection_bar(&mut self, ui: &mut egui::Ui, order: Vec<usize>) {
+        self.catalog.selection_order = order;
+        self.catalog
+            .selection
+            .retain_visible(&self.catalog.selection_order);
+        let ctx = ui.ctx();
+        let focus = catalog_list_focus();
+        let blocked = self.settings
+            || self.catalog.replace_open
+            || self.catalog.dragging.is_some()
+            || self.desktop.lock_target.is_some()
+            || self.desktop.reminder_target.is_some()
+            || self.desktop.purge_target.is_some()
+            || self.extra.picker.is_some()
+            || self.extra.completion_scope.is_some();
+        let focused = ctx.memory(|m| m.has_focus(focus));
+        self.catalog
+            .selection
+            .keyboard(ctx, &self.catalog.selection_order, focused, blocked);
+        ui.horizontal(|ui| {
+            let rect = egui::Rect::from_min_size(ui.cursor().min, Vec2::ZERO);
+            ui.interact(rect, focus, Sense::focusable_noninteractive());
+            if self.catalog.selection.toolbar(ui) {
+                ui.ctx().memory_mut(|m| m.request_focus(focus));
             }
-        } else {
-            self.catalog.selected_many = BTreeSet::from([i]);
-        }
+        });
     }
 
     pub(crate) fn catalog_preview(&mut self, ui: &mut egui::Ui, height: f32) {
@@ -1428,6 +1509,7 @@ impl App {
         index
     }
     fn catalog_folders(&mut self, ui: &mut egui::Ui) {
+        let previous_folder = self.catalog.folder_selected;
         ui.horizontal(|ui| {
             if ui
                 .add(egui::Button::new(RichText::new("+  새 폴더").strong()))
@@ -1453,6 +1535,43 @@ impl App {
                 },
             );
         });
+        if previous_folder != self.catalog.folder_selected {
+            self.catalog.selection.clear();
+        }
+        let index = self.catalog_folder_index();
+        let mut children: HashMap<Option<usize>, Vec<usize>> = HashMap::new();
+        for (id, folder) in self
+            .catalog
+            .folders
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| !f.deleted)
+        {
+            children.entry(folder.parent).or_default().push(id);
+        }
+        let mut order = Vec::new();
+        let mut pending: Vec<_> = children
+            .get(&None)
+            .into_iter()
+            .flatten()
+            .rev()
+            .copied()
+            .collect();
+        while let Some(folder) = pending.pop() {
+            if self.catalog.folders[folder].open {
+                order.extend(index.get(&Some(folder)).into_iter().flatten().copied());
+                pending.extend(
+                    children
+                        .get(&Some(folder))
+                        .into_iter()
+                        .flatten()
+                        .rev()
+                        .copied(),
+                );
+            }
+        }
+        order.extend(index.get(&None).into_iter().flatten().copied());
+        self.catalog_selection_bar(ui, order);
         ui.add_space(9.);
         let height = panel_height(ui);
         let rect =
@@ -1526,14 +1645,6 @@ impl App {
                             "분류하지 않은 메모",
                             Some(unfiled.len()),
                         );
-                        if !self.catalog.selected_many.is_empty() {
-                            ui::chip(
-                                ui,
-                                &format!("{}개 선택", self.catalog.selected_many.len()),
-                                ui::t(ui).accent_soft,
-                                ACCENT,
-                            );
-                        }
                     });
                     ui::card(&mut cols[0], |ui| {
                         egui::ScrollArea::vertical()
@@ -1673,6 +1784,9 @@ impl App {
                 {
                     self.catalog.folders[f].open = !self.catalog.folders[f].open;
                 } else {
+                    if self.catalog.folder_selected != Some(f) {
+                        self.catalog.selection.clear();
+                    }
                     self.catalog.folder_selected = Some(f);
                 }
             }
@@ -1738,7 +1852,11 @@ impl App {
     }
 
     fn catalog_folder_note(&mut self, ui: &mut egui::Ui, i: usize) {
-        let selected = self.catalog.selected_many.contains(&i) || self.catalog.selected == Some(i);
+        let selected = if self.catalog_selecting() {
+            self.catalog.selection.items.contains(&i)
+        } else {
+            self.catalog.selected == Some(i)
+        };
         let height = match self.desktop.row_spacing {
             0 => 28.,
             2 => 40.,
@@ -1749,15 +1867,29 @@ impl App {
             .date
             .map(|d| d.format("%m.%d").to_string())
             .unwrap_or_default();
-        let r = ui::list_row(
-            ui,
-            ui.id().with(("folder_note", i)),
-            selected,
-            Some(n.color),
-            &n.title,
-            &meta,
-            height,
-        );
+        let color = n.color;
+        let title = n.title.clone();
+        let r = ui
+            .horizontal(|ui| {
+                if self
+                    .catalog
+                    .selection
+                    .checkbox(ui, i, &self.catalog.selection_order)
+                {
+                    ui.ctx()
+                        .memory_mut(|m| m.request_focus(catalog_list_focus()));
+                }
+                ui::list_row(
+                    ui,
+                    ui.id().with(("folder_note", i)),
+                    selected,
+                    Some(color),
+                    &title,
+                    &meta,
+                    height,
+                )
+            })
+            .inner;
         self.catalog_note_response(ui, &r, i, self.data.notes[i].date, false);
         r.context_menu(|ui| {
             if ui.button("독립 편집창 열기").clicked() {
@@ -1819,7 +1951,26 @@ impl App {
                         .iter()
                         .rev()
                         .find(|(r, _)| r.contains(pos))
-                        .map(|(_, source)| (source.clone(), pos));
+                        .map(|(_, source)| {
+                            let source = match source {
+                                FolderDrag::Notes(ids)
+                                    if ids.first().is_some_and(|id| {
+                                        self.catalog.selection.items.contains(id)
+                                    }) =>
+                                {
+                                    FolderDrag::Notes(
+                                        self.catalog
+                                            .selection_order
+                                            .iter()
+                                            .filter(|id| self.catalog.selection.items.contains(id))
+                                            .copied()
+                                            .collect(),
+                                    )
+                                }
+                                _ => source.clone(),
+                            };
+                            (source, pos)
+                        });
                 }
                 egui::Event::PointerButton {
                     pos,
@@ -2210,7 +2361,6 @@ impl App {
         let (id, location) = hits[at].clone();
         self.catalog.results_open = false;
         self.catalog.selected = Some(id);
-        self.catalog.selected_many = BTreeSet::from([id]);
         self.catalog.find_selection = location.map(|(tab, range)| (id, tab, range));
         self.catalog.replace_message = format!(
             "{} / {} · {}",
