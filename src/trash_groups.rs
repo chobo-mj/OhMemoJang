@@ -7,7 +7,7 @@
 //! tab was deleted join the same group, and restoring a single memo simply
 //! brings its tab or folder back.
 use crate::*;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Group {
@@ -15,6 +15,43 @@ pub enum Group {
     Wiki(usize),
     /// A deleted catalog folder (the top one of a deleted branch).
     Folder(usize),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum TrashItem {
+    Memo(usize),
+    Tab(usize, u64),
+    Group(Group),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PurgeKind {
+    Memo,
+    Tab,
+    Selection,
+    Empty,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TrashTargets {
+    memos: Vec<(usize, bool, Option<chrono::NaiveDateTime>)>,
+    tabs: Vec<(usize, u64)>,
+}
+
+pub struct PurgeRequest {
+    pub kind: PurgeKind,
+    pub targets: TrashTargets,
+    pub opened: bool,
+}
+
+impl TrashTargets {
+    pub fn counts(&self) -> (usize, usize) {
+        (self.memos.len(), self.tabs.len())
+    }
+
+    fn is_empty(&self) -> bool {
+        self.memos.is_empty() && self.tabs.is_empty()
+    }
 }
 
 impl App {
@@ -35,6 +72,235 @@ impl App {
             Some(f) => Some(f.tab),
             None => n.wiki_tab,
         }
+    }
+
+    fn trash_targets(
+        &self,
+        items: impl IntoIterator<Item = TrashItem>,
+        include_live_memo: bool,
+        purge: bool,
+    ) -> TrashTargets {
+        let mut memo_ids = BTreeSet::new();
+        let mut tabs = BTreeSet::new();
+        for item in items {
+            match item {
+                TrashItem::Memo(i)
+                    if self
+                        .data
+                        .notes
+                        .get(i)
+                        .is_some_and(|n| !n.purged && (n.deleted || include_live_memo)) =>
+                {
+                    memo_ids.insert(i);
+                }
+                TrashItem::Tab(i, id)
+                    if self.data.notes.get(i).is_some_and(|n| {
+                        !n.purged && n.document.trash.iter().any(|tab| tab.id == id)
+                    }) =>
+                {
+                    tabs.insert((i, id));
+                }
+                _ => {}
+            }
+        }
+        if purge {
+            tabs.retain(|(i, _)| !memo_ids.contains(i));
+        }
+        let memos = memo_ids
+            .into_iter()
+            .map(|i| {
+                (
+                    i,
+                    self.data.notes[i].deleted,
+                    self.desktop.deleted_at.get(&i).copied(),
+                )
+            })
+            .collect();
+        TrashTargets {
+            memos,
+            tabs: tabs.into_iter().collect(),
+        }
+    }
+
+    pub fn all_trash_items(&self) -> impl Iterator<Item = TrashItem> + '_ {
+        self.data
+            .notes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| !n.purged)
+            .flat_map(|(i, n)| {
+                n.deleted.then_some(TrashItem::Memo(i)).into_iter().chain(
+                    n.document
+                        .trash
+                        .iter()
+                        .map(move |tab| TrashItem::Tab(i, tab.id)),
+                )
+            })
+    }
+
+    fn selected_trash_items(&self) -> (Vec<TrashItem>, Vec<Group>) {
+        let mut items = Vec::new();
+        let mut groups = Vec::new();
+        for &item in &self.desktop.trash_selection.items {
+            let TrashItem::Group(group) = item else {
+                items.push(item);
+                continue;
+            };
+            groups.push(group);
+            if let Some(memos) = self.desktop.trash_selected_groups.get(&group) {
+                items.extend(memos.iter().copied().map(TrashItem::Memo));
+            }
+        }
+        (items, groups)
+    }
+
+    pub fn request_trash_purge(&mut self, kind: PurgeKind, single: Option<TrashItem>) {
+        if self.desktop.purge_target.is_some() || self.desktop.purge_save.is_some() {
+            return;
+        }
+        let targets = match kind {
+            PurgeKind::Empty => self.trash_targets(self.all_trash_items(), false, true),
+            PurgeKind::Selection => self.trash_targets(self.selected_trash_items().0, false, true),
+            PurgeKind::Memo | PurgeKind::Tab => {
+                self.trash_targets(single, kind == PurgeKind::Memo, true)
+            }
+        };
+        if targets.is_empty() {
+            return;
+        }
+        self.desktop.purge_target = Some(PurgeRequest {
+            kind,
+            targets,
+            opened: false,
+        });
+        self.desktop.focus_dialog = true;
+    }
+
+    pub fn trash_purge_counts(&self, targets: &TrashTargets) -> String {
+        let (memos, tabs) = targets.counts();
+        match (memos, tabs) {
+            (0, tabs) => format!("본문 탭 {tabs}개"),
+            (memos, 0) => format!("메모 {memos}개"),
+            (memos, tabs) => format!("메모 {memos}개와 본문 탭 {tabs}개"),
+        }
+    }
+
+    pub fn trash_purge_title(&self, request: &PurgeRequest) -> String {
+        match request.kind {
+            PurgeKind::Memo => self
+                .data
+                .notes
+                .get(request.targets.memos[0].0)
+                .map(|n| n.title.clone())
+                .unwrap_or_default(),
+            PurgeKind::Tab => {
+                let (i, id) = request.targets.tabs[0];
+                self.data
+                    .notes
+                    .get(i)
+                    .and_then(|n| {
+                        n.document
+                            .trash
+                            .iter()
+                            .find(|tab| tab.id == id)
+                            .map(|tab| format!("{} - {}", n.title, tab.title))
+                    })
+                    .unwrap_or_default()
+            }
+            _ => self.trash_purge_counts(&request.targets),
+        }
+    }
+
+    pub fn confirm_trash_purge(&mut self, request: PurgeRequest) -> Option<String> {
+        let current = if request.kind == PurgeKind::Empty {
+            self.trash_targets(self.all_trash_items(), false, true)
+        } else {
+            let items = request
+                .targets
+                .memos
+                .iter()
+                .map(|&(i, _, _)| TrashItem::Memo(i))
+                .chain(
+                    request
+                        .targets
+                        .tabs
+                        .iter()
+                        .map(|&(i, id)| TrashItem::Tab(i, id)),
+                );
+            self.trash_targets(items, request.kind == PurgeKind::Memo, true)
+        };
+        if current != request.targets {
+            self.toast = "확인 중에 휴지통이 변경되었습니다. 대상을 다시 확인해 주세요.".into();
+            return None;
+        }
+        let description = self.trash_purge_counts(&current);
+        let memos = current.memos.into_iter().map(|(i, _, _)| i).collect();
+        self.purge_notes(&memos);
+        let mut tabs = BTreeMap::<usize, BTreeSet<_>>::new();
+        for (i, id) in current.tabs {
+            tabs.entry(i).or_default().insert(id);
+        }
+        for (i, ids) in tabs {
+            self.data.notes[i]
+                .document
+                .trash
+                .retain(|tab| !ids.contains(&tab.id));
+        }
+        self.desktop.trash_selection.clear();
+        self.desktop.trash_selected_groups.clear();
+        crate::lists::CHANGES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Some(format!("{description} 영구삭제를 완료했습니다"))
+    }
+
+    pub fn restore_trash_items(&mut self) {
+        let (items, groups) = self.selected_trash_items();
+        let targets = self.trash_targets(items, false, false);
+        if targets.is_empty() {
+            return;
+        }
+        for group in groups {
+            self.revive_group_containers(group);
+        }
+        let mut restored_memos: BTreeSet<_> = targets.memos.iter().map(|&(i, _, _)| i).collect();
+        let mut tabs = BTreeMap::<usize, BTreeSet<_>>::new();
+        for &(i, id) in &targets.tabs {
+            tabs.entry(i).or_default().insert(id);
+        }
+        for (i, ids) in tabs {
+            if self.in_bin(i) {
+                restored_memos.insert(i);
+            }
+            self.restore_trash_tabs(i, &ids);
+        }
+        for i in restored_memos {
+            self.restore_note(i);
+        }
+        self.desktop.trash_selection.clear();
+        self.desktop.trash_selected_groups.clear();
+        self.toast = format!("{} 복원을 완료했습니다", self.trash_purge_counts(&targets));
+    }
+
+    pub fn restore_trash_tabs(&mut self, i: usize, ids: &BTreeSet<u64>) -> bool {
+        let Some(n) = self.data.notes.get_mut(i).filter(|n| !n.purged) else {
+            return false;
+        };
+        let doc = &mut n.document;
+        let before = doc.tabs.len();
+        let deleted = std::mem::take(&mut doc.trash);
+        for mut tab in deleted {
+            if ids.contains(&tab.id) {
+                tab.hidden = false;
+                doc.tabs.push(tab);
+            } else {
+                doc.trash.push(tab);
+            }
+        }
+        let restored = doc.tabs.len() > before;
+        if restored {
+            doc.active = doc.tabs.len() - 1;
+            self.restore_note(i);
+        }
+        restored
     }
 
     /// The folder and the deleted folders below it, reached through deleted
@@ -80,23 +346,60 @@ impl App {
     /// Groups to show in the bin: deleted tabs and folders that still have
     /// memos in the bin.
     pub fn trash_groups(&self) -> Vec<Group> {
-        let mut groups = vec![];
-        for t in 0..self.extra.wiki_tabs.len() {
-            if self.extra.deleted_wiki_tabs.contains(&t)
-                && !self.group_members(Group::Wiki(t)).is_empty()
-            {
-                groups.push(Group::Wiki(t));
-            }
-        }
-        for (f, folder) in self.catalog.folders.iter().enumerate() {
-            let top = folder
-                .parent
-                .is_none_or(|p| self.catalog.folders.get(p).is_none_or(|p| !p.deleted));
-            if folder.deleted && top && !self.group_members(Group::Folder(f)).is_empty() {
-                groups.push(Group::Folder(f));
-            }
-        }
+        let (groups, _) = self.trash_grouped_members();
         groups
+    }
+
+    pub fn trash_grouped_members(&self) -> (Vec<Group>, HashMap<Group, Vec<usize>>) {
+        let folders = &self.catalog.folders;
+        let mut roots = vec![None; folders.len()];
+        for (f, folder) in folders
+            .iter()
+            .enumerate()
+            .filter(|(_, folder)| folder.deleted)
+        {
+            let mut root = f;
+            let mut parent = folder.parent;
+            for _ in 0..folders.len() {
+                let Some(p) = parent.filter(|&p| folders.get(p).is_some_and(|x| x.deleted)) else {
+                    roots[f] = Some(root);
+                    break;
+                };
+                root = p;
+                parent = folders[p].parent;
+            }
+        }
+        let mut members = HashMap::<Group, Vec<_>>::new();
+        for (i, _) in self
+            .data
+            .notes
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| self.in_bin(*i))
+        {
+            if let Some(t) = self
+                .wiki_tab_of(i)
+                .filter(|t| self.extra.deleted_wiki_tabs.contains(t))
+            {
+                members.entry(Group::Wiki(t)).or_default().push(i);
+            }
+            if let Some(root) = self
+                .catalog
+                .assignments
+                .get(&i)
+                .and_then(|&f| roots.get(f))
+                .copied()
+                .flatten()
+            {
+                members.entry(Group::Folder(root)).or_default().push(i);
+            }
+        }
+        let groups = (0..self.extra.wiki_tabs.len())
+            .map(Group::Wiki)
+            .chain((0..folders.len()).map(Group::Folder))
+            .filter(|g| members.contains_key(g))
+            .collect();
+        (groups, members)
     }
 
     pub fn group_name(&self, g: Group) -> String {
@@ -144,16 +447,7 @@ impl App {
     }
 
     fn send_to_bin(&mut self, i: usize) {
-        if self.data.notes[i].deleted || self.data.notes[i].purged {
-            return;
-        }
-        self.data.notes[i].deleted = true;
-        self.desktop
-            .deleted_at
-            .insert(i, Local::now().naive_local());
-        if let Some(w) = self.studio.windows.get_mut(&i) {
-            w.open = false;
-        }
+        self.trash_note(i);
     }
 
     /// Delete a wiki tab together with every memo in it (also those in its
@@ -237,6 +531,15 @@ impl App {
     pub fn restore_group(&mut self, g: Group) {
         let members = self.group_members(g);
         let count = members.len();
+        self.revive_group_containers(g);
+        for i in members {
+            self.restore_note(i);
+        }
+        let name = self.group_name(g);
+        self.toast = format!("‘{name}/’ 와 메모 {count}개를 복구했습니다");
+    }
+
+    fn revive_group_containers(&mut self, g: Group) {
         match g {
             Group::Wiki(t) => {
                 self.extra.deleted_wiki_tabs.remove(&t);
@@ -247,17 +550,86 @@ impl App {
                 }
             }
         }
-        for i in members {
-            self.restore_note(i);
-        }
-        let name = self.group_name(g);
-        self.toast = format!("‘{name}/’ 와 메모 {count}개를 복구했습니다");
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restoring_a_batch_preserves_tab_order_and_revives_its_memo() {
+        let mut a = app();
+        let mut tabs = Vec::new();
+        for name in ["첫 번째", "두 번째", "세 번째"] {
+            let doc = &mut a.data.notes[0].document;
+            doc.add_tab();
+            doc.tabs[doc.active].title = name.into();
+            doc.delete_tab(doc.active);
+            tabs.push(doc.trash.last().unwrap().id);
+        }
+        a.trash_note(0);
+        a.desktop
+            .trash_selection
+            .items
+            .extend([TrashItem::Tab(0, tabs[2]), TrashItem::Tab(0, tabs[0])]);
+        a.restore_trash_items();
+        let n = &a.data.notes[0];
+        assert!(!n.deleted);
+        assert_eq!(n.document.trash[0].id, tabs[1]);
+        assert_eq!(n.document.tabs[1].title, "첫 번째");
+        assert_eq!(n.document.tabs[2].title, "세 번째");
+    }
+
+    #[test]
+    fn an_empty_request_covers_hidden_groups_and_live_owners_tabs() {
+        let mut a = app();
+        a.trash_note(0);
+        a.trash_note(1);
+        let doc = &mut a.data.notes[2].document;
+        doc.delete_tab(0);
+        a.request_trash_purge(PurgeKind::Empty, None);
+        let request = a.desktop.purge_target.take().unwrap();
+        assert_eq!(request.targets.counts(), (2, 1));
+        assert!(a.confirm_trash_purge(request).is_some());
+        assert!(a.data.notes[0].purged && a.data.notes[1].purged);
+        assert!(!a.data.notes[2].purged && a.data.notes[2].document.trash.is_empty());
+        assert_eq!(a.all_trash_items().count(), 0);
+    }
+
+    #[test]
+    fn changes_to_an_empty_request_require_new_confirmation() {
+        let mut a = app();
+        a.trash_note(0);
+        a.request_trash_purge(PurgeKind::Empty, None);
+        let request = a.desktop.purge_target.take().unwrap();
+        a.trash_note(1);
+        assert!(a.confirm_trash_purge(request).is_none());
+        assert!(!a.data.notes[0].purged && !a.data.notes[1].purged);
+    }
+
+    #[test]
+    fn selected_groups_deduplicate_memos_and_their_tabs() {
+        let mut a = app();
+        a.trash_note(0);
+        a.trash_note(1);
+        let doc = &mut a.data.notes[0].document;
+        doc.delete_tab(0);
+        let id = doc.trash[0].id;
+        let group = Group::Folder(0);
+        a.desktop.trash_selected_groups.insert(group, vec![0, 1]);
+        a.desktop.trash_selection.items.extend([
+            TrashItem::Group(group),
+            TrashItem::Memo(0),
+            TrashItem::Tab(0, id),
+        ]);
+        a.request_trash_purge(PurgeKind::Selection, None);
+        let request = a.desktop.purge_target.take().unwrap();
+        assert_eq!(request.targets.counts(), (2, 0));
+        a.restore_note(1);
+        assert!(a.confirm_trash_purge(request).is_none());
+        assert!(a.data.notes[0].deleted && !a.data.notes[0].purged);
+    }
 
     fn app() -> App {
         let mut a = App::sample(NaiveDate::from_ymd_opt(2026, 11, 9).unwrap());

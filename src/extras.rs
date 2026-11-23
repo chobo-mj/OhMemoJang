@@ -1108,6 +1108,7 @@ impl App {
 impl App {
     pub fn utilities(&mut self, ui: &mut egui::Ui) {
         let top = ui.cursor().min;
+        let previous_tab = self.extra.utilities_tab;
         ui::tabs(
             ui,
             &mut self.extra.utilities_tab,
@@ -1120,6 +1121,10 @@ impl App {
             ],
         );
         ui.add_space(12.);
+        if self.extra.utilities_tab != previous_tab {
+            self.desktop.trash_selection.clear();
+            self.desktop.trash_selected_groups.clear();
+        }
         match self.extra.utilities_tab {
             0 => self.journal(ui),
             1 => self.content_tables(ui),

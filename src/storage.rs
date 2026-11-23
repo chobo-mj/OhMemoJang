@@ -1070,6 +1070,11 @@ impl App {
     }
     /// Replace the workspace with saved data.
     pub fn restore(&mut self, s: &Saved) {
+        self.clear_trash_listing();
+        self.desktop.trash_selection.clear();
+        self.desktop.trash_selected_groups.clear();
+        self.desktop.purge_target = None;
+        self.desktop.purge_save = None;
         self.data.notes = s
             .notes
             .iter()

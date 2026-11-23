@@ -1,5 +1,5 @@
 //! Folder organization, detailed note lists and the in-memory recycle bin.
-use crate::trash_groups::Group;
+use crate::trash_groups::{Group, PurgeKind, TrashItem};
 use crate::*;
 use egui::{Sense, Stroke};
 use std::collections::HashMap;
@@ -83,9 +83,9 @@ pub struct Catalog {
     /// Memos the replace dialog works on, kept while nothing it depends on
     /// changed (the dialog is drawn every frame; the search reads every memo).
     replace_cache: Option<(ReplaceKey, Vec<usize>)>,
-    purge_tab: Option<(usize, usize)>,
     /// Groups of the recycle bin that are opened.
     trash_open: std::collections::HashSet<Group>,
+    trash_listing: Option<TrashListingCache>,
     drag_sources: Vec<(egui::Rect, FolderDrag)>,
     drag_targets: Vec<(egui::Rect, Option<usize>)>,
     dragging: Option<(FolderDrag, egui::Pos2)>,
@@ -143,7 +143,7 @@ const TITLE_MIN_WIDTH: f32 = 80.;
 const TITLE_MAX_WIDTH: f32 = 800.;
 const BODY_MIN_WIDTH: f32 = 60.;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Hash)]
 enum TableRow {
     Note(usize, Option<NaiveDate>),
     Tab(usize, usize),
@@ -151,6 +151,20 @@ enum TableRow {
     Group(Group),
     /// A memo listed below its group.
     Child(usize, Group),
+}
+
+struct TrashListing {
+    rows: Vec<TableRow>,
+    all: Vec<TrashItem>,
+    leaves: std::rc::Rc<[TrashItem]>,
+    members: std::rc::Rc<HashMap<Group, Vec<usize>>>,
+    count: usize,
+}
+
+struct TrashListingCache {
+    revision: u64,
+    open: std::collections::HashSet<Group>,
+    listing: std::rc::Rc<TrashListing>,
 }
 
 enum TableCommand {
@@ -161,10 +175,38 @@ enum TableCommand {
     Trash(usize),
     Restore(usize),
     Purge(usize),
-    RestoreTab(usize, usize),
-    PurgeTab(usize, usize),
+    RestoreTab(usize, u64),
+    PurgeTab(usize, u64),
     RestoreGroup(Group),
     ToggleGroup(Group),
+    RestoreSelected,
+    PurgeSelected,
+}
+
+fn trash_list_focus() -> egui::Id {
+    egui::Id::new("trash_list_focus")
+}
+
+fn trash_selection_menu(ui: &mut egui::Ui, pending: &mut Vec<TableCommand>, selected: bool) {
+    for (title, command) in [
+        ("선택 복원", TableCommand::RestoreSelected),
+        ("선택 영구삭제…", TableCommand::PurgeSelected),
+    ] {
+        if ui.add_enabled(selected, egui::Button::new(title)).clicked() {
+            pending.push(command);
+            ui.close_menu();
+        }
+    }
+}
+
+impl TableRow {
+    fn trash_item(self, app: &App) -> TrashItem {
+        match self {
+            Self::Note(i, _) | Self::Child(i, _) => TrashItem::Memo(i),
+            Self::Group(g) => TrashItem::Group(g),
+            Self::Tab(i, t) => TrashItem::Tab(i, app.data.notes[i].document.trash[t].id),
+        }
+    }
 }
 
 fn column_shown(cat: &Catalog, column: usize) -> bool {
@@ -840,7 +882,9 @@ impl App {
                     .context_menu(|ui| self.column_choices(ui));
                 let cells = table_cells(rect, &self.catalog);
                 for (col, title) in [
-                    if trash {
+                    if trash && self.desktop.trash_selection.active {
+                        "선택"
+                    } else if trash {
                         "복원"
                     } else if self.catalog_selecting() {
                         "선택"
@@ -907,12 +951,28 @@ impl App {
                 }
             });
         let mut pending = vec![];
-        let body = egui::ScrollArea::both()
+        let scroll = egui::ScrollArea::both()
             .id_salt(("detail_table_body", trash))
             .horizontal_scroll_offset(offset)
             .auto_shrink([false, false])
-            .max_height((height - 44.).max(100.))
-            .show(ui, |ui| {
+            .max_height((height - 44.).max(100.));
+        let body = if trash {
+            scroll.show_rows(ui, self.catalog_row_height(), rows.len(), |ui, range| {
+                ui.set_min_width(self.catalog.table_width.max(TABLE_WIDTH));
+                for at in range {
+                    let row = rows[at];
+                    let item = row.trash_item(self);
+                    ui.push_id((row, item), |ui| {
+                        if let TableRow::Group(g) = row {
+                            self.catalog_group_row(ui, g, &mut pending);
+                        } else {
+                            self.catalog_table_row(ui, row, at, false, true, &mut pending);
+                        }
+                    });
+                }
+            })
+        } else {
+            scroll.show(ui, |ui| {
                 ui.set_min_width(self.catalog.table_width.max(TABLE_WIDTH));
                 if rows.is_empty() {
                     ui.add_space(24.);
@@ -937,26 +997,14 @@ impl App {
                             previous = day;
                         }
                     }
-                    let (key, note) = match row {
-                        TableRow::Note(i, d) => (
-                            (0, i, d.map(|d| d.num_days_from_ce()).unwrap_or(0)),
-                            Some(i),
-                        ),
-                        TableRow::Tab(i, t) => ((1, i, t as i32), Some(i)),
-                        TableRow::Group(Group::Wiki(t)) => ((2, t, 0), None),
-                        TableRow::Group(Group::Folder(f)) => ((3, f, 0), None),
-                        TableRow::Child(i, _) => ((4, i, 0), Some(i)),
-                    };
-                    let selected = note.is_some() && self.catalog.selected == note;
-                    crate::lists::lazy_row(ui, key, 36., selected, |ui| {
-                        if let TableRow::Group(g) = row {
-                            self.catalog_group_row(ui, g, &mut pending);
-                        } else {
-                            self.catalog_table_row(ui, row, at, open_editor, trash, &mut pending)
-                        }
+                    let selected =
+                        matches!(row, TableRow::Note(i, _) if self.catalog.selected == Some(i));
+                    crate::lists::lazy_row(ui, row, 36., selected, |ui| {
+                        self.catalog_table_row(ui, row, at, open_editor, false, &mut pending)
                     });
                 }
-            });
+            })
+        };
         self.catalog.table_offset = body.state.offset.x;
         self.catalog.table_viewport_width = body.inner_rect.width();
         for command in pending {
@@ -974,14 +1022,26 @@ impl App {
                 TableCommand::RestoreTab(i, t) => {
                     self.catalog_restore_tab(i, t);
                 }
-                TableCommand::PurgeTab(i, t) => self.catalog.purge_tab = Some((i, t)),
+                TableCommand::PurgeTab(i, t) => {
+                    self.request_trash_purge(PurgeKind::Tab, Some(TrashItem::Tab(i, t)));
+                }
                 TableCommand::RestoreGroup(g) => self.restore_group(g),
                 TableCommand::ToggleGroup(g) => {
                     if !self.catalog.trash_open.remove(&g) {
                         self.catalog.trash_open.insert(g);
                     }
                 }
+                TableCommand::RestoreSelected => self.restore_trash_items(),
+                TableCommand::PurgeSelected => self.request_trash_purge(PurgeKind::Selection, None),
             }
+        }
+    }
+
+    fn catalog_row_height(&self) -> f32 {
+        match self.desktop.row_spacing {
+            0 => 34.,
+            2 => 52.,
+            _ => 42.,
         }
     }
 
@@ -1042,21 +1102,30 @@ impl App {
         let mut done = n.done_on(day);
         let locked = n.locked;
         let memo_selecting = !trash && self.catalog_selecting();
-        let selected = if memo_selecting {
+        let trash_item = trash.then(|| row.trash_item(self));
+        let trash_selecting = trash && self.desktop.trash_selection.active;
+        let selected = if let Some(item) = trash_item {
+            if trash_selecting {
+                self.desktop.trash_selection.items.contains(&item)
+            } else {
+                self.desktop.trash_cursor == Some(item)
+            }
+        } else if memo_selecting {
             self.catalog.selection.items.contains(&i)
         } else {
             self.catalog.selected == Some(i)
         };
-        let height = match self.desktop.row_spacing {
-            0 => 34.,
-            2 => 52.,
-            _ => 42.,
-        };
-        ui.push_id(("table_row", i, day, tab, trash), |ui| {
+        let height = self.catalog_row_height();
+        ui.push_id(("table_row", i, day, trash_item), |ui| {
             let (rect, response) = ui.allocate_exact_size(
                 Vec2::new(self.catalog.table_width.max(TABLE_WIDTH), height),
-                Sense::hover(),
+                if trash {
+                    Sense::click()
+                } else {
+                    Sense::hover()
+                },
             );
+            let mut trash_clicked = trash && response.clicked();
             let fill = if selected {
                 ui.visuals().selection.bg_fill
             } else if ui.rect_contains_pointer(rect) {
@@ -1081,12 +1150,21 @@ impl App {
             let cells = table_cells(rect, &self.catalog);
             {
                 let mut c = table_cell(ui, cells[0], "eye");
-                if trash {
-                    if action(&mut c, Action::Restore, "복원하기", false)
+                if let Some(item) = trash_item {
+                    if trash_selecting {
+                        if self.desktop.trash_selection.checkbox(
+                            &mut c,
+                            item,
+                            &self.desktop.trash_leaf_order,
+                        ) {
+                            c.ctx().memory_mut(|m| m.request_focus(trash_list_focus()));
+                            trash_clicked = false;
+                        }
+                    } else if action(&mut c, Action::Restore, "복원하기", false)
                         .on_hover_text("복원하기")
                         .clicked()
                     {
-                        pending.push(if let Some(t) = tab {
+                        pending.push(if let TrashItem::Tab(_, t) = item {
                             TableCommand::RestoreTab(i, t)
                         } else {
                             TableCommand::Restore(i)
@@ -1141,12 +1219,18 @@ impl App {
                 if tab.is_none() && !trash {
                     self.catalog_note_response(&mut c, &r, i, day, open_editor);
                 } else if r.clicked() {
-                    self.catalog_select(&c, i, day);
+                    trash_clicked = true;
                 }
                 if trash {
                     r.context_menu(|ui| {
-                        if ui.button("복구").clicked() {
-                            pending.push(if let Some(t) = tab {
+                        if trash_selecting {
+                            trash_selection_menu(
+                                ui,
+                                pending,
+                                !self.desktop.trash_selection.items.is_empty(),
+                            );
+                        } else if ui.button("복구").clicked() {
+                            pending.push(if let Some(TrashItem::Tab(_, t)) = trash_item {
                                 TableCommand::RestoreTab(i, t)
                             } else {
                                 TableCommand::Restore(i)
@@ -1171,7 +1255,7 @@ impl App {
                 if tab.is_none() && !trash {
                     self.catalog_note_response(&mut c, &r, i, day, open_editor);
                 } else if r.clicked() {
-                    self.catalog_select(&c, i, day);
+                    trash_clicked = true;
                 }
             }
             {
@@ -1259,19 +1343,20 @@ impl App {
             }
             {
                 let mut c = table_cell(ui, cells[COLUMN_DELETE], "delete");
-                if action(
-                    &mut c,
-                    Action::Trash,
-                    if trash {
-                        "영구 삭제"
-                    } else {
-                        "휴지통으로 이동"
-                    },
-                    false,
-                )
-                .clicked()
+                if !trash_selecting
+                    && action(
+                        &mut c,
+                        Action::Trash,
+                        if trash {
+                            "영구 삭제"
+                        } else {
+                            "휴지통으로 이동"
+                        },
+                        false,
+                    )
+                    .clicked()
                 {
-                    pending.push(if let Some(t) = tab {
+                    pending.push(if let Some(TrashItem::Tab(_, t)) = trash_item {
                         TableCommand::PurgeTab(i, t)
                     } else if trash {
                         TableCommand::Purge(i)
@@ -1279,6 +1364,9 @@ impl App {
                         TableCommand::Trash(i)
                     });
                 }
+            }
+            if let Some(item) = trash_item.filter(|_| trash_clicked) {
+                self.catalog_trash_click(ui, item);
             }
             if selected
                 && !ui.ctx().wants_keyboard_input()
@@ -1292,7 +1380,6 @@ impl App {
                 );
                 ui.scroll_to_rect(target, Some(egui::Align::Center));
             }
-            let _ = response;
         });
     }
 
@@ -1300,61 +1387,88 @@ impl App {
     /// to list its memos. Restoring it restores everything in it.
     fn catalog_group_row(&mut self, ui: &mut egui::Ui, g: Group, pending: &mut Vec<TableCommand>) {
         let name = self.group_name(g);
-        let count = self.group_members(g).len();
+        let count = self.desktop.trash_group_members.get(&g).map_or(0, Vec::len);
         let open = self.catalog.trash_open.contains(&g);
-        let height = match self.desktop.row_spacing {
-            0 => 34.,
-            2 => 52.,
-            _ => 42.,
-        };
+        let item = TrashItem::Group(g);
+        let selecting = self.desktop.trash_selection.active;
+        let selected = self.desktop.trash_selection.items.contains(&item);
+        let height = self.catalog_row_height();
         ui.push_id(("trash_group", g), |ui| {
             let (rect, row) = ui.allocate_exact_size(
                 Vec2::new(self.catalog.table_width.max(TABLE_WIDTH), height),
                 Sense::click(),
             );
-            let fill = if row.hovered() {
+            let fill = if selected {
+                ui.visuals().selection.bg_fill
+            } else if row.hovered() {
                 ui::t(ui).hover.gamma_multiply(0.6)
             } else {
                 ui::t(ui).hover.gamma_multiply(0.3)
             };
             ui.painter().rect_filled(rect, 6., fill);
             let cells = table_cells(rect, &self.catalog);
-            let mut restore = false;
-            let mut menu = |ui: &mut egui::Ui| {
-                if ui.button("복구").clicked() {
-                    restore = true;
+            let mut group_clicked = row.clicked();
+            row.context_menu(|ui| {
+                if selecting {
+                    trash_selection_menu(
+                        ui,
+                        pending,
+                        !self.desktop.trash_selection.items.is_empty(),
+                    );
+                } else if ui.button("복구").clicked() {
+                    pending.push(TableCommand::RestoreGroup(g));
                     ui.close_menu();
                 }
-            };
-            row.context_menu(&mut menu);
-            if row.clicked() {
-                pending.push(TableCommand::ToggleGroup(g));
-            }
+            });
             {
                 let mut c = table_cell(ui, cells[0], "group_restore");
-                if action(&mut c, Action::Restore, "탭·폴더와 메모 전체 복구", false)
+                if selecting {
+                    let mut checked = selected;
+                    if c.checkbox(&mut checked, "")
+                        .on_hover_text("묶음 전체 선택")
+                        .changed()
+                    {
+                        group_clicked = true;
+                    }
+                } else if action(&mut c, Action::Restore, "탭·폴더와 메모 전체 복구", false)
                     .on_hover_text("탭·폴더와 메모 전체 복구")
                     .clicked()
                 {
                     pending.push(TableCommand::RestoreGroup(g));
+                    return;
                 }
             }
             {
                 let mut c = table_cell(ui, cells[2], "group_title");
-                let r = c.add(
-                    egui::Label::new(
-                        RichText::new(format!("{} {name}/", if open { "▾" } else { "▸" })).strong(),
-                    )
-                    .truncate()
-                    .sense(Sense::click()),
-                );
-                if r.clicked() {
-                    pending.push(TableCommand::ToggleGroup(g));
-                }
-                r.context_menu(&mut menu);
-            }
-            if restore {
-                pending.push(TableCommand::RestoreGroup(g));
+                c.horizontal(|ui| {
+                    if ui
+                        .small_button(if open { "▾" } else { "▸" })
+                        .on_hover_text(if open { "접기" } else { "펼치기" })
+                        .clicked()
+                    {
+                        group_clicked = false;
+                        ui.memory_mut(|m| m.request_focus(trash_list_focus()));
+                        pending.push(TableCommand::ToggleGroup(g));
+                    }
+                    let title = ui.add(
+                        egui::Label::new(RichText::new(format!("{name}/")).strong())
+                            .truncate()
+                            .sense(Sense::click()),
+                    );
+                    group_clicked |= title.clicked();
+                    title.context_menu(|ui| {
+                        if selecting {
+                            trash_selection_menu(
+                                ui,
+                                pending,
+                                !self.desktop.trash_selection.items.is_empty(),
+                            );
+                        } else if ui.button("복구").clicked() {
+                            pending.push(TableCommand::RestoreGroup(g));
+                            ui.close_menu();
+                        }
+                    });
+                });
             }
             {
                 let mut c = table_cell(ui, cells[3], "group_count");
@@ -1363,7 +1477,51 @@ impl App {
                         .truncate(),
                 );
             }
+            if group_clicked {
+                if self.catalog_trash_click(ui, item) {
+                    return;
+                }
+                pending.push(TableCommand::ToggleGroup(g));
+            }
         });
+    }
+
+    fn catalog_trash_click(&mut self, ui: &egui::Ui, item: TrashItem) -> bool {
+        if self.desktop.purge_target.is_some() {
+            return true;
+        }
+        ui.memory_mut(|m| m.request_focus(trash_list_focus()));
+        let modifiers = ui.input(|input| input.modifiers);
+        if self.desktop.trash_selection.active
+            || modifiers.ctrl
+            || modifiers.command
+            || modifiers.shift
+        {
+            if let TrashItem::Group(group) = item {
+                // Choosing a group explicitly captures its members; it never
+                // becomes a range anchor for the ordinary memo/tab rows.
+                if !self.desktop.trash_selection.items.remove(&item) {
+                    self.desktop.trash_selection.active = true;
+                    self.desktop.trash_selection.items.insert(item);
+                    let members = self
+                        .desktop
+                        .trash_group_members
+                        .get(&group)
+                        .cloned()
+                        .unwrap_or_default();
+                    self.desktop.trash_selected_groups.insert(group, members);
+                } else {
+                    self.desktop.trash_selected_groups.remove(&group);
+                }
+            } else {
+                self.desktop
+                    .trash_selection
+                    .click(item, &self.desktop.trash_leaf_order, modifiers);
+            }
+            return true;
+        }
+        self.desktop.trash_cursor = Some(item);
+        false
     }
 
     fn catalog_note_response(
@@ -1408,7 +1566,7 @@ impl App {
         self.catalog.selected_day = day;
     }
 
-    fn catalog_selecting(&self) -> bool {
+    pub fn catalog_selecting(&self) -> bool {
         self.catalog.selection_ui && self.catalog.selection.active
     }
 
@@ -2020,56 +2178,136 @@ impl App {
     }
 
     pub fn trash_ui(&mut self, ui: &mut egui::Ui) {
-        ui::hint(
-            ui,
-            "삭제한 메모와 본문 탭을 복원하거나 영구 삭제합니다 · 삭제한 메모는 설정의 보관 기간이 지나면 자동으로 지워집니다",
-        );
-        ui.add_space(10.);
-        let groups = self.trash_groups();
-        let grouped: std::collections::HashSet<usize> =
-            groups.iter().flat_map(|&g| self.group_members(g)).collect();
-        let mut group_rows = vec![];
-        for &g in &groups {
-            group_rows.push(TableRow::Group(g));
-            if self.catalog.trash_open.contains(&g) {
-                group_rows.extend(
-                    self.group_members(g)
-                        .into_iter()
-                        .map(|i| TableRow::Child(i, g)),
-                );
+        let blocked = self.desktop.purge_target.is_some() || self.desktop.purge_save.is_some();
+        ui.add_enabled_ui(!blocked, |ui| self.catalog_trash_ui(ui, blocked));
+    }
+
+    pub fn clear_trash_listing(&mut self) {
+        self.catalog.trash_listing = None;
+        self.desktop.trash_cursor = None;
+    }
+
+    fn trash_listing(&mut self) -> std::rc::Rc<TrashListing> {
+        let revision = self.data.notes.revision();
+        if let Some(cached) = &self.catalog.trash_listing {
+            if cached.revision == revision && cached.open == self.catalog.trash_open {
+                return cached.listing.clone();
             }
         }
-        let flat: Vec<_> = self
-            .data
-            .notes
-            .iter()
-            .enumerate()
-            .filter(|(i, n)| n.deleted && !n.purged && !grouped.contains(i))
-            .map(|(i, n)| TableRow::Note(i, n.date))
-            .collect();
-        let notes: Vec<_> = group_rows.into_iter().chain(flat).collect();
-        let note_count = self
-            .data
-            .notes
-            .iter()
-            .filter(|n| n.deleted && !n.purged)
-            .count();
-        let tabs: Vec<_> = self
+        let (groups, members) = self.trash_grouped_members();
+        let grouped: std::collections::HashSet<usize> =
+            members.values().flatten().copied().collect();
+        let mut rows = vec![];
+        for g in groups {
+            rows.push(TableRow::Group(g));
+            if self.catalog.trash_open.contains(&g) {
+                rows.extend(members[&g].iter().map(|&i| TableRow::Child(i, g)));
+            }
+        }
+        let mut count = 0;
+        let mut tabs = Vec::new();
+        for (i, n) in self
             .data
             .notes
             .iter()
             .enumerate()
             .filter(|(_, n)| !n.purged)
-            .flat_map(|(i, n)| (0..n.document.trash.len()).map(move |t| TableRow::Tab(i, t)))
+        {
+            if n.deleted {
+                count += 1;
+                if !grouped.contains(&i) {
+                    rows.push(TableRow::Note(i, n.date));
+                }
+            }
+            tabs.extend((0..n.document.trash.len()).map(|t| TableRow::Tab(i, t)));
+        }
+        count += tabs.len();
+        rows.extend(tabs);
+        let all: Vec<_> = rows.iter().map(|row| row.trash_item(self)).collect();
+        let mut seen = std::collections::HashSet::new();
+        let leaves = all
+            .iter()
+            .copied()
+            .filter(|item| !matches!(item, TrashItem::Group(_)) && seen.insert(*item))
             .collect();
-        ui::section_header(
+        let listing = std::rc::Rc::new(TrashListing {
+            rows,
+            all,
+            leaves,
+            members: std::rc::Rc::new(members),
+            count,
+        });
+        self.catalog.trash_listing = Some(TrashListingCache {
+            revision,
+            open: self.catalog.trash_open.clone(),
+            listing: listing.clone(),
+        });
+        listing
+    }
+
+    fn catalog_trash_ui(&mut self, ui: &mut egui::Ui, blocked: bool) {
+        ui::hint(
             ui,
-            crate::icons::Icon::Trash,
-            "휴지통",
-            Some(note_count + tabs.len()),
+            "삭제한 메모와 본문 탭을 복원하거나 영구 삭제합니다 · 삭제한 메모는 설정의 보관 기간이 지나면 자동으로 지워집니다",
         );
-        let rows: Vec<_> = notes.into_iter().chain(tabs).collect();
-        if rows.is_empty() {
+        ui.add_space(10.);
+        let listing = self.trash_listing();
+        let count = listing.count;
+        if !std::rc::Rc::ptr_eq(&self.desktop.trash_group_members, &listing.members) {
+            self.desktop.trash_group_members = listing.members.clone();
+            self.desktop.trash_leaf_order = listing.leaves.clone();
+            self.desktop.trash_selection.retain_visible(&listing.all);
+        }
+        self.desktop.trash_selection.keyboard(
+            ui.ctx(),
+            &self.desktop.trash_leaf_order,
+            ui.memory(|m| m.has_focus(trash_list_focus())),
+            blocked,
+        );
+        let selected = &self.desktop.trash_selection.items;
+        self.desktop
+            .trash_selected_groups
+            .retain(|group, _| selected.contains(&TrashItem::Group(*group)));
+        ui::section_header(ui, crate::icons::Icon::Trash, "휴지통", Some(count));
+        let mut restore = false;
+        ui.horizontal_wrapped(|ui| {
+            if self.desktop.trash_selection.toolbar(ui) {
+                ui.memory_mut(|m| m.request_focus(trash_list_focus()));
+                self.desktop.trash_selected_groups.clear();
+            }
+            if self.desktop.trash_selection.active {
+                let selected = !self.desktop.trash_selection.items.is_empty();
+                if ui
+                    .add_enabled(selected, egui::Button::new("선택 복원"))
+                    .on_hover_text("삭제된 본문 탭을 복원하면 원본 메모도 복원될 수 있습니다")
+                    .clicked()
+                {
+                    restore = true;
+                }
+                if ui
+                    .add_enabled(selected, egui::Button::new("선택 영구삭제…"))
+                    .clicked()
+                {
+                    self.request_trash_purge(PurgeKind::Selection, None);
+                }
+            }
+            if ui
+                .add_enabled(count != 0, egui::Button::new("휴지통 비우기…"))
+                .clicked()
+            {
+                self.request_trash_purge(PurgeKind::Empty, None);
+            }
+        });
+        if self.desktop.trash_selection.active {
+            ui::hint(
+                ui,
+                "묶음을 직접 선택하면 해당 묶음에 있는 메모가 포함됩니다",
+            );
+        }
+        if self.desktop.purge_save.is_some() {
+            ui::hint(ui, "영구삭제 결과를 저장하고 있습니다");
+        }
+        if listing.rows.is_empty() {
             ui.add_space(8.);
             ui::card(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -2092,83 +2330,30 @@ impl App {
                     ui.set_min_size(rect.size());
                     ui.set_clip_rect(ui.clip_rect().intersect(rect));
                     self.catalog.table_width = TABLE_WIDTH.max(rect.width() - 14.);
-                    self.catalog_table(ui, &rows, height, false, true, false);
+                    self.catalog_table(ui, &listing.rows, height, false, true, false);
                 },
             );
         }
-        self.catalog_tab_purge_dialog(ui.ctx());
+        if restore {
+            self.restore_trash_items();
+        }
     }
 
-    fn catalog_restore_tab(&mut self, i: usize, tab: usize) -> bool {
-        let Some(n) = self.data.notes.get_mut(i).filter(|n| !n.purged) else {
+    fn catalog_restore_tab(&mut self, i: usize, id: u64) -> bool {
+        let Some(tab) = self.data.notes[i]
+            .document
+            .trash
+            .iter()
+            .find(|tab| tab.id == id)
+        else {
             return false;
         };
-        if tab >= n.document.trash.len() {
-            return false;
+        let title = tab.title.clone();
+        let restored = self.restore_trash_tabs(i, &BTreeSet::from([id]));
+        if restored {
+            self.toast = format!("{title} 탭을 원래 메모에 복원했습니다");
         }
-        let mut restored = n.document.trash.remove(tab);
-        restored.hidden = false;
-        let title = restored.title.clone();
-        n.document.tabs.push(restored);
-        n.document.active = n.document.tabs.len() - 1;
-        self.restore_note(i);
-        self.catalog.selected = Some(i);
-        self.toast = format!("{title} 탭을 원래 메모에 복원했습니다");
-        true
-    }
-
-    fn catalog_tab_purge_dialog(&mut self, ctx: &egui::Context) {
-        let Some((i, tab)) = self.catalog.purge_tab else {
-            return;
-        };
-        let Some(n) = self.data.notes.get(i).filter(|n| !n.purged) else {
-            self.catalog.purge_tab = None;
-            return;
-        };
-        let Some(item) = n.document.trash.get(tab) else {
-            self.catalog.purge_tab = None;
-            return;
-        };
-        let title = format!("{} - {}", n.title, item.title);
-        let mut confirmed = false;
-        let mut cancel = false;
-        // A modal prevents list changes from shifting the selected tab's index
-        // while the user reviews this irreversible in-memory action.
-        let mut open = true;
-        ui::dialog(
-            ctx,
-            "purge_deleted_tab",
-            "본문 탭 영구 삭제",
-            [400., 210.],
-            true,
-            &mut open,
-            |ui| {
-                ui.label(RichText::new(title).strong().size(15.));
-                ui.add_space(4.);
-                ui::hint(
-                    ui,
-                    "이 탭의 본문과 표·이미지를 영구 삭제합니다. 삭제 후에는 복원할 수 없습니다.",
-                );
-                (confirmed, cancel) = ui::dialog_buttons(ui, "영구 삭제", "취소");
-            },
-        );
-        if confirmed {
-            self.catalog_confirm_tab_purge();
-        } else if cancel || !open {
-            self.catalog.purge_tab = None;
-        }
-    }
-
-    fn catalog_confirm_tab_purge(&mut self) {
-        let Some((i, tab)) = self.catalog.purge_tab.take() else {
-            return;
-        };
-        if let Some(n) = self.data.notes.get_mut(i).filter(|n| !n.purged) {
-            if tab < n.document.trash.len() {
-                n.document.trash.remove(tab);
-                self.toast = "삭제한 본문 탭을 영구 삭제했습니다".into();
-            }
-        }
+        restored
     }
 
     pub fn catalog_replace_window(&mut self, ctx: &egui::Context) {
@@ -3525,9 +3710,10 @@ mod tests {
                 2, 3,
             )));
         n.document.delete_tab(0);
+        let id = n.document.trash[0].id;
         n.body.clear();
         n.deleted = true;
-        assert!(a.catalog_restore_tab(0, 0));
+        assert!(a.catalog_restore_tab(0, id));
         let n = &a.data.notes[0];
         let tab = &n.document.tabs[n.document.active];
         assert!(!n.deleted);
@@ -3546,12 +3732,12 @@ mod tests {
         a.data.notes[0].document.add_tab();
         a.data.notes[0].document.tabs[1].body = "남겨둘 삭제 탭".into();
         a.data.notes[0].document.delete_tab(1);
-        a.catalog_confirm_tab_purge();
         assert_eq!(a.data.notes[0].document.trash.len(), 2);
-        a.catalog.purge_tab = Some((0, 0));
-        assert_eq!(a.data.notes[0].document.trash.len(), 2);
-        a.catalog_confirm_tab_purge();
-        assert!(a.catalog.purge_tab.is_none());
+        let id = a.data.notes[0].document.trash[0].id;
+        a.request_trash_purge(PurgeKind::Tab, Some(TrashItem::Tab(0, id)));
+        let request = a.desktop.purge_target.take().unwrap();
+        a.data.notes[0].document.trash.swap(0, 1);
+        assert!(a.confirm_trash_purge(request).is_some());
         assert_eq!(a.data.notes[0].document.trash.len(), 1);
         assert_eq!(a.data.notes[0].document.trash[0].body, "남겨둘 삭제 탭");
         assert_eq!(a.data.notes[0].document.tabs.len(), 1);

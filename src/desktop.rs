@@ -1,6 +1,7 @@
+use crate::trash_groups::{Group, PurgeKind, PurgeRequest, TrashItem};
 use crate::*;
 use chrono::{Duration, NaiveDateTime};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 pub struct Desktop {
     pub settings_tab: usize,
@@ -42,7 +43,13 @@ pub struct Desktop {
     pub reminder_hour: u32,
     pub reminder_minute: u32,
     pub reminder_month: NaiveDate,
-    pub purge_target: Option<usize>,
+    pub purge_target: Option<PurgeRequest>,
+    pub purge_save: Option<String>,
+    pub trash_selection: crate::selection::Selection<TrashItem>,
+    pub trash_selected_groups: HashMap<Group, Vec<usize>>,
+    pub trash_leaf_order: std::rc::Rc<[TrashItem]>,
+    pub trash_group_members: std::rc::Rc<HashMap<Group, Vec<usize>>>,
+    pub trash_cursor: Option<TrashItem>,
     pub project_popup: bool,
     pub last_escape: std::collections::HashMap<egui::ViewportId, f64>,
     pub last_action: String,
@@ -135,6 +142,12 @@ impl Default for Desktop {
             reminder_minute: 0,
             reminder_month: today.with_day(1).unwrap(),
             purge_target: None,
+            purge_save: None,
+            trash_selection: Default::default(),
+            trash_selected_groups: HashMap::new(),
+            trash_leaf_order: Default::default(),
+            trash_group_members: Default::default(),
+            trash_cursor: None,
             project_popup: false,
             last_escape: Default::default(),
             last_action: String::new(),
@@ -165,6 +178,37 @@ impl Default for Desktop {
         }
     }
 }
+fn purge_dialog_keys(ctx: &egui::Context, opened: bool) -> (bool, bool) {
+    ctx.input_mut(|input| {
+        let focused = input.focused;
+        let mut enter = false;
+        let mut escape = false;
+        input.events.retain(|event| match event {
+            egui::Event::Key {
+                key: egui::Key::Enter,
+                pressed: true,
+                repeat,
+                modifiers,
+                ..
+            } if modifiers.is_none() => {
+                enter |= focused && opened && !repeat;
+                false
+            }
+            egui::Event::Key {
+                key: egui::Key::Escape,
+                pressed: true,
+                modifiers,
+                ..
+            } if modifiers.is_none() => {
+                escape |= focused;
+                false
+            }
+            _ => true,
+        });
+        (enter, escape)
+    })
+}
+
 pub fn family(ui: &egui::Ui, name: &str) -> egui::FontFamily {
     let key = egui::FontFamily::Name(name.into());
     if ui.fonts(|f| f.families().contains(&key)) {
@@ -232,6 +276,7 @@ impl App {
         };
         let mut done = self.data.notes[i].done_on(day);
         let mut done_changed = false;
+        let completion_enabled = !self.catalog_selecting();
         let mut action = None;
         let fill = self.data.notes[i].color;
         egui::Frame::NONE
@@ -254,7 +299,10 @@ impl App {
                             .hint_text("제목"),
                     );
                     ui.add_space((ui.available_width() - 24.).max(0.));
-                    done_changed = ui::round_check(ui, &mut done, None)
+                    done_changed = ui
+                        .add_enabled(completion_enabled, |ui: &mut egui::Ui| {
+                            ui::round_check(ui, &mut done, None)
+                        })
                         .on_hover_text("완료")
                         .changed();
                 });
@@ -519,19 +567,48 @@ impl App {
     /// Erase a memo's content for good (it stays as an empty tombstone so
     /// memo indexes keep their meaning).
     pub fn purge_note(&mut self, i: usize) {
-        let n = &mut self.data.notes[i];
-        n.body.clear();
-        n.title = "삭제된 메모".into();
-        n.document = Default::default();
-        n.wiki_comments.clear();
-        n.journal_comments.clear();
-        n.occurrence_comments.clear();
-        n.reminder = None;
-        n.alarm_more.clear();
-        n.purged = true;
-        n.deleted = true;
-        self.desktop.passwords.remove(&i);
-        self.desktop.deleted_at.remove(&i);
+        self.purge_notes(&HashSet::from([i]));
+    }
+    pub fn purge_notes(&mut self, ids: &HashSet<usize>) {
+        if ids.is_empty() {
+            return;
+        }
+        for &i in ids {
+            let Some(n) = self.data.notes.get_mut(i).filter(|n| !n.purged) else {
+                continue;
+            };
+            let mut tombstone = Note::new("삭제된 메모", None, i);
+            tombstone.body.clear();
+            tombstone.deleted = true;
+            tombstone.purged = true;
+            *n = tombstone;
+            self.studio.windows.remove(&i);
+            self.desktop.passwords.remove(&i);
+            self.desktop.unlocked_at.remove(&i);
+            self.desktop.deleted_at.remove(&i);
+            self.catalog.assignments.remove(&i);
+            if self.catalog.selected == Some(i) {
+                self.catalog.selected = None;
+                self.catalog.selected_day = None;
+            }
+        }
+        self.extra
+            .pinned_content
+            .retain(|(i, _, _, _)| !ids.contains(i));
+        self.picked.retain(|i| !ids.contains(i));
+        self.data
+            .links
+            .retain(|(a, b)| !ids.contains(a) && !ids.contains(b));
+        for i in 0..self.data.notes.len() {
+            if self.data.notes[i].parents.iter().any(|p| ids.contains(p)) {
+                self.data.notes[i].parents.retain(|p| !ids.contains(p));
+            }
+        }
+        if ids.contains(&self.active) {
+            self.editor = false;
+            self.sticky = false;
+        }
+        crate::lists::CHANGES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
     /// Erase memos that sat in the trash longer than the retention setting
     /// (7, 30, 90 or 365 days; the last choice keeps them).
@@ -553,12 +630,18 @@ impl App {
             })
             .map(|(i, _)| *i)
             .collect();
-        for i in expired {
-            self.purge_note(i);
-        }
+        self.purge_notes(&expired.into_iter().collect());
     }
     pub fn trash_note(&mut self, i: usize) {
-        self.data.notes[i].deleted = true;
+        let Some(n) = self
+            .data
+            .notes
+            .get_mut(i)
+            .filter(|n| !n.deleted && !n.purged)
+        else {
+            return;
+        };
+        n.deleted = true;
         self.desktop
             .deleted_at
             .insert(i, Local::now().naive_local());
@@ -575,8 +658,7 @@ impl App {
         }
     }
     pub fn request_purge(&mut self, i: usize) {
-        self.desktop.purge_target = Some(i);
-        self.desktop.focus_dialog = true;
+        self.request_trash_purge(PurgeKind::Memo, Some(TrashItem::Memo(i)));
     }
     pub fn duplicate_note(&mut self, i: usize) {
         if self.data.notes[i].locked {
@@ -954,40 +1036,70 @@ impl App {
         }
         self.schedule_dialog(ctx);
         self.date_drop_dialog(ctx);
-        if let Some(i) = self.desktop.purge_target {
+        let now = ctx.input(|i| i.time);
+        if self.desktop.purge_save.is_some() && now - self.saving.checked >= 2. {
+            self.save_purge(now);
+        }
+        if self.desktop.purge_save.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_secs(2));
+        }
+        if let Some(mut request) = self.desktop.purge_target.take() {
             let mut open = true;
-            let mut purge = false;
-            crate::ui::dialog(
+            let title = match request.kind {
+                PurgeKind::Memo => "메모 영구삭제",
+                PurgeKind::Tab => "본문 탭 영구삭제",
+                PurgeKind::Selection => "선택 항목 영구삭제",
+                PurgeKind::Empty => "휴지통 비우기",
+            };
+            let description = self.trash_purge_title(&request);
+            let decision = crate::ui::dialog(
                 ctx,
                 "purge_dialog",
-                "메모 영구삭제",
-                [380., 200.],
+                title,
+                [420., 215.],
                 true,
                 &mut open,
                 |ui| {
+                    let (enter, escape) = purge_dialog_keys(ui.ctx(), request.opened);
                     ui.label(
-                        RichText::new(format!(
-                            "‘{}’을(를) 영구삭제할까요?",
-                            self.data.notes[i].title
-                        ))
-                        .strong()
-                        .size(15.),
+                        RichText::new(format!("‘{description}’을(를) 영구삭제할까요?"))
+                            .strong()
+                            .size(15.),
                     );
                     ui.add_space(4.);
-                    crate::ui::hint(ui, "본문과 댓글이 모두 삭제되며 되돌릴 수 없습니다.");
+                    crate::ui::hint(
+                        ui,
+                        if request.kind == PurgeKind::Empty {
+                            "접힌 그룹과 삭제된 본문 탭까지 모두 삭제됩니다. 삭제한 항목은 복원할 수 없습니다."
+                        } else {
+                            "선택한 항목의 본문과 첨부가 삭제됩니다. 삭제한 항목은 복원할 수 없습니다."
+                        },
+                    );
                     let (ok, cancel) = crate::ui::dialog_buttons(ui, "영구삭제", "취소");
-                    purge = ok;
-                    if cancel {
-                        self.desktop.purge_target = None;
-                    }
+                    (ok || enter, cancel || escape)
                 },
             );
-            if purge {
-                self.purge_note(i);
-                self.desktop.purge_target = None;
+            match decision {
+                _ if !open => {}
+                Some((_, true)) => {}
+                Some((true, false)) => {
+                    self.desktop.purge_save = self.confirm_trash_purge(request);
+                    if self.desktop.purge_save.is_some() {
+                        self.save_purge(now);
+                    }
+                }
+                _ => {
+                    request.opened |= decision.is_some();
+                    self.desktop.purge_target = Some(request);
+                }
             }
-            if !open {
-                self.desktop.purge_target = None;
+        }
+    }
+    fn save_purge(&mut self, now: f64) {
+        self.autosave(now, true);
+        if self.saving.error.is_empty() {
+            if let Some(message) = self.desktop.purge_save.take() {
+                self.toast = message;
             }
         }
     }
@@ -1864,6 +1976,53 @@ pub fn color_choices(ui: &mut egui::Ui, color: &mut Color32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn purge_key(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn purge_dialog_accepts_one_fresh_enter_and_consumes_escape() {
+        for (focused, opened, key, repeat, expected) in [
+            (true, false, egui::Key::Enter, false, (false, false)),
+            (true, true, egui::Key::Enter, false, (true, false)),
+            (true, true, egui::Key::Enter, true, (false, false)),
+            (false, true, egui::Key::Enter, false, (false, false)),
+            (true, true, egui::Key::Escape, false, (false, true)),
+        ] {
+            let ctx = egui::Context::default();
+            if repeat {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        events: vec![purge_key(key)],
+                        ..Default::default()
+                    },
+                    |_| {},
+                );
+            }
+            let _ = ctx.run(
+                egui::RawInput {
+                    focused,
+                    events: vec![purge_key(key)],
+                    ..Default::default()
+                },
+                |ctx| {
+                    assert_eq!(
+                        purge_dialog_keys(ctx, opened),
+                        expected,
+                        "{key:?}, 반복 {repeat}, 활성 {focused}, 열림 {opened}"
+                    );
+                    assert!(!ctx.input(|input| input.key_pressed(key)));
+                },
+            );
+        }
+    }
     #[test]
     fn other_colors_are_picked_inside_the_color_menu_itself() {
         let ctx = egui::Context::default();

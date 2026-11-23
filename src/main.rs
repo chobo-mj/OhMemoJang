@@ -796,6 +796,9 @@ impl App {
         });
     }
     fn main_shortcuts(&mut self, ctx: &egui::Context) {
+        if self.desktop.purge_target.is_some() {
+            return;
+        }
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.extra.picker = None;
             self.link_source = None;
@@ -836,6 +839,8 @@ impl App {
     fn open_page(&mut self, page: usize) {
         if self.page != page {
             self.catalog.selection.clear();
+            self.desktop.trash_selection.clear();
+            self.desktop.trash_selected_groups.clear();
         }
         self.page = page;
         self.settings = false;
