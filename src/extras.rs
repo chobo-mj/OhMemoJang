@@ -968,12 +968,18 @@ impl App {
     pub fn delete_project(&mut self, p: usize, delete_notes: bool) {
         self.extra.deleted_projects.insert(p);
         self.extra.hidden_projects.remove(&p);
-        for n in self.data.notes.iter_mut() {
-            if n.project == Some(p) {
-                n.project = None;
-                if delete_notes {
-                    n.deleted = true;
-                }
+        let assigned: Vec<_> = self
+            .data
+            .notes
+            .iter()
+            .enumerate()
+            .filter(|(_, note)| note.project == Some(p))
+            .map(|(id, _)| id)
+            .collect();
+        for id in assigned {
+            self.data.notes[id].project = None;
+            if delete_notes && !self.data.notes[id].deleted {
+                self.trash_note(id);
             }
         }
         self.project_filter = None;

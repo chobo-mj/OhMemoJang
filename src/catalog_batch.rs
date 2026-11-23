@@ -10,6 +10,7 @@ pub(crate) enum OrderScope {
 
 #[derive(Clone, Copy)]
 pub(super) enum DropTarget {
+    Project(Option<usize>),
     Order(OrderScope, usize, bool),
 }
 

@@ -68,6 +68,7 @@ pub struct Catalog {
     batch_completion: Option<(Vec<usize>, bool)>,
     folder_drop_list: bool,
     folder_manual: bool,
+    project_view: Option<usize>,
     batch_targets: Vec<(egui::Rect, DropTarget)>,
     hover_folder: Option<(usize, f64)>,
     pub folder_selected: Option<usize>,
@@ -443,7 +444,7 @@ impl App {
         ui::tabs(
             ui,
             &mut self.catalog.tab,
-            &["폴더 보기", "전체 메모 보기", "관계 보드"],
+            &["폴더 보기", "전체 메모 보기", "관계 보드", "프로젝트 보기"],
         );
         ui.add_space(12.);
         if self.catalog.tab != previous_tab {
@@ -456,6 +457,8 @@ impl App {
         }
         if self.catalog.tab == 0 {
             self.catalog_folders(ui);
+        } else if self.catalog.tab == 3 {
+            self.catalog_projects(ui);
         } else {
             self.catalog_controls(ui);
             let mut cache = std::mem::take(&mut self.lists);
@@ -1728,6 +1731,122 @@ impl App {
         }
     }
 
+    fn catalog_projects(&mut self, ui: &mut egui::Ui) {
+        if !self.catalog_valid_project(self.catalog.project_view.filter(|&id| id != NO_PROJECT)) {
+            self.catalog.project_view = None;
+            self.catalog.selection.clear();
+        }
+        ui.horizontal(|ui| {
+            if ui.button("+ 새 메모").clicked() {
+                let id = self.add_note(None);
+                self.data.notes[id].project =
+                    self.catalog.project_view.filter(|&p| p != NO_PROJECT);
+                self.catalog.selected = Some(id);
+            }
+            if ui.button("프로젝트 관리").clicked() {
+                self.desktop.project_popup = true;
+            }
+        });
+        let project = self.catalog.project_view;
+        let mut ids = Vec::new();
+        let mut counts = HashMap::<usize, (usize, usize)>::new();
+        for (id, note) in self
+            .data
+            .notes
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| self.visible(*i))
+        {
+            let count = counts
+                .entry(note.project.unwrap_or(NO_PROJECT))
+                .or_default();
+            count.0 += usize::from(note.done);
+            count.1 += 1;
+            if crate::refinements::project_match(project, note.project) {
+                ids.push(id);
+            }
+        }
+        self.catalog_selection_bar(ui, ids.clone());
+        let height = panel_height(ui);
+        let tree_width = (ui.available_width() * 0.2).clamp(155., 225.);
+        let full =
+            egui::Rect::from_min_size(ui.cursor().min, Vec2::new(ui.available_width(), height));
+        ui.allocate_rect(full, Sense::hover());
+        let tree_rect = egui::Rect::from_min_size(full.min, Vec2::new(tree_width, height));
+        let list_rect =
+            egui::Rect::from_min_max(egui::pos2(tree_rect.right() + 12., full.top()), full.max);
+        let mut tree = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt("project_tree")
+                .max_rect(tree_rect),
+        );
+        tree.set_clip_rect(ui.clip_rect().intersect(tree_rect));
+        tree.heading("프로젝트");
+        egui::ScrollArea::vertical()
+            .id_salt("catalog_project_items")
+            .show(&mut tree, |ui| {
+                if ui
+                    .selectable_label(project.is_none(), "전체 프로젝트")
+                    .clicked()
+                {
+                    self.catalog.project_view = None;
+                }
+                self.catalog_project_target(
+                    ui,
+                    NO_PROJECT,
+                    "미분류 메모",
+                    counts.get(&NO_PROJECT).copied().unwrap_or_default(),
+                );
+                for id in 0..self.data.projects.len() {
+                    if self.catalog_valid_project(Some(id)) {
+                        let title = self.data.projects[id].clone();
+                        self.catalog_project_target(
+                            ui,
+                            id,
+                            &title,
+                            counts.get(&id).copied().unwrap_or_default(),
+                        );
+                    }
+                }
+            });
+        if self.catalog.project_view != project {
+            self.catalog.selection.clear();
+            self.catalog.selected = None;
+        }
+        let rows: Vec<_> = ids
+            .into_iter()
+            .map(|id| (id, self.data.notes[id].date))
+            .collect();
+        let mut list = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt("project_memos")
+                .max_rect(list_rect),
+        );
+        list.set_clip_rect(ui.clip_rect().intersect(list_rect));
+        self.catalog_split_list(&mut list, &rows, false, false);
+    }
+
+    fn catalog_project_target(
+        &mut self,
+        ui: &mut egui::Ui,
+        id: usize,
+        title: &str,
+        (done, total): (usize, usize),
+    ) {
+        let response = ui.selectable_label(
+            self.catalog.project_view == Some(id),
+            format!("{title}  {done}/{total}"),
+        );
+        if response.clicked() {
+            self.catalog.project_view = Some(id);
+        }
+        self.catalog_batch_drop(
+            ui,
+            response.rect,
+            DropTarget::Project((id != NO_PROJECT).then_some(id)),
+        );
+    }
+
     fn catalog_batch_drop(&mut self, ui: &egui::Ui, rect: egui::Rect, target: DropTarget) {
         let rect = rect.intersect(ui.clip_rect());
         if !rect.is_positive() {
@@ -2444,6 +2563,10 @@ impl App {
                                 .find(|(r, _)| r.contains(pos))
                             {
                                 match *target {
+                                    DropTarget::Project(project) => self.catalog_batch_action(
+                                        notes.clone(),
+                                        BatchAction::Project(project),
+                                    ),
                                     DropTarget::Order(scope, id, after) => {
                                         self.catalog_reorder(scope, id, after, notes)
                                     }
