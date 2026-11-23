@@ -39,6 +39,7 @@ pub struct Saved {
     pub folder_open: Vec<usize>,
     pub catalog_folders: Vec<CatalogFolderRec>,
     pub catalog_assignments: Vec<(usize, usize)>,
+    pub catalog_manual_order: Vec<(crate::catalog::OrderScope, Vec<usize>)>,
     pub hidden_projects: Vec<usize>,
     pub deleted_projects: Vec<usize>,
     /// Wiki tabs deleted (soft) so they stay gone after a restart.
@@ -1033,6 +1034,12 @@ impl App {
             tutorial: self.extra.tutorial,
             tutorial_notes: self.extra.tutorial_notes.clone(),
             my_holidays: self.extra.my_holidays.clone(),
+            catalog_manual_order: self
+                .catalog
+                .manual_order
+                .iter()
+                .map(|(scope, ids)| (*scope, ids.clone()))
+                .collect(),
             pinned_content: self
                 .extra
                 .pinned_content
@@ -1089,6 +1096,7 @@ impl App {
     }
     /// Replace the workspace with saved data.
     pub fn restore(&mut self, s: &Saved) {
+        self.clear_catalog_transients();
         self.clear_trash_listing();
         self.content_selection.clear();
         self.content_purge.clear();
@@ -1142,6 +1150,7 @@ impl App {
             })
             .collect();
         self.catalog.assignments = s.catalog_assignments.iter().copied().collect();
+        self.catalog.manual_order = s.catalog_manual_order.iter().cloned().collect();
         self.catalog.selected = None;
         self.extra.hidden_projects = s.hidden_projects.iter().copied().collect();
         self.extra.deleted_projects = s.deleted_projects.iter().copied().collect();
@@ -1826,6 +1835,9 @@ pub struct Saving {
 }
 
 impl Saving {
+    pub fn request(&mut self) {
+        self.pending = true;
+    }
     /// A save is waiting for its short delay to pass.
     pub fn save_due(&self) -> bool {
         self.pending

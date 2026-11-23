@@ -3,8 +3,13 @@ use crate::trash_groups::{Group, PurgeKind, TrashItem};
 use crate::*;
 use egui::{Sense, Stroke};
 use std::collections::HashMap;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ops::Range;
+
+#[path = "catalog_batch.rs"]
+mod batch;
+pub(crate) use batch::OrderScope;
+use batch::{Action as BatchAction, DropTarget, Edit};
 
 type FindHit = (usize, Option<(usize, Range<usize>)>);
 
@@ -50,11 +55,21 @@ pub struct Catalog {
     pub tab: usize,
     pub folders: Vec<Folder>,
     pub assignments: BTreeMap<usize, usize>,
+    folder_revision: u64,
     pub selected: Option<usize>,
     pub selected_day: Option<NaiveDate>,
     pub selection: crate::selection::Selection<usize>,
     selection_order: Vec<usize>,
-    selection_ui: bool,
+    pub selection_ui: bool,
+    pub manual_order: BTreeMap<OrderScope, Vec<usize>>,
+    order_revision: u64,
+    undo: Vec<Edit>,
+    redo: Vec<Edit>,
+    batch_completion: Option<(Vec<usize>, bool)>,
+    folder_drop_list: bool,
+    folder_manual: bool,
+    batch_targets: Vec<(egui::Rect, DropTarget)>,
+    hover_folder: Option<(usize, f64)>,
     pub folder_selected: Option<usize>,
     pub find_selection: Option<(usize, usize, Range<usize>)>,
     pub query: String,
@@ -359,6 +374,7 @@ impl Catalog {
                 self.assignments.remove(&note);
             }
         }
+        self.folder_revision = self.folder_revision.wrapping_add(1);
     }
 
     pub fn remove_folder(&mut self, f: usize) {
@@ -370,6 +386,7 @@ impl Catalog {
             }
         }
         self.assignments.retain(|_, v| *v != f);
+        self.folder_revision = self.folder_revision.wrapping_add(1);
         if self.folder_selected == Some(f) {
             self.folder_selected = None;
         }
@@ -421,6 +438,7 @@ impl App {
         self.catalog.selection_ui = true;
         self.catalog.drag_sources.clear();
         self.catalog.drag_targets.clear();
+        self.catalog.batch_targets.clear();
         let previous_tab = self.catalog.tab;
         ui::tabs(
             ui,
@@ -441,19 +459,23 @@ impl App {
         } else {
             self.catalog_controls(ui);
             let mut cache = std::mem::take(&mut self.lists);
-            let key = crate::lists::key(self.data.notes.len());
-            let ids = cache.get("catalog", key, || self.catalog_filtered_ids());
+            let key = crate::lists::key((
+                self.data.notes.revision(),
+                self.catalog.project,
+                self.catalog.sort,
+                self.catalog.recurring,
+                self.catalog.wiki_only,
+                self.catalog.order_revision,
+                self.catalog_project_visibility_key(),
+            ));
+            let ids = cache.get_stable("catalog", key, || self.catalog_filtered_ids());
             self.lists = cache;
             let ids = (*ids).clone();
-            self.catalog_find_bar(ui, &ids);
-            let ids = if self.catalog.query.trim().is_empty() {
+            let hits = self.catalog_find_bar(ui, &ids);
+            let ids = if self.catalog.query.is_empty() {
                 ids
             } else {
-                let matches: BTreeSet<_> = self
-                    .catalog_find_hits(&ids)
-                    .into_iter()
-                    .map(|(id, _)| id)
-                    .collect();
+                let matches: HashSet<_> = hits.iter().map(|(id, _)| *id).collect();
                 ids.into_iter().filter(|id| matches.contains(id)).collect()
             };
             self.catalog_selection_bar(ui, ids.clone());
@@ -464,6 +486,7 @@ impl App {
             self.catalog_split_list(ui, &rows, false, false);
         }
         self.catalog_drag_input(ui.ctx());
+        self.catalog_completion_dialog(ui.ctx());
         self.catalog_replace_window(ui.ctx());
     }
 
@@ -544,6 +567,9 @@ impl App {
                 (n.created.date(), n.created.time(), i)
             }
         });
+        if self.catalog.sort == 2 {
+            self.catalog_ordered(OrderScope::All, &mut ids);
+        }
         ids
     }
 
@@ -570,10 +596,11 @@ impl App {
                     }
                 });
             egui::ComboBox::from_id_salt("catalog_sort")
-                .selected_text(["생성일자 순", "일정 순"][self.catalog.sort])
+                .selected_text(["생성일자 순", "일정 순", "수동 정렬"][self.catalog.sort])
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut self.catalog.sort, 0, "생성일자 순");
                     ui.selectable_value(&mut self.catalog.sort, 1, "일정 순");
+                    ui.selectable_value(&mut self.catalog.sort, 2, "수동 정렬");
                 });
             egui::ComboBox::from_id_salt("catalog_recurrence")
                 .selected_text(
@@ -612,7 +639,7 @@ impl App {
         }
     }
 
-    fn catalog_find_bar(&mut self, ui: &mut egui::Ui, ids: &[usize]) {
+    fn catalog_find_bar(&mut self, ui: &mut egui::Ui, ids: &[usize]) -> std::rc::Rc<Vec<FindHit>> {
         if ui
             .ctx()
             .input(|i| i.modifiers.command && !i.modifiers.shift && i.key_pressed(egui::Key::H))
@@ -658,7 +685,17 @@ impl App {
             slot
         });
         let slot = status_slot.inner;
-        let hits = self.catalog_find_hits(ids);
+        let search_ids: &[usize] = if self.catalog.query.is_empty() {
+            &[]
+        } else {
+            ids
+        };
+        let key = crate::lists::key((search_ids, &self.catalog.query, self.data.notes.revision()));
+        let mut cache = std::mem::take(&mut self.lists);
+        let hits = cache.get_stable("catalog_find_hits", key, || {
+            self.catalog_find_hits(search_ids)
+        });
+        self.lists = cache;
         if reset {
             self.catalog.find_index = 0;
         }
@@ -697,6 +734,7 @@ impl App {
             );
         }
         ui.add_space(8.);
+        hits
     }
 
     fn catalog_find_hits(&self, ids: &[usize]) -> Vec<FindHit> {
@@ -956,8 +994,11 @@ impl App {
             .horizontal_scroll_offset(offset)
             .auto_shrink([false, false])
             .max_height((height - 44.).max(100.));
-        let body = if trash {
+        let body = if trash || (!date_groups && !rows.is_empty()) {
             scroll.show_rows(ui, self.catalog_row_height(), rows.len(), |ui, range| {
+                if !trash {
+                    self.catalog_drag_scroll(ui);
+                }
                 ui.set_min_width(self.catalog.table_width.max(TABLE_WIDTH));
                 for at in range {
                     let row = rows[at];
@@ -966,13 +1007,16 @@ impl App {
                         if let TableRow::Group(g) = row {
                             self.catalog_group_row(ui, g, &mut pending);
                         } else {
-                            self.catalog_table_row(ui, row, at, false, true, &mut pending);
+                            self.catalog_table_row(ui, row, at, open_editor, trash, &mut pending);
                         }
                     });
                 }
             })
         } else {
             scroll.show(ui, |ui| {
+                if !date_groups && !trash {
+                    self.catalog_drag_scroll(ui);
+                }
                 ui.set_min_width(self.catalog.table_width.max(TABLE_WIDTH));
                 if rows.is_empty() {
                     ui.add_space(24.);
@@ -1147,6 +1191,13 @@ impl App {
                         .gamma_multiply(0.18),
                 ),
             );
+            if !trash
+                && self.catalog.selection_ui
+                && self.catalog.tab == 1
+                && self.catalog.sort == 2
+            {
+                self.catalog_order_drop(ui, rect, OrderScope::All, i);
+            }
             let cells = table_cells(rect, &self.catalog);
             {
                 let mut c = table_cell(ui, cells[0], "eye");
@@ -1551,13 +1602,20 @@ impl App {
                 }
             }
         }
-        if !selecting {
+        if !self.catalog_selecting() {
             self.drag_source_on(ui, r, i, day);
         }
         if self.catalog.selection_ui {
             self.catalog
                 .drag_sources
                 .push((r.rect.intersect(ui.clip_rect()), FolderDrag::Notes(vec![i])));
+        }
+        if self.catalog_selecting() && self.catalog.selection.items.contains(&i) {
+            r.context_menu(|ui| {
+                if let Some(action) = self.catalog_batch_menu(ui) {
+                    self.catalog_batch_action(self.catalog_batch_ids(), action);
+                }
+            });
         }
     }
 
@@ -1571,11 +1629,13 @@ impl App {
     }
 
     fn catalog_selection_bar(&mut self, ui: &mut egui::Ui, order: Vec<usize>) {
-        self.catalog.selection_order = order;
-        self.catalog
-            .selection
-            .retain_visible(&self.catalog.selection_order);
-        let ctx = ui.ctx();
+        if self.catalog.selection_order != order {
+            self.catalog.selection_order = order;
+            self.catalog
+                .selection
+                .retain_visible(&self.catalog.selection_order);
+        }
+        let ctx = ui.ctx().clone();
         let focus = catalog_list_focus();
         let blocked = self.settings
             || self.catalog.replace_open
@@ -1584,18 +1644,159 @@ impl App {
             || self.desktop.reminder_target.is_some()
             || self.desktop.purge_target.is_some()
             || self.extra.picker.is_some()
-            || self.extra.completion_scope.is_some();
+            || self.extra.completion_scope.is_some()
+            || self.catalog.batch_completion.is_some();
         let focused = ctx.memory(|m| m.has_focus(focus));
         self.catalog
             .selection
-            .keyboard(ctx, &self.catalog.selection_order, focused, blocked);
+            .keyboard(&ctx, &self.catalog.selection_order, focused, blocked);
+        if focused && !blocked && !ctx.memory(|m| m.any_popup_open()) {
+            let redo = ctx.input_mut(|i| {
+                i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::Z)
+            });
+            if redo || ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::Z)) {
+                self.catalog_history(redo);
+            }
+        }
         ui.horizontal(|ui| {
             let rect = egui::Rect::from_min_size(ui.cursor().min, Vec2::ZERO);
             ui.interact(rect, focus, Sense::focusable_noninteractive());
             if self.catalog.selection.toolbar(ui) {
                 ui.ctx().memory_mut(|m| m.request_focus(focus));
             }
+            if self.catalog.selection.active {
+                let action = ui
+                    .add_enabled_ui(!self.catalog.selection.items.is_empty(), |ui| {
+                        ui.menu_button("선택 작업", |ui| self.catalog_batch_menu(ui))
+                            .inner
+                            .flatten()
+                    })
+                    .inner;
+                if let Some(action) = action {
+                    self.catalog_batch_action(self.catalog_batch_ids(), action);
+                }
+                if self.catalog.tab != 0 {
+                    ui.toggle_value(&mut self.catalog.folder_drop_list, "폴더 이동 대상");
+                }
+            } else {
+                self.catalog.folder_drop_list = false;
+            }
+            if ui
+                .add_enabled(
+                    !self.catalog.undo.is_empty(),
+                    egui::Button::new("실행 취소"),
+                )
+                .clicked()
+            {
+                self.catalog_history(false);
+            }
+            if ui
+                .add_enabled(
+                    !self.catalog.redo.is_empty(),
+                    egui::Button::new("다시 실행"),
+                )
+                .clicked()
+            {
+                self.catalog_history(true);
+            }
         });
+        if self.catalog.folder_drop_list {
+            egui::ScrollArea::vertical()
+                .id_salt("catalog_folder_drop_list")
+                .max_height(100.)
+                .show(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        let r = ui.label("분류 해제");
+                        self.catalog_folder_drop(ui, &r, None);
+                        for id in 0..self.catalog.folders.len() {
+                            if !self.catalog.folders[id].deleted {
+                                let r = ui.label(self.catalog_folder_path(id));
+                                self.catalog_folder_drop(ui, &r, Some(id));
+                            }
+                        }
+                    });
+                });
+        }
+        if let Some((FolderDrag::Notes(ids), origin)) = self.catalog.dragging.as_ref() {
+            if ctx.input(|i| {
+                i.pointer
+                    .hover_pos()
+                    .is_some_and(|p| p.distance(*origin) >= 4.)
+            }) {
+                ui.label(format!("메모 {}개 이동 중", ids.len()));
+            }
+        }
+    }
+
+    fn catalog_batch_drop(&mut self, ui: &egui::Ui, rect: egui::Rect, target: DropTarget) {
+        let rect = rect.intersect(ui.clip_rect());
+        if !rect.is_positive() {
+            return;
+        }
+        self.catalog.batch_targets.push((rect, target));
+        if matches!(self.catalog.dragging, Some((FolderDrag::Notes(_), _)))
+            && ui.input(|i| i.pointer.hover_pos().is_some_and(|p| rect.contains(p)))
+        {
+            if let DropTarget::Order(_, _, after) = target {
+                let y = if after { rect.bottom() } else { rect.top() };
+                ui.painter()
+                    .hline(rect.x_range(), y, Stroke::new(2_f32, ACCENT));
+            } else {
+                ui.painter().rect_stroke(
+                    rect,
+                    4.,
+                    Stroke::new(2_f32, ACCENT),
+                    egui::StrokeKind::Inside,
+                );
+            }
+        }
+    }
+
+    fn catalog_order_drop(
+        &mut self,
+        ui: &egui::Ui,
+        rect: egui::Rect,
+        scope: OrderScope,
+        id: usize,
+    ) {
+        let middle = rect.center().y;
+        self.catalog_batch_drop(
+            ui,
+            egui::Rect::from_min_max(rect.min, egui::pos2(rect.right(), middle)),
+            DropTarget::Order(scope, id, false),
+        );
+        self.catalog_batch_drop(
+            ui,
+            egui::Rect::from_min_max(egui::pos2(rect.left(), middle), rect.max),
+            DropTarget::Order(scope, id, true),
+        );
+    }
+
+    fn catalog_drag_scroll(&self, ui: &egui::Ui) {
+        let Some((FolderDrag::Notes(_), origin)) = &self.catalog.dragging else {
+            return;
+        };
+        let clip = ui.clip_rect();
+        if let Some(pos) = ui
+            .input(|i| i.pointer.hover_pos())
+            .filter(|p| origin.distance(*p) >= 4. && clip.contains(*p))
+        {
+            let distance = (clip.bottom() - pos.y).min(pos.y - clip.top());
+            if distance < 26. {
+                let direction = if pos.y < clip.center().y { 1. } else { -1. };
+                ui.scroll_with_delta(Vec2::new(0., direction * (26. - distance) * 0.5));
+                ui.ctx().request_repaint();
+            }
+        }
+    }
+
+    pub fn clear_catalog_transients(&mut self) {
+        self.catalog.selection.clear();
+        self.catalog.dragging = None;
+        self.catalog.undo.clear();
+        self.catalog.redo.clear();
+        self.catalog.batch_completion = None;
+        self.lists = Default::default();
     }
 
     pub(crate) fn catalog_preview(&mut self, ui: &mut egui::Ui, height: f32) {
@@ -1644,6 +1845,20 @@ impl App {
                         self.open_note(i);
                     }
                 });
+        } else if self.catalog_selecting() {
+            let note = &self.data.notes[i];
+            let mut done = note.done;
+            ui.horizontal(|ui| {
+                ui.add_enabled(false, |ui: &mut egui::Ui| {
+                    ui::round_check(ui, &mut done, None)
+                })
+                .on_hover_text("완료 상태");
+                ui.heading(&note.title);
+            });
+            ui.label(&note.body);
+            if ui.button("독립 편집창 열기").clicked() {
+                self.open_note(i);
+            }
         } else {
             self.inline_note(ui, i);
         }
@@ -1652,14 +1867,25 @@ impl App {
     /// Visible memos by folder (`None`: not filed), reused until input.
     fn catalog_folder_index(&mut self) -> std::rc::Rc<HashMap<Option<usize>, Vec<usize>>> {
         let mut cache = std::mem::take(&mut self.lists);
-        let key = crate::lists::key(self.data.notes.len());
-        let index = cache.get("catalog_folder_index", key, || {
+        let key = crate::lists::key((
+            self.data.notes.revision(),
+            self.catalog.folder_revision,
+            self.catalog.folder_manual,
+            self.catalog.order_revision,
+            self.catalog_project_visibility_key(),
+        ));
+        let index = cache.get_stable("catalog_folder_index", key, || {
             let mut index: HashMap<Option<usize>, Vec<usize>> = HashMap::new();
             for i in (0..self.data.notes.len()).filter(|&i| self.visible(i)) {
                 index
                     .entry(self.catalog.assignments.get(&i).copied())
                     .or_default()
                     .push(i);
+            }
+            if self.catalog.folder_manual {
+                for (folder, ids) in &mut index {
+                    self.catalog_ordered(OrderScope::Folder(*folder), ids);
+                }
             }
             index
         });
@@ -1669,6 +1895,7 @@ impl App {
     fn catalog_folders(&mut self, ui: &mut egui::Ui) {
         let previous_folder = self.catalog.folder_selected;
         ui.horizontal(|ui| {
+            ui.toggle_value(&mut self.catalog.folder_manual, "수동 정렬");
             if ui
                 .add(egui::Button::new(RichText::new("+  새 폴더").strong()))
                 .clicked()
@@ -1759,6 +1986,7 @@ impl App {
                             .max_height((folder_height - 54.).max(70.))
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
+                                self.catalog_drag_scroll(ui);
                                 let roots: Vec<_> = self
                                     .catalog
                                     .folders
@@ -1810,6 +2038,7 @@ impl App {
                             .max_height((height - folder_height - 112.).max(70.))
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
+                                self.catalog_drag_scroll(ui);
                                 if unfiled.is_empty() {
                                     ui::empty_state(
                                         ui,
@@ -1974,6 +2203,31 @@ impl App {
         };
         let inner = egui::InnerResponse::new((), inner);
         self.catalog_folder_drop(ui, &inner.response, Some(f));
+        if matches!(&self.catalog.dragging, Some((FolderDrag::Notes(_), origin))
+            if ui.input(|i| i.pointer.hover_pos().is_some_and(|pos| origin.distance(pos) >= 4.
+                && inner.response.rect.intersect(ui.clip_rect()).contains(pos))))
+            && !self.catalog.folders[f].open
+        {
+            let now = ui.input(|i| i.time);
+            match self.catalog.hover_folder {
+                Some((hovered, since)) if hovered == f && now - since >= 0.5 => {
+                    self.catalog.folders[f].open = true;
+                    self.catalog.hover_folder = None;
+                }
+                Some((hovered, _)) if hovered == f => {}
+                _ => {
+                    self.catalog.hover_folder = Some((f, now));
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_millis(500));
+                }
+            }
+        } else if self
+            .catalog
+            .hover_folder
+            .is_some_and(|(hovered, _)| hovered == f)
+        {
+            self.catalog.hover_folder = None;
+        }
         if remove {
             self.catalog.remove_folder(f);
             return;
@@ -2027,6 +2281,9 @@ impl App {
             .unwrap_or_default();
         let color = n.color;
         let title = n.title.clone();
+        let day = n.date;
+        let mut done = n.done_on(day);
+        let complete_enabled = !self.catalog_selecting();
         let r = ui
             .horizontal(|ui| {
                 if self
@@ -2036,6 +2293,15 @@ impl App {
                 {
                     ui.ctx()
                         .memory_mut(|m| m.request_focus(catalog_list_focus()));
+                }
+                if ui
+                    .add_enabled(complete_enabled, |ui: &mut egui::Ui| {
+                        ui::round_check(ui, &mut done, None)
+                    })
+                    .on_hover_text("완료 상태")
+                    .changed()
+                {
+                    self.done_at(i, day, done);
                 }
                 ui::list_row(
                     ui,
@@ -2049,21 +2315,32 @@ impl App {
             })
             .inner;
         self.catalog_note_response(ui, &r, i, self.data.notes[i].date, false);
-        r.context_menu(|ui| {
-            if ui.button("독립 편집창 열기").clicked() {
-                self.open_note(i);
-                ui.close_menu();
-            }
-            if self.catalog.assignments.contains_key(&i) && ui.button("폴더 분류 해제").clicked()
-            {
-                self.catalog.assignments.remove(&i);
-                ui.close_menu();
-            }
-            if ui.button("휴지통으로 이동").clicked() {
-                self.trash_note(i);
-                ui.close_menu();
-            }
-        });
+        if self.catalog.folder_manual {
+            self.catalog_order_drop(
+                ui,
+                r.rect,
+                OrderScope::Folder(self.catalog.assignments.get(&i).copied()),
+                i,
+            );
+        }
+        if !self.catalog_selecting() {
+            r.context_menu(|ui| {
+                if ui.button("독립 편집창 열기").clicked() {
+                    self.open_note(i);
+                    ui.close_menu();
+                }
+                if self.catalog.assignments.contains_key(&i)
+                    && ui.button("폴더 분류 해제").clicked()
+                {
+                    self.catalog.assign_notes(&[i], None);
+                    ui.close_menu();
+                }
+                if ui.button("휴지통으로 이동").clicked() {
+                    self.trash_note(i);
+                    ui.close_menu();
+                }
+            });
+        }
     }
 
     fn catalog_folder_drop(&mut self, ui: &egui::Ui, r: &egui::Response, folder: Option<usize>) {
@@ -2080,12 +2357,29 @@ impl App {
             );
         }
     }
+    pub fn catalog_owns_note_drop(&self, ctx: &egui::Context, pos: egui::Pos2) -> bool {
+        self.page == 4
+            && !self.settings
+            && ctx.viewport_id() == main_viewport()
+            && (self
+                .catalog
+                .drag_targets
+                .iter()
+                .any(|(rect, _)| rect.contains(pos))
+                || self
+                    .catalog
+                    .batch_targets
+                    .iter()
+                    .any(|(rect, _)| rect.contains(pos)))
+    }
+
     fn catalog_drag_input(&mut self, ctx: &egui::Context) {
         if self.settings
             || self.desktop.lock_target.is_some()
             || self.desktop.reminder_target.is_some()
             || self.desktop.purge_target.is_some()
             || self.catalog.replace_open
+            || self.catalog.batch_completion.is_some()
             || ctx.memory(|m| m.any_popup_open())
         {
             self.catalog.dragging = None;
@@ -2093,6 +2387,7 @@ impl App {
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.catalog.dragging = None;
+            self.catalog.hover_folder = None;
             return;
         }
         for event in ctx.input(|i| i.events.clone()) {
@@ -2140,6 +2435,22 @@ impl App {
                         if origin.distance(pos) < 4. {
                             continue;
                         }
+                        if let FolderDrag::Notes(notes) = &source {
+                            if let Some((_, target)) = self
+                                .catalog
+                                .batch_targets
+                                .iter()
+                                .rev()
+                                .find(|(r, _)| r.contains(pos))
+                            {
+                                match *target {
+                                    DropTarget::Order(scope, id, after) => {
+                                        self.catalog_reorder(scope, id, after, notes)
+                                    }
+                                }
+                                continue;
+                            }
+                        }
                         let Some(folder) = self
                             .catalog
                             .drag_targets
@@ -2152,16 +2463,7 @@ impl App {
                         };
                         match source {
                             FolderDrag::Notes(notes) => {
-                                let notes: Vec<_> = notes
-                                    .into_iter()
-                                    .filter(|&i| i < self.data.notes.len() && self.visible(i))
-                                    .collect();
-                                self.catalog.assign_notes(&notes, folder);
-                                self.toast = if folder.is_some() {
-                                    format!("{}개 메모를 폴더에 배치했습니다", notes.len())
-                                } else {
-                                    format!("{}개 메모의 폴더 분류를 해제했습니다", notes.len())
-                                };
+                                self.catalog_batch_action(notes, BatchAction::Folder(folder))
                             }
                             FolderDrag::Folder(f) => {
                                 if !self.catalog.move_folder(f, folder) {

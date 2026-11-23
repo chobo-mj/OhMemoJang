@@ -111,11 +111,11 @@ fn scope_card(
     r.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 impl App {
-    pub fn done_at(&mut self, i: usize, day: Option<NaiveDate>, value: bool) {
+    pub fn completion_day(&self, i: usize, day: Option<NaiveDate>) -> Option<NaiveDate> {
         let n = &self.data.notes[i];
         if n.duration > 1 && n.date.is_some() && !n.deadline {
             let today = Local::now().date_naive();
-            let day = day.unwrap_or_else(|| {
+            Some(day.unwrap_or_else(|| {
                 if n.occurs(today) {
                     today
                 } else {
@@ -124,7 +124,13 @@ impl App {
                         .find(|d| !n.occurrence_completed.contains_key(d))
                         .unwrap_or(n.date.unwrap())
                 }
-            });
+            }))
+        } else {
+            None
+        }
+    }
+    pub fn done_at(&mut self, i: usize, day: Option<NaiveDate>, value: bool) {
+        if let Some(day) = self.completion_day(i, day) {
             self.extra.completion_scope = Some((i, day, value));
             self.extra.scope_owner = main_viewport();
         } else {

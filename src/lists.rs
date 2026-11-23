@@ -30,6 +30,16 @@ impl Cache {
         let key = key
             .wrapping_mul(0x9E37_79B9_7F4A_7C15)
             .wrapping_add(CHANGES.load(Ordering::Relaxed));
+        self.get_stable(slot, key, make)
+    }
+
+    /// Reuse projections whose complete dependencies are supplied in the key.
+    pub fn get_stable<T: 'static>(
+        &mut self,
+        slot: &'static str,
+        key: u64,
+        make: impl FnOnce() -> T,
+    ) -> Rc<T> {
         if let Some((k, v)) = self.slots.get(slot) {
             if *k == key {
                 if let Ok(v) = v.clone().downcast::<T>() {

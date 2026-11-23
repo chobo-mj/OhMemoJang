@@ -367,6 +367,13 @@ impl App {
                     modifiers,
                 } => {
                     if let Some(d) = self.drag.take() {
+                        if d.source.viewport == viewport
+                            && !d.source.card
+                            && !d.source.folder
+                            && self.catalog_owns_note_drop(ctx, pos)
+                        {
+                            continue;
+                        }
                         if (d.source.viewport == viewport && d.origin.distance(pos) > 4.)
                             || (d.source.viewport != viewport && d.moved)
                         {

@@ -843,6 +843,7 @@ impl App {
     fn open_page(&mut self, page: usize) {
         if self.page != page {
             self.catalog.selection.clear();
+            self.catalog.selection_ui = false;
             self.content_selection.clear();
             self.content_purge.clear();
             self.desktop.trash_selection.clear();
