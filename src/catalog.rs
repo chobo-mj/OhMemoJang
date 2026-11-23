@@ -2145,11 +2145,7 @@ impl App {
                             });
                     });
                     cols[0].add_space(14.);
-                    let unfiled = self
-                        .catalog_folder_index()
-                        .get(&None)
-                        .cloned()
-                        .unwrap_or_default();
+                    let unfiled = index.get(&None).map(Vec::as_slice).unwrap_or_default();
                     cols[0].horizontal(|ui| {
                         ui::section_header(
                             ui,
@@ -2159,40 +2155,39 @@ impl App {
                         );
                     });
                     ui::card(&mut cols[0], |ui| {
-                        egui::ScrollArea::vertical()
+                        let scroll = egui::ScrollArea::vertical()
                             .id_salt("catalog_unfiled")
                             .max_height((height - folder_height - 112.).max(70.))
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                self.catalog_drag_scroll(ui);
-                                if unfiled.is_empty() {
-                                    ui::empty_state(
-                                        ui,
-                                        crate::icons::Icon::Notes,
-                                        "모든 메모를 분류했습니다",
-                                        "",
-                                    );
-                                }
-                                for i in unfiled {
-                                    crate::lists::lazy_row(
-                                        ui,
-                                        ("folder_note", i),
-                                        34.,
-                                        false,
-                                        |ui| self.catalog_folder_note(ui, i),
-                                    );
-                                }
-                                let r = ui.add_sized(
-                                    [ui.available_width(), 26.],
-                                    egui::Label::new(
-                                        RichText::new("여기로 끌면 폴더 분류가 해제됩니다")
-                                            .size(11.)
-                                            .color(ui::t(ui).faint),
-                                    )
-                                    .sense(Sense::hover()),
+                            .auto_shrink([false, false]);
+                        if unfiled.is_empty() {
+                            scroll.show(ui, |ui| {
+                                ui::empty_state(
+                                    ui,
+                                    crate::icons::Icon::Notes,
+                                    "모든 메모를 분류했습니다",
+                                    "",
                                 );
-                                self.catalog_folder_drop(ui, &r, None);
+                                self.catalog_unfiled_drop(ui);
                             });
+                        } else {
+                            scroll.show_rows(
+                                ui,
+                                self.catalog_folder_row_height(),
+                                unfiled.len() + 1,
+                                |ui, range| {
+                                    self.catalog_drag_scroll(ui);
+                                    for at in range {
+                                        if let Some(&id) = unfiled.get(at) {
+                                            ui.push_id(("unfiled", id), |ui| {
+                                                self.catalog_folder_note(ui, id)
+                                            });
+                                        } else {
+                                            self.catalog_unfiled_drop(ui);
+                                        }
+                                    }
+                                },
+                            );
+                        }
                     });
                     cols[0].add_space(4.);
                     ui::hint(
@@ -2389,17 +2384,34 @@ impl App {
         }
     }
 
+    fn catalog_unfiled_drop(&mut self, ui: &mut egui::Ui) {
+        let response = ui.add_sized(
+            [ui.available_width(), self.catalog_folder_row_height()],
+            egui::Label::new(
+                RichText::new("여기로 끌면 폴더 분류가 해제됩니다")
+                    .size(11.)
+                    .color(ui::t(ui).faint),
+            )
+            .sense(Sense::hover()),
+        );
+        self.catalog_folder_drop(ui, &response, None);
+    }
+
+    fn catalog_folder_row_height(&self) -> f32 {
+        match self.desktop.row_spacing {
+            0 => 28.,
+            2 => 40.,
+            _ => 34.,
+        }
+    }
+
     fn catalog_folder_note(&mut self, ui: &mut egui::Ui, i: usize) {
         let selected = if self.catalog_selecting() {
             self.catalog.selection.items.contains(&i)
         } else {
             self.catalog.selected == Some(i)
         };
-        let height = match self.desktop.row_spacing {
-            0 => 28.,
-            2 => 40.,
-            _ => 34.,
-        };
+        let height = self.catalog_folder_row_height();
         let n = &self.data.notes[i];
         let meta = n
             .date
