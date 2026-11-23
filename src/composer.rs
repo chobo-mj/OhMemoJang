@@ -192,6 +192,7 @@ pub struct Table {
     /// while `positioned` is true: it is the placeholder character this
     /// table's body text carries.
     pub id: u32,
+    pub(crate) instance: u64,
     pub cells: Vec<Vec<Cell>>,
     pub col_widths: Vec<f32>,
     /// The least a row is high, and the height of one with no content.
@@ -212,6 +213,7 @@ impl Table {
     pub fn new(rows: usize, cols: usize) -> Self {
         Self {
             id: 0,
+            instance: new_block_instance(),
             cells: vec![vec![Cell::plain(); cols.clamp(1, 20)]; rows.clamp(1, 100)],
             col_widths: vec![120.; cols.clamp(1, 20)],
             row_height: 32.,
@@ -251,6 +253,7 @@ impl Table {
 #[derive(Clone)]
 pub struct Picture {
     pub id: u32,
+    instance: u64,
     pub name: String,
     pub pixels: Vec<u8>,
     pub width: usize,
@@ -277,6 +280,7 @@ impl Picture {
     ) -> Self {
         Self {
             id,
+            instance: new_block_instance(),
             name,
             pixels,
             width: size[0],
@@ -329,6 +333,28 @@ impl Picture {
 pub enum Block {
     Table(Table),
     Picture(Picture),
+}
+pub(crate) fn new_block_instance() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+impl Block {
+    pub(crate) fn identity(&self) -> (u32, bool, u64) {
+        match self {
+            Self::Table(table) => (table.id, false, table.instance),
+            Self::Picture(picture) => (picture.id, true, picture.instance),
+        }
+    }
+
+    fn marker(&self) -> Option<char> {
+        match self {
+            Self::Picture(picture) => Some(placeholder(picture.id)),
+            Self::Table(table) if table.positioned => Some(placeholder(table.id)),
+            Self::Table(_) => None,
+        }
+    }
 }
 #[derive(Clone)]
 pub struct Tab {
@@ -392,6 +418,7 @@ impl Tab {
     /// Insert a picture at a character range, replacing it. Returns the caret.
     pub fn insert_picture(&mut self, range: Range<usize>, mut picture: Picture) -> usize {
         picture.id = self.next_block_id();
+        picture.instance = new_block_instance();
         let c = placeholder(picture.id);
         self.blocks.push(Block::Picture(picture));
         replace_chars(&mut self.body, range.clone(), &c.to_string());
@@ -403,6 +430,7 @@ impl Tab {
     /// inline there from then on. Returns the caret.
     pub fn insert_table(&mut self, range: Range<usize>, mut table: Table) -> usize {
         table.id = self.next_block_id();
+        table.instance = new_block_instance();
         table.positioned = true;
         let c = placeholder(table.id);
         self.blocks.push(Block::Table(table));
@@ -419,6 +447,41 @@ impl Tab {
             blocks: vec![],
         }
     }
+
+    fn remove_blocks(&mut self, indices: &[usize]) -> Option<Vec<usize>> {
+        let indices: std::collections::HashSet<_> = indices.iter().copied().collect();
+        let mut markers = std::collections::HashSet::new();
+        let mut index = 0;
+        self.blocks.retain(|block| {
+            let remove = indices.contains(&index);
+            index += 1;
+            if remove {
+                markers.extend(block.marker());
+            }
+            !remove
+        });
+        if markers.is_empty() {
+            return None;
+        }
+        let mut cursor_map = vec![0];
+        let mut after = 0;
+        self.body.retain(|c| {
+            let keep = !markers.contains(&c);
+            after += usize::from(keep);
+            cursor_map.push(after);
+            keep
+        });
+        for span in &mut self.spans {
+            span.range = map_removed_chars(&cursor_map, &span.range);
+        }
+        self.spans.retain(|span| !span.range.is_empty());
+        Some(cursor_map)
+    }
+}
+
+fn map_removed_chars(map: &[usize], range: &Range<usize>) -> Range<usize> {
+    let last = map.len() - 1;
+    map[range.start.min(last)]..map[range.end.min(last)]
 }
 // One retained body layout per editor. Compare compact source inputs before
 // constructing or hashing the per-character LayoutJob.
@@ -468,6 +531,17 @@ enum UndoKind {
         text: String,
         spans: Vec<Span>,
     },
+}
+impl UndoKind {
+    fn tab(&self) -> usize {
+        match self {
+            Self::Body { tab, .. }
+            | Self::Style { tab, .. }
+            | Self::Table { tab, .. }
+            | Self::TableInserted { tab, .. }
+            | Self::TableDeleted { tab, .. } => *tab,
+        }
+    }
 }
 struct UndoEntry {
     seq: u64,
@@ -696,13 +770,7 @@ impl Document {
         } else {
             self.undo.entries.pop()?
         };
-        let tab = match &e.kind {
-            UndoKind::Body { tab, .. }
-            | UndoKind::Style { tab, .. }
-            | UndoKind::Table { tab, .. }
-            | UndoKind::TableInserted { tab, .. }
-            | UndoKind::TableDeleted { tab, .. } => *tab,
-        };
+        let tab = e.kind.tab();
         let current = self.tabs.get(tab)?;
         let inverse_kind = match &e.kind {
             UndoKind::Body { .. } => UndoKind::Body {
@@ -864,6 +932,27 @@ impl Document {
         }
         self.selection = 0..0;
         self.selected_cell = None;
+    }
+
+    pub(crate) fn remove_collection_blocks(&mut self, tab: usize, indices: &[usize]) {
+        let cursor_map = self.tabs[tab].remove_blocks(indices);
+        self.first_tab_changed |= tab == 0;
+        // History in this tab may refer to removed blocks or old character
+        // offsets. Other tabs still have valid histories.
+        self.undo.entries.retain(|entry| entry.kind.tab() != tab);
+        self.undo.redo.retain(|entry| entry.kind.tab() != tab);
+        if self.active == tab {
+            self.selected_cell = None;
+            self.tsel = None;
+            self.selected_picture = None;
+            self.picture_tool_at = None;
+            self.undo_cursor = None;
+            if let Some(map) = cursor_map {
+                self.selection = map_removed_chars(&map, &self.selection);
+                self.requested_tab = Some(tab);
+                self.requested_selection = Some(self.selection.clone());
+            }
+        }
     }
     /// Change one thing about each selected character (`edit`), keeping the
     /// rest of its formatting.
@@ -4293,9 +4382,13 @@ fn paint_tables(
                 );
             }
         }
-        t.body = t.body.chars().filter(|c| *c != key).collect();
-        t.blocks
-            .retain(|b| !matches!(b, Block::Table(x) if x.id == tid));
+        if let Some(index) = t
+            .blocks
+            .iter()
+            .position(|b| matches!(b, Block::Table(x) if x.id == tid))
+        {
+            t.remove_blocks(&[index]);
+        }
         doc.selected_cell = None;
         doc.tsel = None;
     }
@@ -5546,6 +5639,7 @@ fn picture_from_file(path: &Path, scale: f32, fit: bool) -> Result<Picture, Stri
         .map_err(|_| "PNG/JPEG 이미지를 읽을 수 없습니다")?
         .to_rgba8();
     Ok(Picture {
+        instance: new_block_instance(),
         name: path
             .file_name()
             .unwrap_or_default()
@@ -5571,6 +5665,7 @@ fn picture_from_clipboard(scale: f32, fit: bool) -> Result<Picture, String> {
         return Err("8192×8192 이하 이미지를 사용하세요".into());
     }
     Ok(Picture {
+        instance: new_block_instance(),
         name: "붙여 넣은 이미지".into(),
         width: image.width,
         height: image.height,
@@ -7056,6 +7151,7 @@ mod inline_picture_tests {
     fn picture(w: usize, h: usize) -> Picture {
         Picture {
             id: 0,
+            instance: new_block_instance(),
             name: "test".into(),
             pixels: vec![255; w * h * 4],
             width: w,
@@ -8777,6 +8873,7 @@ mod paste_focus_tests {
     fn picture() -> Picture {
         Picture {
             id: 0,
+            instance: new_block_instance(),
             name: "붙여 넣은 이미지".into(),
             pixels: vec![255; 2 * 2 * 4],
             width: 2,

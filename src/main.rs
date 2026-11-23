@@ -76,6 +76,8 @@ type BandResize = (
 struct App {
     desktop: desktop::Desktop,
     catalog: catalog::Catalog,
+    content_selection: selection::Selection<content_collections::ContentKey>,
+    content_purge: Vec<content_collections::ContentKey>,
     studio: studio::Studio,
     extra: extras::Extra,
     clipboard: clipboard_history::ClipboardHistory,
@@ -264,6 +266,8 @@ impl App {
         Self {
             desktop: desktop::Desktop::default(),
             catalog: catalog::Catalog::default(),
+            content_selection: Default::default(),
+            content_purge: Vec::new(),
             extra: extras::Extra::default(),
             clipboard: Default::default(),
             studio: studio::Studio::default(),
@@ -796,7 +800,7 @@ impl App {
         });
     }
     fn main_shortcuts(&mut self, ctx: &egui::Context) {
-        if self.desktop.purge_target.is_some() {
+        if self.desktop.purge_target.is_some() || !self.content_purge.is_empty() {
             return;
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -839,6 +843,8 @@ impl App {
     fn open_page(&mut self, page: usize) {
         if self.page != page {
             self.catalog.selection.clear();
+            self.content_selection.clear();
+            self.content_purge.clear();
             self.desktop.trash_selection.clear();
             self.desktop.trash_selected_groups.clear();
         }

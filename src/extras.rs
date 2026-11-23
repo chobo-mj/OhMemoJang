@@ -109,7 +109,7 @@ pub struct Extra {
     pub bookmark_ui: crate::media::BookmarkUi,
     /// Pinned tables and pictures of 표 · 이미지 모아보기: (memo, body tab,
     /// block id, picture).
-    pub pinned_content: std::collections::BTreeSet<(usize, usize, u32, bool)>,
+    pub pinned_content: std::collections::BTreeSet<(usize, u64, u32, bool)>,
     /// A bookmark's comment and pin, by its address.
     pub bookmark_marks: std::collections::BTreeMap<String, (String, bool)>,
     pub size_applied: Option<(usize, u8)>,
@@ -1122,6 +1122,8 @@ impl App {
         );
         ui.add_space(12.);
         if self.extra.utilities_tab != previous_tab {
+            self.content_selection.clear();
+            self.content_purge.clear();
             self.desktop.trash_selection.clear();
             self.desktop.trash_selected_groups.clear();
         }

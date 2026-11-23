@@ -52,6 +52,7 @@ pub struct Saved {
     /// Pinned tables / pictures of the collections (memo, tab, block id,
     /// picture).
     pub pinned_content: Vec<(usize, usize, u32, bool)>,
+    pub pinned_content_by_tab: Option<Vec<(usize, u64, u32, bool)>>,
     /// Flat bookmark fallback for saves and applications without folder support.
     pub bookmarks: Option<Vec<(String, String)>>,
     pub bookmark_sources: Vec<crate::media::BookmarkSource>,
@@ -743,6 +744,7 @@ fn tab_from(r: &TabRec) -> Tab {
                     width,
                     row_height,
                 } => Block::Table(Table {
+                    instance: crate::composer::new_block_instance(),
                     id: 0,
                     cells: cells
                         .iter()
@@ -769,6 +771,7 @@ fn tab_from(r: &TabRec) -> Tab {
                     positioned,
                     row_manual,
                 } => Block::Table(Table {
+                    instance: crate::composer::new_block_instance(),
                     id: *id,
                     cells: cells
                         .iter()
@@ -1030,7 +1033,23 @@ impl App {
             tutorial: self.extra.tutorial,
             tutorial_notes: self.extra.tutorial_notes.clone(),
             my_holidays: self.extra.my_holidays.clone(),
-            pinned_content: self.extra.pinned_content.iter().copied().collect(),
+            pinned_content: self
+                .extra
+                .pinned_content
+                .iter()
+                .filter_map(|&(note, tab, block, image)| {
+                    let index = self
+                        .data
+                        .notes
+                        .get(note)?
+                        .document
+                        .tabs
+                        .iter()
+                        .position(|t| t.id == tab)?;
+                    Some((note, index, block, image))
+                })
+                .collect(),
+            pinned_content_by_tab: Some(self.extra.pinned_content.iter().copied().collect()),
             bookmarks: Some(crate::media::legacy_bookmarks(
                 &self.extra.bookmarks,
                 &self.extra.bookmark_sources,
@@ -1071,6 +1090,8 @@ impl App {
     /// Replace the workspace with saved data.
     pub fn restore(&mut self, s: &Saved) {
         self.clear_trash_listing();
+        self.content_selection.clear();
+        self.content_purge.clear();
         self.desktop.trash_selection.clear();
         self.desktop.trash_selected_groups.clear();
         self.desktop.purge_target = None;
@@ -1129,7 +1150,17 @@ impl App {
         self.extra.tutorial = s.tutorial;
         self.extra.tutorial_notes = s.tutorial_notes.clone();
         self.extra.my_holidays = s.my_holidays.clone();
-        self.extra.pinned_content = s.pinned_content.iter().copied().collect();
+        self.extra.pinned_content = if let Some(pins) = &s.pinned_content_by_tab {
+            pins.iter().copied().collect()
+        } else {
+            s.pinned_content
+                .iter()
+                .filter_map(|&(note, index, block, image)| {
+                    let tab = self.data.notes.get(note)?.document.tabs.get(index)?;
+                    Some((note, tab.id, block, image))
+                })
+                .collect()
+        };
         if let Some(b) = &s.bookmarks {
             self.extra.bookmarks = b.clone();
         }
@@ -2034,7 +2065,7 @@ mod tests {
             line!()
         ));
         let mut a = App::sample(NaiveDate::from_ymd_opt(2026, 11, 11).unwrap());
-        a.extra.pinned_content.insert((0, 0, 3, true));
+        a.extra.pinned_content.insert((0, 1, 3, true));
         a.extra.bookmarks = vec![("사내".into(), "https://intra.example".into())];
         a.extra
             .bookmark_marks
@@ -2046,7 +2077,7 @@ mod tests {
         let saved = a.snapshot(&dir);
         let mut b = App::sample(NaiveDate::from_ymd_opt(2026, 11, 11).unwrap());
         b.restore(&saved);
-        assert!(b.extra.pinned_content.contains(&(0, 0, 3, true)));
+        assert!(b.extra.pinned_content.contains(&(0, 1, 3, true)));
         assert_eq!(b.extra.bookmarks, a.extra.bookmarks);
         assert_eq!(
             b.extra.bookmark_marks.get("https://intra.example"),
