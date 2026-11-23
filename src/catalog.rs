@@ -1721,12 +1721,19 @@ impl App {
                 });
         }
         if let Some((FolderDrag::Notes(ids), origin)) = self.catalog.dragging.as_ref() {
-            if ctx.input(|i| {
-                i.pointer
-                    .hover_pos()
-                    .is_some_and(|p| p.distance(*origin) >= 4.)
-            }) {
-                ui.label(format!("메모 {}개 이동 중", ids.len()));
+            if let Some(pos) = ctx
+                .input(|i| i.pointer.hover_pos())
+                .filter(|p| p.distance(*origin) >= 4.)
+            {
+                egui::Area::new(egui::Id::new("catalog_drag_count"))
+                    .order(egui::Order::Tooltip)
+                    .fixed_pos(pos + Vec2::new(16., 16.))
+                    .interactable(false)
+                    .show(&ctx, |ui| {
+                        egui::Frame::popup(ui.style()).show(ui, |ui| {
+                            ui.label(format!("메모 {}개 이동 중", ids.len()));
+                        });
+                    });
             }
         }
     }
@@ -3991,6 +3998,86 @@ mod tests {
         assert_eq!(a.catalog.assignments.get(&0), Some(&folder));
         assert_eq!(a.catalog.assignments.get(&1), Some(&folder));
         assert_eq!(a.catalog.folders[folder].parent, None);
+    }
+
+    #[test]
+    fn project_drop_uses_the_displayed_selection_as_one_command() {
+        let mut app = App::sample(NaiveDate::from_ymd_opt(2026, 11, 23).unwrap());
+        app.catalog.tab = 3;
+        app.catalog.project_view = Some(NO_PROJECT);
+        app.data.notes[0].project = None;
+        app.data.notes[1].project = None;
+        let project = app.data.projects.len();
+        app.data.projects.push("검증 프로젝트".into());
+        app.catalog.selection.active = true;
+        app.catalog.selection.items.extend([0, 1]);
+        let ctx = egui::Context::default();
+        let run = |app: &mut App, events| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(1380., 760.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| app.catalog_ui(ui));
+                },
+            );
+        };
+        run(&mut app, vec![]);
+        run(&mut app, vec![]);
+        let from = app
+            .catalog
+            .drag_sources
+            .iter()
+            .find_map(|(rect, source)| {
+                matches!(source, FolderDrag::Notes(ids) if ids.as_slice() == [0])
+                    .then_some(rect.center())
+            })
+            .unwrap();
+        let to = app
+            .catalog
+            .batch_targets
+            .iter()
+            .find_map(|(rect, target)| {
+                matches!(target, DropTarget::Project(Some(id)) if *id == project)
+                    .then_some(rect.center())
+            })
+            .unwrap();
+        run(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(from),
+                egui::Event::PointerButton {
+                    pos: from,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+        run(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(to),
+                egui::Event::PointerButton {
+                    pos: to,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+        assert_eq!(
+            app.data.notes[0].project,
+            Some(project),
+            "{from:?} -> {to:?}"
+        );
+        assert_eq!(app.data.notes[1].project, Some(project));
+        assert_eq!(app.catalog.undo.len(), 1);
     }
     #[test]
     fn creating_siblings_keeps_parent_context_and_roots_remain_possible() {
