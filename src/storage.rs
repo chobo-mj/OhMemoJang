@@ -52,8 +52,10 @@ pub struct Saved {
     /// Pinned tables / pictures of the collections (memo, tab, block id,
     /// picture).
     pub pinned_content: Vec<(usize, usize, u32, bool)>,
-    /// The bookmark list; none in saves made before it was kept.
+    /// Flat bookmark fallback for saves and applications without folder support.
     pub bookmarks: Option<Vec<(String, String)>>,
+    pub bookmark_sources: Vec<crate::media::BookmarkSource>,
+    pub bookmark_layout: crate::media::BookmarkLayout,
     /// Bookmark comments and pins: (address, comment, pinned).
     pub bookmark_marks: Vec<(String, String, bool)>,
     pub deleted_at: Vec<(usize, NaiveDateTime)>,
@@ -1025,7 +1027,12 @@ impl App {
             tutorial_notes: self.extra.tutorial_notes.clone(),
             my_holidays: self.extra.my_holidays.clone(),
             pinned_content: self.extra.pinned_content.iter().copied().collect(),
-            bookmarks: Some(self.extra.bookmarks.clone()),
+            bookmarks: Some(crate::media::legacy_bookmarks(
+                &self.extra.bookmarks,
+                &self.extra.bookmark_sources,
+            )),
+            bookmark_sources: self.extra.bookmark_sources.clone(),
+            bookmark_layout: self.extra.bookmark_layout,
             bookmark_marks: self
                 .extra
                 .bookmark_marks
@@ -1117,6 +1124,13 @@ impl App {
         if let Some(b) = &s.bookmarks {
             self.extra.bookmarks = b.clone();
         }
+        self.extra.bookmark_sources = s.bookmark_sources.clone();
+        self.extra.bookmark_layout = s.bookmark_layout;
+        self.extra.bookmark_ui = Default::default();
+        crate::media::remove_imported_bookmark_copies(
+            &mut self.extra.bookmarks,
+            &self.extra.bookmark_sources,
+        );
         self.extra.bookmark_marks = s
             .bookmark_marks
             .iter()
