@@ -10,6 +10,15 @@ use std::ops::Range;
 mod batch;
 pub(crate) use batch::OrderScope;
 use batch::{Action as BatchAction, DropTarget, Edit};
+#[path = "catalog_projects.rs"]
+mod projects;
+use projects::ProjectBranch;
+pub(crate) use projects::ProjectFolder;
+
+pub(crate) const PROJECT_TAB: usize = 0;
+pub(crate) const FOLDER_TAB: usize = 1;
+pub(crate) const ALL_MEMOS_TAB: usize = 2;
+const BOARD_TAB: usize = 3;
 
 type FindHit = (usize, Option<(usize, Range<usize>)>);
 
@@ -68,7 +77,13 @@ pub struct Catalog {
     batch_completion: Option<(Vec<usize>, bool)>,
     folder_drop_list: bool,
     folder_manual: bool,
-    project_view: Option<usize>,
+    project_branch: Option<ProjectBranch>,
+    project_expanded: HashSet<ProjectBranch>,
+    project_folder_rename: Option<(usize, String, bool)>,
+    project_show_completed: bool,
+    pub project_preview_width: f32,
+    pub project_folders: Vec<ProjectFolder>,
+    pub project_assignments: BTreeMap<usize, usize>,
     batch_targets: Vec<(egui::Rect, DropTarget)>,
     hover_folder: Option<(usize, f64)>,
     pub folder_selected: Option<usize>,
@@ -444,20 +459,20 @@ impl App {
         ui::tabs(
             ui,
             &mut self.catalog.tab,
-            &["폴더 보기", "전체 메모 보기", "관계 보드", "프로젝트 보기"],
+            &["프로젝트 보기", "폴더 보기", "전체 메모 보기", "관계 보드"],
         );
         ui.add_space(12.);
         if self.catalog.tab != previous_tab {
             self.catalog.selection.clear();
             self.catalog.dragging = None;
         }
-        if self.catalog.tab == 2 {
+        if self.catalog.tab == BOARD_TAB {
             self.board(ui);
             return;
         }
-        if self.catalog.tab == 0 {
+        if self.catalog.tab == FOLDER_TAB {
             self.catalog_folders(ui);
-        } else if self.catalog.tab == 3 {
+        } else if self.catalog.tab == PROJECT_TAB {
             self.catalog_projects(ui);
         } else {
             self.catalog_controls(ui);
@@ -1196,7 +1211,7 @@ impl App {
             );
             if !trash
                 && self.catalog.selection_ui
-                && self.catalog.tab == 1
+                && self.catalog.tab == ALL_MEMOS_TAB
                 && self.catalog.sort == 2
             {
                 self.catalog_order_drop(ui, rect, OrderScope::All, i);
@@ -1678,7 +1693,7 @@ impl App {
                 if let Some(action) = action {
                     self.catalog_batch_action(self.catalog_batch_ids(), action);
                 }
-                if self.catalog.tab != 0 {
+                if self.catalog.tab != FOLDER_TAB {
                     ui.toggle_value(&mut self.catalog.folder_drop_list, "폴더 이동 대상");
                 }
             } else {
@@ -1736,122 +1751,6 @@ impl App {
                     });
             }
         }
-    }
-
-    fn catalog_projects(&mut self, ui: &mut egui::Ui) {
-        if !self.catalog_valid_project(self.catalog.project_view.filter(|&id| id != NO_PROJECT)) {
-            self.catalog.project_view = None;
-            self.catalog.selection.clear();
-        }
-        ui.horizontal(|ui| {
-            if ui.button("+ 새 메모").clicked() {
-                let id = self.add_note(None);
-                self.data.notes[id].project =
-                    self.catalog.project_view.filter(|&p| p != NO_PROJECT);
-                self.catalog.selected = Some(id);
-            }
-            if ui.button("프로젝트 관리").clicked() {
-                self.desktop.project_popup = true;
-            }
-        });
-        let project = self.catalog.project_view;
-        let mut ids = Vec::new();
-        let mut counts = HashMap::<usize, (usize, usize)>::new();
-        for (id, note) in self
-            .data
-            .notes
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| self.visible(*i))
-        {
-            let count = counts
-                .entry(note.project.unwrap_or(NO_PROJECT))
-                .or_default();
-            count.0 += usize::from(note.done);
-            count.1 += 1;
-            if crate::refinements::project_match(project, note.project) {
-                ids.push(id);
-            }
-        }
-        self.catalog_selection_bar(ui, ids.clone());
-        let height = panel_height(ui);
-        let tree_width = (ui.available_width() * 0.2).clamp(155., 225.);
-        let full =
-            egui::Rect::from_min_size(ui.cursor().min, Vec2::new(ui.available_width(), height));
-        ui.allocate_rect(full, Sense::hover());
-        let tree_rect = egui::Rect::from_min_size(full.min, Vec2::new(tree_width, height));
-        let list_rect =
-            egui::Rect::from_min_max(egui::pos2(tree_rect.right() + 12., full.top()), full.max);
-        let mut tree = ui.new_child(
-            egui::UiBuilder::new()
-                .id_salt("project_tree")
-                .max_rect(tree_rect),
-        );
-        tree.set_clip_rect(ui.clip_rect().intersect(tree_rect));
-        tree.heading("프로젝트");
-        egui::ScrollArea::vertical()
-            .id_salt("catalog_project_items")
-            .show(&mut tree, |ui| {
-                if ui
-                    .selectable_label(project.is_none(), "전체 프로젝트")
-                    .clicked()
-                {
-                    self.catalog.project_view = None;
-                }
-                self.catalog_project_target(
-                    ui,
-                    NO_PROJECT,
-                    "미분류 메모",
-                    counts.get(&NO_PROJECT).copied().unwrap_or_default(),
-                );
-                for id in 0..self.data.projects.len() {
-                    if self.catalog_valid_project(Some(id)) {
-                        let title = self.data.projects[id].clone();
-                        self.catalog_project_target(
-                            ui,
-                            id,
-                            &title,
-                            counts.get(&id).copied().unwrap_or_default(),
-                        );
-                    }
-                }
-            });
-        if self.catalog.project_view != project {
-            self.catalog.selection.clear();
-            self.catalog.selected = None;
-        }
-        let rows: Vec<_> = ids
-            .into_iter()
-            .map(|id| (id, self.data.notes[id].date))
-            .collect();
-        let mut list = ui.new_child(
-            egui::UiBuilder::new()
-                .id_salt("project_memos")
-                .max_rect(list_rect),
-        );
-        list.set_clip_rect(ui.clip_rect().intersect(list_rect));
-        self.catalog_split_list(&mut list, &rows, false, false);
-    }
-
-    fn catalog_project_target(
-        &mut self,
-        ui: &mut egui::Ui,
-        id: usize,
-        title: &str,
-        (done, total): (usize, usize),
-    ) {
-        let response = ui.selectable_label(
-            self.catalog.project_view == Some(id),
-            format!("{title}  {done}/{total}"),
-        );
-        if response.clicked() {
-            self.catalog.project_view = Some(id);
-        }
-        self.catalog_batch_drop(
-            ui,
-            response.rect,
-            DropTarget::Project((id != NO_PROJECT).then_some(id)),
-        );
     }
 
     fn catalog_batch_drop(&mut self, ui: &egui::Ui, rect: egui::Rect, target: DropTarget) {
@@ -1922,6 +1821,9 @@ impl App {
         self.catalog.undo.clear();
         self.catalog.redo.clear();
         self.catalog.batch_completion = None;
+        self.catalog.project_branch = None;
+        self.catalog.project_expanded.clear();
+        self.catalog.project_folder_rename = None;
         self.lists = Default::default();
     }
 
@@ -2582,10 +2484,9 @@ impl App {
                                 .find(|(r, _)| r.contains(pos))
                             {
                                 match *target {
-                                    DropTarget::Project(project) => self.catalog_batch_action(
-                                        notes.clone(),
-                                        BatchAction::Project(project),
-                                    ),
+                                    DropTarget::Project(location) => {
+                                        self.catalog_move_to_project(notes, location)
+                                    }
                                     DropTarget::Order(scope, id, after) => {
                                         self.catalog_reorder(scope, id, after, notes)
                                     }
@@ -3902,6 +3803,7 @@ mod tests {
         let mut a = App::sample(Local::now().date_naive());
         let folder = a.catalog.create_folder();
         a.catalog.rename = None;
+        a.catalog.tab = FOLDER_TAB;
         let ctx = egui::Context::default();
         let draw = |a: &mut App, events| {
             let _ = ctx.run(
@@ -3982,6 +3884,7 @@ mod tests {
             egui::Rect::from_min_size(egui::pos2(0., 0.), Vec2::new(200., 30.)),
             Some(folder),
         )];
+        a.catalog.tab = FOLDER_TAB;
         let ctx = egui::Context::default();
         let press = egui::pos2(40., 110.);
         let release = egui::pos2(40., 10.);
@@ -4015,8 +3918,8 @@ mod tests {
     #[test]
     fn project_drop_uses_the_displayed_selection_as_one_command() {
         let mut app = App::sample(NaiveDate::from_ymd_opt(2026, 11, 23).unwrap());
-        app.catalog.tab = 3;
-        app.catalog.project_view = Some(NO_PROJECT);
+        app.catalog.tab = PROJECT_TAB;
+        app.catalog.project_expanded.insert(ProjectBranch::Unfiled);
         app.data.notes[0].project = None;
         app.data.notes[1].project = None;
         let project = app.data.projects.len();
@@ -4055,7 +3958,7 @@ mod tests {
             .batch_targets
             .iter()
             .find_map(|(rect, target)| {
-                matches!(target, DropTarget::Project(Some(id)) if *id == project)
+                matches!(target, DropTarget::Project(location) if location.project == Some(project) && location.folder.is_none())
                     .then_some(rect.center())
             })
             .unwrap();

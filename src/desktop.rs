@@ -587,6 +587,7 @@ impl App {
             self.desktop.unlocked_at.remove(&i);
             self.desktop.deleted_at.remove(&i);
             self.catalog.assignments.remove(&i);
+            self.catalog.project_assignments.remove(&i);
             if self.catalog.selected == Some(i) {
                 self.catalog.selected = None;
                 self.catalog.selected_day = None;

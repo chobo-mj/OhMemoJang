@@ -609,7 +609,11 @@ impl App {
                     self.tree_branch(ui, i, &mut vec![], &tree)
                 });
             }
-            if let Some(i) = self.extra.tree_selected.filter(|&i| self.visible(i)) {
+            if let Some(i) = self
+                .extra
+                .tree_selected
+                .filter(|&i| self.board_project_matches(i))
+            {
                 cols[1].heading(&self.data.notes[i].title);
                 cols[1].label(if self.data.notes[i].locked {
                     "잠긴 메모"
@@ -628,27 +632,27 @@ impl App {
     /// relation tree, reused until input.
     fn relation_index(&mut self) -> std::rc::Rc<RelationIndex> {
         let mut cache = std::mem::take(&mut self.lists);
-        let key = crate::lists::key(self.data.notes.len());
+        let key = crate::lists::key((self.data.notes.len(), self.board_project_filter));
         let index = cache.get("relation_tree", key, || {
             let mut index = RelationIndex::default();
             let mut connected = HashSet::new();
             for (j, n) in self.data.notes.iter().enumerate() {
-                if !self.visible(j) {
+                if !self.board_project_matches(j) {
                     continue;
                 }
-                for &p in &n.parents {
+                for &p in n.parents.iter().filter(|&&p| self.board_project_matches(p)) {
                     index.children.entry(p).or_default().push(j);
                     connected.insert(p);
                 }
-                if n.parents.iter().all(|&p| !self.visible(p)) {
+                if n.parents.iter().all(|&p| !self.board_project_matches(p)) {
                     index.roots.push(j);
                 }
             }
             for &(a, b) in &self.data.links {
-                if self.visible(b) {
+                if self.board_project_matches(b) {
                     connected.insert(a);
                 }
-                if self.visible(a) {
+                if self.board_project_matches(a) {
                     connected.insert(b);
                 }
             }
@@ -711,7 +715,7 @@ impl App {
                     None
                 }
             })
-            .filter(|&j| self.visible(j) && !path.contains(&j))
+            .filter(|&j| self.board_project_matches(j) && !path.contains(&j))
             .collect();
         if !related.is_empty() {
             ui.indent(("related_refs", path.clone()), |ui| {
@@ -732,7 +736,7 @@ impl App {
     }
     pub fn auto_layout(&mut self) {
         let ids: Vec<_> = (0..self.data.notes.len())
-            .filter(|&i| self.visible(i))
+            .filter(|&i| self.board_project_matches(i))
             .collect();
         for (k, i) in ids.into_iter().enumerate() {
             self.data.notes[i].pos =
@@ -741,6 +745,14 @@ impl App {
         self.drag = None;
         self.extra.scene_initialized = false;
         self.toast = "메모 카드를 격자로 정렬했습니다 · 관계는 유지됩니다".into();
+    }
+
+    pub fn board_project_matches(&self, id: usize) -> bool {
+        self.data.notes.get(id).is_some_and(|note| {
+            !note.purged
+                && self.visible(id)
+                && crate::refinements::project_match(self.board_project_filter, note.project)
+        })
     }
     fn project_window(&mut self, ctx: &egui::Context) {
         let mut open = self.extra.project_manager;
@@ -944,6 +956,11 @@ impl App {
             return;
         }
         if let Some(target) = self.project_with_name(source, name) {
+            for folder in &mut self.catalog.project_folders {
+                if folder.project == source {
+                    folder.project = target;
+                }
+            }
             for note in self.data.notes.iter_mut() {
                 if note.project == Some(source) {
                     note.project = Some(target);
@@ -957,6 +974,9 @@ impl App {
             }
             if self.extra.search_project == Some(source) {
                 self.extra.search_project = filter;
+            }
+            if self.board_project_filter == Some(source) {
+                self.board_project_filter = filter;
             }
             self.toast = format!("‘{name}’ 프로젝트에 메모를 합쳤습니다");
         } else {
@@ -977,12 +997,16 @@ impl App {
             .map(|(id, _)| id)
             .collect();
         for id in assigned {
+            self.catalog.project_assignments.remove(&id);
             self.data.notes[id].project = None;
             if delete_notes && !self.data.notes[id].deleted {
                 self.trash_note(id);
             }
         }
         self.project_filter = None;
+        if self.board_project_filter == Some(p) {
+            self.board_project_filter = None;
+        }
         self.picked.retain(|&i| !self.data.notes[i].deleted);
         if self.data.notes[self.active].deleted {
             self.editor = false;
@@ -1260,4 +1284,19 @@ mod picker_binding_tests {
 pub struct RelationIndex {
     roots: Vec<usize>,
     children: std::collections::HashMap<usize, Vec<usize>>,
+}
+#[test]
+fn board_project_filter_promotes_notes_with_filtered_out_parents_to_roots() {
+    let mut a = App::sample(NaiveDate::from_ymd_opt(2026, 11, 24).unwrap());
+    a.data.notes[0].project = Some(0);
+    a.data.notes[1].project = Some(1);
+    a.data.notes[2].project = None;
+    a.data.notes[1].parents = vec![0];
+    a.board_project_filter = Some(1);
+    assert!(a.board_project_matches(1));
+    assert!(!a.board_project_matches(0));
+    assert!(a.relation_index().roots.contains(&1));
+    a.board_project_filter = Some(NO_PROJECT);
+    assert!(a.board_project_matches(2));
+    assert!(!a.board_project_matches(1));
 }

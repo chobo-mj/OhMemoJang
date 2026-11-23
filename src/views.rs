@@ -1735,8 +1735,48 @@ impl App {
 }
 impl App {
     pub fn board(&mut self, ui: &mut egui::Ui) {
+        if self.board_project_filter.is_some_and(|id| {
+            id != NO_PROJECT
+                && (id >= self.data.projects.len()
+                    || self.extra.hidden_projects.contains(&id)
+                    || self.extra.deleted_projects.contains(&id))
+        }) {
+            self.board_project_filter = None;
+        }
         ui.horizontal(|ui| {
             ui::segmented(ui, &mut self.extra.board_tab, &["관계", "트리"]);
+            let previous = self.board_project_filter;
+            egui::ComboBox::from_id_salt("board_project_filter")
+                .selected_text(crate::refinements::project_label(
+                    previous,
+                    &self.data.projects,
+                ))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.board_project_filter, None, "모든 프로젝트");
+                    ui.selectable_value(
+                        &mut self.board_project_filter,
+                        Some(NO_PROJECT),
+                        "미분류 메모",
+                    );
+                    for (id, name) in self.data.projects.iter().enumerate() {
+                        if !self.extra.hidden_projects.contains(&id)
+                            && !self.extra.deleted_projects.contains(&id)
+                        {
+                            ui.selectable_value(&mut self.board_project_filter, Some(id), name);
+                        }
+                    }
+                });
+            if previous != self.board_project_filter {
+                self.link_source = None;
+                self.extra.tree_selected = None;
+                let visible: Vec<_> = self
+                    .picked
+                    .iter()
+                    .copied()
+                    .filter(|&id| self.board_project_matches(id))
+                    .collect();
+                self.picked = visible;
+            }
             if self.extra.board_tab == 0 {
                 ui.add_space(6.);
                 ui::segmented(ui, &mut self.board_filter, &["모든 메모", "선택한 메모"]);
@@ -1747,7 +1787,9 @@ impl App {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if self.extra.board_tab == 0 {
                     if ui.button("+ 메모").clicked() {
-                        self.add_note(None);
+                        let id = self.add_note(None);
+                        self.data.notes[id].project =
+                            self.board_project_filter.filter(|&p| p != NO_PROJECT);
                     }
                     if ui.button("자동 정렬").clicked() {
                         self.auto_layout();
@@ -1774,11 +1816,13 @@ impl App {
             return;
         }
         ui.add_space(6.);
-        self.picked
-            .retain(|&i| self.data.notes.get(i).is_some_and(|n| !n.deleted));
+        self.picked = std::mem::take(&mut self.picked)
+            .into_iter()
+            .filter(|&id| self.board_project_matches(id))
+            .collect();
         if self
             .link_source
-            .is_some_and(|i| i >= self.data.notes.len() || !self.visible(i))
+            .is_some_and(|i| !self.board_project_matches(i))
         {
             self.link_source = None;
         }
@@ -1919,7 +1963,7 @@ impl App {
                 let (canvas, _) = ui.allocate_exact_size(Vec2::new(1450., 950.), Sense::hover());
                 let ids: Vec<_> = (0..self.data.notes.len())
                     .filter(|&i| {
-                        self.visible(i)
+                        self.board_project_matches(i)
                             && match self.board_filter {
                                 1 => self.picked.contains(&i),
                                 _ => true,

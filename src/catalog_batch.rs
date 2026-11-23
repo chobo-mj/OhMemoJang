@@ -1,3 +1,4 @@
+use super::projects::ProjectLocation;
 use super::*;
 
 #[derive(
@@ -10,13 +11,13 @@ pub(crate) enum OrderScope {
 
 #[derive(Clone, Copy)]
 pub(super) enum DropTarget {
-    Project(Option<usize>),
+    Project(ProjectLocation),
     Order(OrderScope, usize, bool),
 }
 
 pub(super) enum Edit {
     Folder(Vec<(usize, Option<usize>, Option<usize>)>),
-    Project(Vec<(usize, Option<usize>, Option<usize>)>),
+    Project(Vec<(usize, ProjectLocation, ProjectLocation)>),
     Trash(Vec<usize>),
     Order(OrderScope, Vec<usize>, Vec<usize>),
 }
@@ -125,14 +126,10 @@ impl App {
                     })
                     .collect(),
             ),
-            Action::Project(target) if self.catalog_valid_project(target) => Edit::Project(
-                ids.into_iter()
-                    .filter_map(|id| {
-                        let old = self.data.notes[id].project;
-                        (old != target).then_some((id, old, target))
-                    })
-                    .collect(),
-            ),
+            Action::Project(target) => {
+                self.catalog_move_to_project(&ids, ProjectLocation::root(target));
+                return;
+            }
             Action::Trash => Edit::Trash(ids),
             Action::Complete(value) => {
                 if ids.iter().any(|&id| {
@@ -219,6 +216,22 @@ impl App {
             .notes
             .get(id)
             .is_some_and(|note| !note.purged && self.visible(id))
+    }
+
+    pub(super) fn catalog_move_to_project(&mut self, ids: &[usize], target: ProjectLocation) {
+        if !self.valid_project_location(target)
+            || !ids.iter().all(|&id| self.catalog_actionable(id))
+        {
+            return;
+        }
+        let changes = ids
+            .iter()
+            .filter_map(|&id| {
+                let old = self.project_note_location(id);
+                (old != target).then_some((id, old, target))
+            })
+            .collect();
+        self.catalog_apply_new(Edit::Project(changes));
     }
 
     pub(super) fn catalog_ordered(&self, scope: OrderScope, ids: &mut [usize]) {
@@ -315,41 +328,46 @@ impl App {
     }
 
     fn catalog_apply_edit(&mut self, edit: &Edit, forward: bool) -> bool {
-        let endpoints = |old, new| if forward { (old, new) } else { (new, old) };
+        fn endpoints<T>(forward: bool, old: T, new: T) -> (T, T) {
+            if forward {
+                (old, new)
+            } else {
+                (new, old)
+            }
+        }
         let (count, verb) = match edit {
-            Edit::Folder(changes) | Edit::Project(changes) => {
-                let folder = matches!(edit, Edit::Folder(_));
+            Edit::Folder(changes) => {
                 if changes.is_empty()
                     || !changes.iter().all(|&(id, old, new)| {
-                        let (from, to) = endpoints(old, new);
+                        let (from, to) = endpoints(forward, old, new);
                         self.catalog_actionable(id)
-                            && if folder {
-                                self.catalog.assignments.get(&id).copied() == from
-                                    && self.catalog_valid_folder(to)
-                            } else {
-                                self.data.notes[id].project == from
-                                    && self.catalog_valid_project(to)
-                            }
+                            && self.catalog.assignments.get(&id).copied() == from
+                            && self.catalog_valid_folder(to)
                     })
                 {
                     return false;
                 }
                 for &(id, old, new) in changes {
-                    let (_, to) = endpoints(old, new);
-                    if folder {
-                        self.catalog.assign_notes(&[id], to);
-                    } else {
-                        self.data.notes[id].project = to;
-                    }
+                    let (_, to) = endpoints(forward, old, new);
+                    self.catalog.assign_notes(&[id], to);
                 }
-                (
-                    changes.len(),
-                    if folder {
-                        "폴더 위치 변경"
-                    } else {
-                        "프로젝트 변경"
-                    },
-                )
+                (changes.len(), "폴더 위치 변경")
+            }
+            Edit::Project(changes) => {
+                if changes.is_empty()
+                    || !changes.iter().all(|&(id, old, new)| {
+                        let (from, to) = endpoints(forward, old, new);
+                        self.catalog_actionable(id)
+                            && self.project_note_location(id) == from
+                            && self.valid_project_location(to)
+                    })
+                {
+                    return false;
+                }
+                for &(id, old, new) in changes {
+                    self.place_project_note(id, endpoints(forward, old, new).1);
+                }
+                (changes.len(), "프로젝트 위치 변경")
             }
             Edit::Trash(ids) => {
                 if !ids.iter().all(|&id| {

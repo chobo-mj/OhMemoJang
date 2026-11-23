@@ -102,20 +102,20 @@ fn catalog_large_frame_costs() {
     for count in [1500, 20_000] {
         let mut a = busy_app(count);
         a.page = 4;
-        a.catalog.tab = 0;
+        a.catalog.tab = crate::catalog::FOLDER_TAB;
         frames(&format!("folders {count}"), &mut a, 40, |a, ui| {
             a.catalog_ui(ui)
         });
         let mut a = busy_app(count);
         a.page = 4;
-        a.catalog.tab = 1;
+        a.catalog.tab = crate::catalog::ALL_MEMOS_TAB;
         frames(&format!("all memos {count}"), &mut a, 40, |a, ui| {
             a.catalog_ui(ui)
         });
         if !baseline {
             let mut a = busy_app(count);
             a.page = 4;
-            a.catalog.tab = 3;
+            a.catalog.tab = crate::catalog::PROJECT_TAB;
             frames(&format!("projects {count}"), &mut a, 40, |a, ui| {
                 a.catalog_ui(ui)
             });

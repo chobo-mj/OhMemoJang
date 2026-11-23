@@ -2700,7 +2700,7 @@ impl App {
         }
         if ctx.input_mut(|v| v.consume_key(egui::Modifiers::CTRL, egui::Key::F)) {
             self.catalog.focus_find();
-            self.catalog.tab = 1;
+            self.catalog.tab = crate::catalog::ALL_MEMOS_TAB;
             self.page = 4;
             self.main_open = true;
             ctx.send_viewport_cmd_to(main_viewport(), egui::ViewportCommand::Focus);

@@ -40,6 +40,8 @@ pub struct Saved {
     pub catalog_folders: Vec<CatalogFolderRec>,
     pub catalog_assignments: Vec<(usize, usize)>,
     pub catalog_manual_order: Vec<(crate::catalog::OrderScope, Vec<usize>)>,
+    pub project_folders: Vec<crate::catalog::ProjectFolder>,
+    pub project_folder_assignments: Vec<(usize, usize)>,
     pub hidden_projects: Vec<usize>,
     pub deleted_projects: Vec<usize>,
     /// Wiki tabs deleted (soft) so they stay gone after a restart.
@@ -1054,6 +1056,13 @@ impl App {
                 .iter()
                 .map(|(scope, ids)| (*scope, ids.clone()))
                 .collect(),
+            project_folders: self.catalog.project_folders.clone(),
+            project_folder_assignments: self
+                .catalog
+                .project_assignments
+                .iter()
+                .map(|(&memo, &folder)| (memo, folder))
+                .collect(),
             pinned_content: self
                 .extra
                 .pinned_content
@@ -1158,6 +1167,8 @@ impl App {
             .collect();
         self.catalog.assignments = s.catalog_assignments.iter().copied().collect();
         self.catalog.manual_order = s.catalog_manual_order.iter().cloned().collect();
+        self.catalog.project_folders = s.project_folders.clone();
+        self.catalog.project_assignments = s.project_folder_assignments.iter().copied().collect();
         self.catalog.selected = None;
         self.extra.hidden_projects = s.hidden_projects.iter().copied().collect();
         self.extra.deleted_projects = s.deleted_projects.iter().copied().collect();

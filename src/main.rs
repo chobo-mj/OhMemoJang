@@ -150,6 +150,7 @@ struct App {
     project_filter: Option<usize>,
     recurring: bool,
     board_filter: usize,
+    board_project_filter: Option<usize>,
     picked: Vec<usize>,
     project_name: String,
     project_rename: Option<(usize, String)>,
@@ -316,6 +317,7 @@ impl App {
             project_filter: None,
             recurring: true,
             board_filter: 0,
+            board_project_filter: None,
             picked: vec![],
             project_name: "새 프로젝트".into(),
             project_rename: None,
@@ -844,6 +846,9 @@ impl App {
         if self.page != page {
             self.catalog.selection.clear();
             self.catalog.selection_ui = false;
+            if page == 4 {
+                self.catalog.tab = crate::catalog::PROJECT_TAB;
+            }
             self.content_selection.clear();
             self.content_purge.clear();
             self.desktop.trash_selection.clear();
@@ -1444,6 +1449,7 @@ impl App {
     fn restore_main_widths(&mut self) {
         let widths = &self.prefs.main_widths;
         self.catalog.preview_width = widths.memo_preview;
+        self.catalog.project_preview_width = widths.project_preview;
         self.catalog.column_widths = widths.memo_columns;
         self.extra.wiki_left_width = widths.wiki_tree;
         self.extra.wiki_detail_width = widths.wiki_detail;
@@ -1453,6 +1459,7 @@ impl App {
     fn keep_prefs(&mut self) {
         let widths = &mut self.prefs.main_widths;
         widths.memo_preview = self.catalog.preview_width;
+        widths.project_preview = self.catalog.project_preview_width;
         widths.memo_columns = self.catalog.column_widths;
         widths.wiki_tree = self.extra.wiki_left_width;
         widths.wiki_detail = self.extra.wiki_detail_width;
