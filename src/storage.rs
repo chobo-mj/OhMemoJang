@@ -145,6 +145,7 @@ pub struct DocRec {
 #[derive(Serialize, Deserialize, Default, Clone, PartialEq)]
 #[serde(default)]
 pub struct TabRec {
+    pub id: u64,
     pub title: String,
     pub body: String,
     pub hidden: bool,
@@ -644,6 +645,7 @@ fn save_picture(dir: &Path, p: &mut Picture) {
 
 fn tab_rec(t: &Tab) -> TabRec {
     TabRec {
+        id: t.id,
         title: t.title.clone(),
         body: t.body.clone(),
         hidden: t.hidden,
@@ -709,6 +711,7 @@ fn tab_rec(t: &Tab) -> TabRec {
 
 fn tab_from(r: &TabRec) -> Tab {
     Tab {
+        id: r.id,
         title: r.title.clone(),
         body: r.body.clone(),
         hidden: r.hidden,
@@ -836,6 +839,7 @@ fn doc_from(r: &DocRec) -> Document {
     }
     d.active = r.active.min(d.tabs.len() - 1);
     d.trash = r.trash.iter().map(tab_from).collect();
+    d.normalize_tab_ids();
     if r.font_size > 0. {
         d.font_size = r.font_size;
     }
@@ -2078,6 +2082,7 @@ mod tests {
         table.cells[0][0].col_span = 2;
         table.cells[0][1].covered = true;
         let mut tab = Tab {
+            id: 0,
             title: "표".into(),
             body: String::new(),
             hidden: false,

@@ -332,6 +332,7 @@ pub enum Block {
 }
 #[derive(Clone)]
 pub struct Tab {
+    pub id: u64,
     pub title: String,
     pub body: String,
     pub hidden: bool,
@@ -410,6 +411,7 @@ impl Tab {
     }
     fn new(title: String) -> Self {
         Self {
+            id: 0,
             title,
             body: String::new(),
             hidden: false,
@@ -539,6 +541,7 @@ pub struct Document {
     pub tabs: Vec<Tab>,
     pub active: usize,
     pub trash: Vec<Tab>,
+    next_tab_id: u64,
     pub font_size: f32,
     pub font_name: String,
     pub opacity: f32,
@@ -572,10 +575,13 @@ pub struct Document {
 }
 impl Default for Document {
     fn default() -> Self {
+        let mut first = Tab::new("본문".into());
+        first.id = 1;
         Self {
-            tabs: vec![Tab::new("본문".into())],
+            tabs: vec![first],
             active: 0,
             trash: vec![],
+            next_tab_id: 2,
             font_size: 13.333,
             font_name: "맑은 고딕".into(),
             opacity: 1.,
@@ -607,6 +613,44 @@ impl Default for Document {
     }
 }
 impl Document {
+    pub fn normalize_tab_ids(&mut self) {
+        let mut reserved: std::collections::HashSet<_> = self
+            .tabs
+            .iter()
+            .chain(&self.trash)
+            .map(|tab| tab.id)
+            .filter(|&id| id != 0)
+            .collect();
+        let mut seen = std::collections::HashSet::new();
+        let highest = reserved.iter().copied().max().unwrap_or(0);
+        let mut next = highest.wrapping_add(1).max(1);
+        for tab in self.tabs.iter_mut().chain(&mut self.trash) {
+            if tab.id != 0 && seen.insert(tab.id) {
+                continue;
+            }
+            while reserved.contains(&next) {
+                next = next.wrapping_add(1).max(1);
+            }
+            tab.id = next;
+            reserved.insert(next);
+            next = next.wrapping_add(1).max(1);
+        }
+        self.next_tab_id = next;
+    }
+    fn push_tab(&mut self, title: String) {
+        let mut tab = Tab::new(title);
+        while self
+            .tabs
+            .iter()
+            .chain(&self.trash)
+            .any(|existing| existing.id == self.next_tab_id)
+        {
+            self.next_tab_id = self.next_tab_id.wrapping_add(1).max(1);
+        }
+        tab.id = self.next_tab_id;
+        self.next_tab_id = self.next_tab_id.wrapping_add(1).max(1);
+        self.tabs.push(tab);
+    }
     pub fn plain_text(&self, first_body: &str) -> String {
         let mut parts = vec![strip_pictures(first_body)];
         for (i, t) in self.tabs.iter().enumerate() {
@@ -796,7 +840,7 @@ impl Document {
     }
     pub fn add_tab(&mut self) {
         let n = self.tabs.len() + 1;
-        self.tabs.push(Tab::new(format!("탭 {n}")));
+        self.push_tab(format!("탭 {n}"));
         self.active = self.tabs.len() - 1;
         self.selection = 0..0;
         self.selected_cell = None;
@@ -812,7 +856,7 @@ impl Document {
         self.tsel = None;
         self.first_tab_changed |= index == 0;
         if self.tabs.is_empty() {
-            self.tabs.push(Tab::new("본문".into()));
+            self.push_tab("본문".into());
         }
         self.active = self.active.min(self.tabs.len() - 1);
         if self.tabs[self.active].hidden {
@@ -1316,7 +1360,7 @@ fn content_impl(
     id: Id,
 ) -> egui::Response {
     if doc.tabs.is_empty() {
-        doc.tabs.push(Tab::new("본문".into()));
+        doc.push_tab("본문".into());
     }
     doc.active = doc.active.min(doc.tabs.len() - 1);
     if doc.first_tab_changed {
@@ -2738,7 +2782,7 @@ fn render_footer(
     opacity: bool,
 ) -> egui::Response {
     if doc.tabs.is_empty() {
-        doc.tabs.push(Tab::new("본문".into()));
+        doc.push_tab("본문".into());
     }
     expire_status(ui, doc, id);
     ui.scope(|ui| {

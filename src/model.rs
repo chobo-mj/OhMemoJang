@@ -305,15 +305,24 @@ impl Note {
 pub struct Notes {
     items: Vec<Note>,
     touched: std::collections::BTreeSet<usize>,
+    revision: u64,
     /// Any memo may have changed (the whole list was borrowed for writing).
     all: bool,
 }
 impl Notes {
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+    fn changed(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
     pub fn push(&mut self, n: Note) {
+        self.changed();
         self.touched.insert(self.items.len());
         self.items.push(n);
     }
     pub fn get_mut(&mut self, i: usize) -> Option<&mut Note> {
+        self.changed();
         self.touched.insert(i);
         self.items.get_mut(i)
     }
@@ -338,6 +347,7 @@ impl From<Vec<Note>> for Notes {
         Self {
             items,
             touched: Default::default(),
+            revision: 0,
             all: true,
         }
     }
@@ -350,6 +360,7 @@ impl std::ops::Deref for Notes {
 }
 impl std::ops::DerefMut for Notes {
     fn deref_mut(&mut self) -> &mut [Note] {
+        self.changed();
         self.all = true;
         &mut self.items
     }
@@ -362,6 +373,7 @@ impl std::ops::Index<usize> for Notes {
 }
 impl std::ops::IndexMut<usize> for Notes {
     fn index_mut(&mut self, i: usize) -> &mut Note {
+        self.changed();
         self.touched.insert(i);
         &mut self.items[i]
     }
