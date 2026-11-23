@@ -386,12 +386,10 @@ impl App {
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
-                            if selection_mode {
-                                if self.content_selection.checkbox(ui, key, &keys) {
-                                    ui.memory_mut(|m| {
-                                        m.request_focus(egui::Id::new("content_collection_focus"))
-                                    });
-                                }
+                            if selection_mode && self.content_selection.checkbox(ui, key, keys) {
+                                ui.memory_mut(|m| {
+                                    m.request_focus(egui::Id::new("content_collection_focus"))
+                                });
                             }
                             let label = if selected {
                                 RichText::new(&source_title).strong().color(ACCENT)
@@ -464,7 +462,7 @@ impl App {
                 ui.add_space(12.);
             });
             if let Some(response) = response {
-                self.content_card_click(ui, &response, key, &keys, None);
+                self.content_card_click(ui, &response, key, keys, None);
                 self.content_card_menu(&response, key, &mut action, &mut single);
             }
             if pin {
@@ -472,7 +470,7 @@ impl App {
             }
         }
         if let Some(action) = action {
-            self.run_content_action(ui, action, &self.selected_content(&keys));
+            self.run_content_action(ui, action, &self.selected_content(keys));
         } else if let Some((action, key)) = single {
             self.run_content_action(ui, action, &[key]);
         }
@@ -613,17 +611,16 @@ impl App {
                                                     },
                                                 );
                                                 ui.horizontal(|ui| {
-                                                    if selection_mode {
-                                                        if self
+                                                    if selection_mode
+                                                        && self
                                                             .content_selection
-                                                            .checkbox(ui, key, &keys)
-                                                        {
-                                                            ui.memory_mut(|m| {
-                                                                m.request_focus(egui::Id::new(
-                                                                    "content_collection_focus",
-                                                                ))
-                                                            });
-                                                        }
+                                                            .checkbox(ui, key, keys)
+                                                    {
+                                                        ui.memory_mut(|m| {
+                                                            m.request_focus(egui::Id::new(
+                                                                "content_collection_focus",
+                                                            ))
+                                                        });
                                                     }
                                                     title_click = Some(
                                                         ui.add(
@@ -681,14 +678,14 @@ impl App {
                                         ui,
                                         &response,
                                         key,
-                                        &keys,
+                                        keys,
                                         Some(ContentAction::Copy),
                                     ) {
                                         single = Some((action, key));
                                     }
                                 }
                                 if let Some(response) = title_click {
-                                    self.content_card_click(ui, &response, key, &keys, None);
+                                    self.content_card_click(ui, &response, key, keys, None);
                                     self.content_card_menu(
                                         &response,
                                         key,
@@ -707,7 +704,7 @@ impl App {
             ui.add_space((row_count - visible.end) as f32 * ROW_HEIGHT);
         });
         if let Some(action) = action {
-            self.run_content_action(ui, action, &self.selected_content(&keys));
+            self.run_content_action(ui, action, &self.selected_content(keys));
         } else if let Some((action, key)) = single {
             if action == ContentAction::Export {
                 self.save_one_image(key);
@@ -715,7 +712,7 @@ impl App {
                 self.run_content_action(ui, action, &[key]);
             }
         } else if batch {
-            self.run_content_action(ui, ContentAction::Export, &keys);
+            self.run_content_action(ui, ContentAction::Export, keys);
         }
         if sources.is_empty() {
             ui.label("선택한 날짜에 생성된 이미지가 없습니다");

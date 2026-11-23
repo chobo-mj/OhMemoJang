@@ -76,20 +76,51 @@ fn frames(label: &str, a: &mut App, n: usize, mut show: impl FnMut(&mut App, &mu
     for _ in 0..3 {
         run(a, false);
     }
-    let start = Instant::now();
+    let mut samples = Vec::with_capacity(n);
     let mut tess = std::time::Duration::ZERO;
     let mut prims = 0;
     for i in 0..n {
+        let start = Instant::now();
         let (t, p) = run(a, i % 2 == 0);
+        samples.push(start.elapsed().as_secs_f64() * 1000.);
         tess += t;
         prims = p;
     }
-    let total = start.elapsed();
+    samples.sort_by(f64::total_cmp);
+    let p95 = samples[n.saturating_mul(95).div_ceil(100).saturating_sub(1)];
     println!(
-        "{label}: {:.2} ms/frame (tessellate {:.2}, {prims} vertices)",
-        total.as_secs_f64() * 1000. / n as f64,
+        "{label}: p50 {:.2}, p95 {p95:.2} ms/frame (tessellate {:.2}, {prims} vertices)",
+        samples[n / 2],
         tess.as_secs_f64() * 1000. / n as f64
     );
+}
+
+#[test]
+#[ignore]
+fn catalog_large_frame_costs() {
+    let baseline = std::env::var_os("OHMEMOJANG_PERF_BASELINE").is_some();
+    for count in [1500, 20_000] {
+        let mut a = busy_app(count);
+        a.page = 4;
+        a.catalog.tab = 0;
+        frames(&format!("folders {count}"), &mut a, 40, |a, ui| {
+            a.catalog_ui(ui)
+        });
+        let mut a = busy_app(count);
+        a.page = 4;
+        a.catalog.tab = 1;
+        frames(&format!("all memos {count}"), &mut a, 40, |a, ui| {
+            a.catalog_ui(ui)
+        });
+        if !baseline {
+            let mut a = busy_app(count);
+            a.page = 4;
+            a.catalog.tab = 3;
+            frames(&format!("projects {count}"), &mut a, 40, |a, ui| {
+                a.catalog_ui(ui)
+            });
+        }
+    }
 }
 
 #[test]

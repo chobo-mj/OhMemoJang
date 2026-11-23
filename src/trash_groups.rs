@@ -345,7 +345,8 @@ impl App {
 
     /// Groups to show in the bin: deleted tabs and folders that still have
     /// memos in the bin.
-    pub fn trash_groups(&self) -> Vec<Group> {
+    #[cfg(test)]
+    fn trash_groups(&self) -> Vec<Group> {
         let (groups, _) = self.trash_grouped_members();
         groups
     }
