@@ -104,7 +104,15 @@ impl App {
             }
         }
         if purge {
-            tabs.retain(|(i, _)| !memo_ids.contains(i));
+            for &i in &memo_ids {
+                tabs.extend(
+                    self.data.notes[i]
+                        .document
+                        .trash
+                        .iter()
+                        .map(|tab| (i, tab.id)),
+                );
+            }
         }
         let memos = memo_ids
             .into_iter()
@@ -238,7 +246,9 @@ impl App {
         self.purge_notes(&memos);
         let mut tabs = BTreeMap::<usize, BTreeSet<_>>::new();
         for (i, id) in current.tabs {
-            tabs.entry(i).or_default().insert(id);
+            if !self.data.notes[i].purged {
+                tabs.entry(i).or_default().insert(id);
+            }
         }
         for (i, ids) in tabs {
             self.data.notes[i]
@@ -626,7 +636,7 @@ mod tests {
         ]);
         a.request_trash_purge(PurgeKind::Selection, None);
         let request = a.desktop.purge_target.take().unwrap();
-        assert_eq!(request.targets.counts(), (2, 0));
+        assert_eq!(request.targets.counts(), (2, 1));
         a.restore_note(1);
         assert!(a.confirm_trash_purge(request).is_none());
         assert!(a.data.notes[0].deleted && !a.data.notes[0].purged);
