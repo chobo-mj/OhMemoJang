@@ -94,6 +94,10 @@ impl App {
             );
             let hovered = ui.rect_contains_pointer(rect);
             let selected = preview && self.catalog.selected == Some(i);
+            if preview && !selected && !hovered {
+                ui.painter()
+                    .rect_filled(rect.shrink2(Vec2::new(1., 2.)), 9., tone.field);
+            }
             if selected {
                 ui.painter()
                     .rect_filled(rect.shrink2(Vec2::new(1., 2.)), 8., tone.accent_soft);
@@ -339,13 +343,27 @@ impl App {
             egui::pos2(list_rect.right() + 16., rect.top()),
             Vec2::new(preview_width, height),
         );
+        let tone = ui::t(ui);
+        let surface = if ui.visuals().dark_mode {
+            tone.sidebar
+        } else {
+            Color32::WHITE
+        };
+        ui.painter().rect_filled(list_rect, 14., surface);
+        ui.painter().rect_stroke(
+            list_rect,
+            14.,
+            Stroke::new(1.0_f32, tone.line),
+            egui::StrokeKind::Inside,
+        );
+        let list_content = list_rect.shrink2(Vec2::new(14., 14.));
         let mut list = ui.new_child(
             egui::UiBuilder::new()
                 .id_salt("agenda_list_pane")
-                .max_rect(list_rect)
+                .max_rect(list_content)
                 .layout(egui::Layout::top_down(egui::Align::LEFT)),
         );
-        list.set_clip_rect(ui.clip_rect().intersect(list_rect));
+        list.set_clip_rect(ui.clip_rect().intersect(list_content));
         egui::ScrollArea::vertical()
             .id_salt(("page_scroll", self.page))
             .auto_shrink([false, false])
@@ -522,10 +540,14 @@ impl App {
         let (tone, sun, sat, today_mark) = self.calendar_tone(ui);
         ui.horizontal(|ui| {
             ui.set_min_height(32.);
+            let (month_mark, _) = ui.allocate_exact_size(Vec2::new(5., 25.), Sense::hover());
+            ui.painter().rect_filled(month_mark, 3., today_mark);
+            ui.add_space(4.);
             ui.label(
                 RichText::new(self.month.format("%Y년 %-m월").to_string())
-                    .size(18.)
-                    .strong(),
+                    .size(22.)
+                    .strong()
+                    .color(tone.ink),
             );
             ui.add_space(4.);
             let weeks = self.prefs.cal_weeks;
@@ -584,26 +606,30 @@ impl App {
                     .on_hover_text("연결된 엑셀 파일의 근무자 보기 · 준비 중");
             });
         });
-        ui.add_space(10.);
+        ui.add_space(14.);
         let width = ui.available_width().max(280.);
         let col = width / 7.;
-        let (header, _) = ui.allocate_exact_size(Vec2::new(width, 26.), Sense::hover());
+        let (header, _) = ui.allocate_exact_size(Vec2::new(width, 30.), Sense::hover());
+        let header_fill = self.cal.active().map_or(tone.sidebar, |theme| theme.card);
+        ui.painter()
+            .rect_filled(header.shrink2(Vec2::new(2., 1.)), 8., header_fill);
         for (i, label) in ["일", "월", "화", "수", "목", "금", "토"]
             .iter()
             .enumerate()
         {
             ui.painter().text(
-                header.min + Vec2::new(i as f32 * col + 10., 13.),
+                header.min + Vec2::new(i as f32 * col + 14., 15.),
                 egui::Align2::LEFT_CENTER,
                 label,
                 egui::FontId::proportional(12.),
                 match i {
                     0 => sun,
                     6 => sat,
-                    _ => tone.faint,
+                    _ => tone.muted,
                 },
             );
         }
+        ui.add_space(4.);
         let weeks = self.prefs.cal_weeks;
         // Month view starts on the Sunday before the 1st; week views on the
         // Sunday of the selected day's week.
@@ -627,29 +653,12 @@ impl App {
         };
         let (all, _) =
             ui.allocate_exact_size(Vec2::new(width, rows as f32 * height), Sense::hover());
-        if let Some(theme) = self.cal.active() {
-            ui.painter().rect_filled(all, 8., theme.card);
-        }
-        ui.painter().rect_stroke(
-            all,
-            8.,
-            Stroke::new(1.0_f32, tone.line),
-            egui::StrokeKind::Inside,
-        );
-        for r in 1..rows {
-            let y = all.top() + r as f32 * height;
-            ui.painter().line_segment(
-                [egui::pos2(all.left(), y), egui::pos2(all.right(), y)],
-                Stroke::new(1.0_f32, tone.line),
-            );
-        }
-        for c in 1..7 {
-            let x = all.left() + c as f32 * col;
-            ui.painter().line_segment(
-                [egui::pos2(x, all.top()), egui::pos2(x, all.bottom())],
-                Stroke::new(1.0_f32, tone.line),
-            );
-        }
+        // Each day has a quiet, separated surface. Hit rectangles stay full
+        // size so a narrow gutter never interferes with scheduling or drops.
+        let surface = self
+            .cal
+            .active()
+            .map_or(ui.visuals().faint_bg_color, |theme| theme.card);
         for slot in 0..rows * 7 {
             let rect = Rect::from_min_size(
                 all.min + Vec2::new((slot % 7) as f32 * col, (slot / 7) as f32 * height),
@@ -664,11 +673,21 @@ impl App {
             } else {
                 1.
             };
+            let tile = rect.shrink(2.);
+            let tile_fill = if day == self.day {
+                tone.accent_soft
+            } else if weekday == 0 || weekday == 6 {
+                ui::lerp_color(surface, tone.line, 0.22)
+            } else {
+                surface
+            };
+            ui.painter().rect_filled(tile, 8., tile_fill);
             if day == self.day {
-                ui.painter().rect_filled(
-                    rect.shrink(1.),
-                    if slot == 0 { 7. } else { 0. },
-                    tone.accent_soft.gamma_multiply(0.55),
+                ui.painter().rect_stroke(
+                    tile,
+                    8.,
+                    Stroke::new(1.0_f32, today_mark),
+                    egui::StrokeKind::Inside,
                 );
             }
             self.targets.push(dragging::Target {
@@ -738,15 +757,15 @@ impl App {
                 tone.ink
             }
             .gamma_multiply(fade);
-            let number = rect.min + Vec2::new(17., 18.);
+            let number = rect.min + Vec2::new(19., 20.);
             if day == today {
-                ui.painter().circle_filled(number, 11., today_mark);
+                ui.painter().circle_filled(number, 12., today_mark);
             }
             ui.painter().text(
                 number,
                 egui::Align2::CENTER_CENTER,
                 day.day().to_string(),
-                egui::FontId::proportional(12.5),
+                egui::FontId::proportional(13.),
                 if day == today {
                     Color32::WHITE
                 } else {
@@ -962,6 +981,10 @@ impl App {
     pub fn calendar_day_detail(&mut self, ui: &mut egui::Ui) {
         let drop_area = ui.available_rect_before_wrap().intersect(ui.clip_rect());
         ui.horizontal(|ui| {
+            let tone = ui::t(ui);
+            let (mark, _) = ui.allocate_exact_size(Vec2::new(5., 23.), Sense::hover());
+            ui.painter().rect_filled(mark, 3., ACCENT);
+            ui.add_space(4.);
             ui.label(
                 RichText::new(format!(
                     "{} {}",
@@ -969,7 +992,8 @@ impl App {
                     ui::weekday(self.day)
                 ))
                 .strong()
-                .size(20.),
+                .size(22.)
+                .color(tone.ink),
             );
             let new_memo = self.stand_allows(crate::calendar_dock::StandFeature::NewMemo);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

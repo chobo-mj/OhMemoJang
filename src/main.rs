@@ -964,8 +964,8 @@ impl App {
             .frame(egui::Frame::NONE.fill(tone.bg).inner_margin(egui::Margin {
                 left: 28,
                 right: 24,
-                top: 18,
-                bottom: 8,
+                top: 20,
+                bottom: 12,
             }))
             .show(ctx, |ui| {
                 self.page_bar(ui);
@@ -1019,17 +1019,22 @@ impl App {
                 .unwrap_or("OhMemoJang")
         };
         ui.horizontal(|ui| {
-            ui.set_min_height(34.);
+            ui.set_min_height(48.);
             if !self.sidebar
                 && icons::icon_button(ui, icons::Icon::Sidebar, "사이드바 열기").clicked()
             {
                 self.sidebar = true;
             }
             let tone = ui::t(ui);
-            let (mark, _) = ui.allocate_exact_size(Vec2::new(4., 22.), egui::Sense::hover());
-            ui.painter().rect_filled(mark, 2., ui::ACCENT);
-            ui.add_space(3.);
-            ui.label(RichText::new(title).size(22.).strong().color(tone.ink));
+            ui.vertical(|ui| {
+                ui.label(
+                    RichText::new("OH MEMO  /  WORKSPACE")
+                        .size(10.)
+                        .strong()
+                        .color(tone.muted),
+                );
+                ui.label(RichText::new(title).size(26.).strong().color(tone.ink));
+            });
             if self.extra.search_mode {
                 ui.add_space(6.);
                 if ui::pill(
@@ -1213,8 +1218,27 @@ impl App {
             self.compact_sidebar(ui);
             return;
         }
-        ui::banner(ui, ui.available_width().max(16.));
-        ui.add_space(10.);
+        let tone = ui::t(ui);
+        ui.add_space(5.);
+        ui.horizontal(|ui| {
+            let (mark, _) = ui.allocate_exact_size(Vec2::splat(36.), egui::Sense::hover());
+            ui.painter().rect_filled(mark, 11., ui::ACCENT);
+            icons::paint_icon(
+                ui.painter(),
+                mark.shrink(9.),
+                icons::Icon::Notes,
+                egui::Color32::WHITE,
+            );
+            ui.vertical(|ui| {
+                ui.label(RichText::new("OH MEMO").size(16.).strong().color(tone.ink));
+                ui.label(
+                    RichText::new("나의 생각을 위한 공간")
+                        .size(10.5)
+                        .color(tone.muted),
+                );
+            });
+        });
+        ui.add_space(22.);
         ui.horizontal(|ui| {
             let width = ui.available_width() - 28. - ui.spacing().item_spacing.x;
             if std::mem::take(&mut self.focus_search) {
@@ -1255,7 +1279,9 @@ impl App {
                 self.sidebar = false;
             }
         });
-        ui.add_space(6.);
+        ui.add_space(12.);
+        ui::caption(ui, "WORKSPACE");
+        ui.add_space(5.);
         let today = Local::now().date_naive();
         let mut cache = std::mem::take(&mut self.lists);
         let key = lists::key((today, self.data.notes.len()));
@@ -1304,7 +1330,7 @@ impl App {
         ui.add_space(2.);
         egui::ScrollArea::vertical()
             .id_salt("sidebar_projects")
-            .max_height((ui.available_height() - 44.).max(60.))
+            .max_height((ui.available_height() - 48.).max(0.))
             .show(ui, |ui| {
                 let mut any = false;
                 for (i, p) in self.data.projects.iter().enumerate() {
@@ -1334,12 +1360,31 @@ impl App {
                     });
                 }
             });
-        ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-            if studio::nav_button(ui, "설정", false, icons::Icon::Settings, None, false).clicked()
-            {
-                self.settings = !self.settings;
-            }
-        });
+        // Reserve a fixed footer against the visible panel, even when the
+        // project list consumes all available height.
+        let clip = ui.clip_rect();
+        let settings_rect = egui::Rect::from_min_size(
+            egui::pos2(clip.left() + 12., clip.bottom() - 48.),
+            Vec2::new((clip.width() - 24.).max(0.), 36.),
+        );
+        let mut footer = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt("sidebar_settings_footer")
+                .max_rect(settings_rect),
+        );
+        footer.set_clip_rect(clip);
+        if studio::nav_button(
+            &mut footer,
+            "설정",
+            self.settings,
+            icons::Icon::Settings,
+            None,
+            false,
+        )
+        .clicked()
+        {
+            self.settings = !self.settings;
+        }
     }
     fn toast_overlay(&mut self, ctx: &egui::Context) {
         let now = ctx.input(|i| i.time);

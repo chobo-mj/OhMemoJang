@@ -3109,7 +3109,7 @@ pub fn nav_button(
     accent: bool,
 ) -> egui::Response {
     let tone = crate::ui::t(ui);
-    let (rect, r) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 30.), Sense::click());
+    let (rect, r) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 36.), Sense::click());
     r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, text));
     if selected || r.hovered() || accent {
         ui.painter().rect_filled(
@@ -3123,11 +3123,11 @@ pub fn nav_button(
         );
     }
     if selected {
-        let marker = Rect::from_min_size(rect.left_top() + Vec2::new(0., 7.), Vec2::new(3., 16.));
+        let marker = Rect::from_min_size(rect.left_top() + Vec2::new(0., 7.), Vec2::new(3., 22.));
         ui.painter().rect_filled(marker, 2., ACCENT);
     }
     let highlight = if ui.visuals().dark_mode {
-        Color32::from_rgb(255, 164, 140)
+        Color32::from_rgb(191, 190, 255)
     } else {
         ACCENT
     };

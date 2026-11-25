@@ -7,9 +7,9 @@ use eframe::egui::{
 };
 use std::hash::Hash;
 
-pub const ACCENT: Color32 = Color32::from_rgb(217, 87, 56);
-pub const ACCENT_SOFT: Color32 = Color32::from_rgb(252, 237, 231);
-pub const BLUE: Color32 = Color32::from_rgb(56, 110, 196);
+pub const ACCENT: Color32 = Color32::from_rgb(91, 89, 204);
+pub const ACCENT_SOFT: Color32 = Color32::from_rgb(228, 229, 253);
+pub const BLUE: Color32 = Color32::from_rgb(71, 100, 201);
 
 /// Color tokens resolved for the current light or dark theme.
 #[derive(Clone, Copy)]
@@ -29,50 +29,50 @@ pub struct Tone {
 pub fn tone(dark: bool) -> Tone {
     if dark {
         Tone {
-            bg: Color32::from_rgb(30, 30, 29),
-            sidebar: Color32::from_rgb(25, 25, 24),
-            field: Color32::from_rgb(43, 43, 41),
-            hover: Color32::from_rgb(50, 50, 48),
-            pressed: Color32::from_rgb(60, 60, 57),
-            line: Color32::from_rgb(52, 52, 50),
-            line_strong: Color32::from_rgb(70, 70, 67),
-            ink: Color32::from_rgb(234, 233, 229),
-            muted: Color32::from_rgb(158, 157, 152),
-            faint: Color32::from_rgb(110, 109, 105),
-            accent_soft: Color32::from_rgb(70, 42, 34),
+            bg: Color32::from_rgb(21, 25, 42),
+            sidebar: Color32::from_rgb(17, 21, 36),
+            field: Color32::from_rgb(35, 41, 62),
+            hover: Color32::from_rgb(43, 50, 74),
+            pressed: Color32::from_rgb(53, 61, 88),
+            line: Color32::from_rgb(49, 57, 80),
+            line_strong: Color32::from_rgb(70, 79, 106),
+            ink: Color32::from_rgb(235, 238, 249),
+            muted: Color32::from_rgb(168, 178, 201),
+            faint: Color32::from_rgb(132, 144, 171),
+            accent_soft: Color32::from_rgb(52, 51, 96),
         }
     } else {
         Tone {
-            bg: Color32::WHITE,
-            sidebar: Color32::from_rgb(248, 247, 245),
-            field: Color32::from_rgb(242, 241, 238),
-            hover: Color32::from_rgb(235, 234, 231),
-            pressed: Color32::from_rgb(225, 224, 220),
-            line: Color32::from_rgb(234, 233, 230),
-            line_strong: Color32::from_rgb(214, 213, 209),
-            ink: Color32::from_rgb(44, 43, 40),
-            muted: Color32::from_rgb(120, 119, 115),
-            faint: Color32::from_rgb(166, 165, 160),
+            bg: Color32::from_rgb(248, 249, 253),
+            sidebar: Color32::from_rgb(235, 238, 248),
+            field: Color32::from_rgb(234, 237, 248),
+            hover: Color32::from_rgb(225, 229, 245),
+            pressed: Color32::from_rgb(211, 216, 238),
+            line: Color32::from_rgb(222, 226, 238),
+            line_strong: Color32::from_rgb(200, 207, 225),
+            ink: Color32::from_rgb(36, 43, 69),
+            muted: Color32::from_rgb(102, 114, 143),
+            faint: Color32::from_rgb(139, 150, 174),
             accent_soft: ACCENT_SOFT,
         }
     }
 }
-const BRIGHTER_DARK_BG: Color32 = Color32::from_rgb(48, 48, 46);
+const BRIGHTER_DARK_BG: Color32 = Color32::from_rgb(40, 47, 67);
 
 pub fn theme_tone(dark: bool, brighter: bool) -> Tone {
     let base = tone(dark);
     if dark && brighter {
         Tone {
             bg: BRIGHTER_DARK_BG,
-            sidebar: Color32::from_rgb(41, 41, 39),
-            field: Color32::from_rgb(60, 60, 57),
-            hover: Color32::from_rgb(68, 68, 65),
-            pressed: Color32::from_rgb(78, 78, 75),
-            line: Color32::from_rgb(68, 68, 65),
-            line_strong: Color32::from_rgb(87, 87, 83),
-            muted: Color32::from_rgb(176, 175, 169),
-            faint: Color32::from_rgb(138, 137, 131),
-            accent_soft: Color32::from_rgb(88, 54, 45),
+            sidebar: Color32::from_rgb(33, 39, 57),
+            field: Color32::from_rgb(53, 61, 88),
+            hover: Color32::from_rgb(60, 69, 93),
+            pressed: Color32::from_rgb(70, 80, 106),
+            line: Color32::from_rgb(60, 69, 93),
+            line_strong: Color32::from_rgb(88, 98, 124),
+            muted: Color32::from_rgb(191, 199, 218),
+            faint: Color32::from_rgb(151, 163, 188),
+            accent_soft: Color32::from_rgb(73, 72, 116),
             ..base
         }
     } else {
@@ -103,11 +103,11 @@ pub fn apply(ctx: &egui::Context, dark: bool, brighter: bool, family: egui::Font
     v.panel_fill = c.bg;
     v.window_fill = c.bg;
     v.faint_bg_color = if dark && brighter {
-        Color32::from_rgb(54, 54, 52)
+        Color32::from_rgb(46, 53, 73)
     } else if dark {
-        Color32::from_rgb(35, 35, 34)
+        Color32::from_rgb(27, 33, 51)
     } else {
-        Color32::from_rgb(250, 250, 248)
+        Color32::from_rgb(241, 244, 251)
     };
     v.extreme_bg_color = c.field;
     v.code_bg_color = c.field;

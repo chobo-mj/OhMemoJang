@@ -152,103 +152,126 @@ impl ClipboardHistory {
 
     fn header(&mut self, ui: &mut egui::Ui, now: f64) {
         let s = self.settings.clone();
+        let tone = ui::t(ui);
         if !s.enabled {
-            ui::card(ui, |ui| {
-                ui.label(RichText::new("클립보드 히스토리").size(15.0).strong());
-                ui.add_space(4.0);
-                ui.label(
-                    "메모장이 켜져 있는 동안 다른 프로그램에서 복사한 텍스트·링크·표·이미지를 \
+            egui::Frame::NONE
+                .fill(tone.field)
+                .stroke(Stroke::new(1.0_f32, tone.line))
+                .corner_radius(14.)
+                .inner_margin(egui::Margin::symmetric(18, 14))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(RichText::new("클립보드 히스토리").size(15.0).strong());
+                    ui.add_space(4.0);
+                    ui.label(
+                        "메모장이 켜져 있는 동안 다른 프로그램에서 복사한 텍스트·링크·표·이미지를 \
                      이 PC에 저장하고, 항목을 한 번 클릭하면 다시 클립보드로 되돌립니다.",
-                );
-                ui.add_space(4.0);
-                ui::hint(
+                    );
+                    ui.add_space(4.0);
+                    ui::hint(
                     ui,
                     "비밀번호 같은 민감한 내용도 저장될 수 있고 저장 파일은 암호화되지 않습니다. \
                      인터넷으로 전송하지 않으며, 언제든 일시 중지하거나 전체 삭제할 수 있습니다.",
                 );
-                ui.add_space(8.0);
-                if ui::primary(ui, "수집 시작").clicked() {
-                    self.set_state(true, false);
-                }
-            });
+                    ui.add_space(8.0);
+                    if ui::primary(ui, "수집 시작").clicked() {
+                        self.set_state(true, false);
+                    }
+                });
             ui.add_space(6.0);
         } else {
-            ui::card(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let (text, fill, ink) = match (s.paused, ui.visuals().dark_mode) {
-                        (true, true) => (
-                            "● 일시 중지",
-                            Color32::from_rgb(79, 63, 36),
-                            Color32::from_rgb(244, 205, 126),
-                        ),
-                        (true, false) => (
-                            "● 일시 중지",
-                            Color32::from_rgb(250, 236, 200),
-                            Color32::from_rgb(140, 100, 20),
-                        ),
-                        (false, true) => (
-                            "● 수집 중",
-                            Color32::from_rgb(35, 69, 51),
-                            Color32::from_rgb(148, 222, 174),
-                        ),
-                        (false, false) => (
-                            "● 수집 중",
-                            Color32::from_rgb(214, 238, 222),
-                            Color32::from_rgb(30, 100, 60),
-                        ),
-                    };
-                    ui::chip(ui, text, fill, ink);
-                    if ui
-                        .button(if s.paused {
-                            "다시 시작"
-                        } else {
-                            "일시 중지"
-                        })
-                        .clicked()
-                    {
-                        self.set_state(true, !s.paused);
-                    }
-                    if ui.button("수집 끄기").clicked() {
-                        self.set_state(false, false);
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if crate::icons::toggle_icon(
-                            ui,
-                            Icon::Settings,
-                            "설정·삭제",
-                            self.settings_open,
-                        )
-                        .clicked()
+            egui::Frame::NONE
+                .fill(tone.field)
+                .stroke(Stroke::new(1.0_f32, tone.line))
+                .corner_radius(14.)
+                .inner_margin(egui::Margin::symmetric(18, 14))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        let (text, fill, ink) = match (s.paused, ui.visuals().dark_mode) {
+                            (true, true) => (
+                                "● 일시 중지",
+                                Color32::from_rgb(79, 63, 36),
+                                Color32::from_rgb(244, 205, 126),
+                            ),
+                            (true, false) => (
+                                "● 일시 중지",
+                                Color32::from_rgb(250, 236, 200),
+                                Color32::from_rgb(140, 100, 20),
+                            ),
+                            (false, true) => (
+                                "● 수집 중",
+                                Color32::from_rgb(35, 69, 51),
+                                Color32::from_rgb(148, 222, 174),
+                            ),
+                            (false, false) => (
+                                "● 수집 중",
+                                Color32::from_rgb(214, 238, 222),
+                                Color32::from_rgb(30, 100, 60),
+                            ),
+                        };
+                        ui::chip(ui, text, fill, ink);
+                        if ui
+                            .button(if s.paused {
+                                "다시 시작"
+                            } else {
+                                "일시 중지"
+                            })
+                            .clicked()
                         {
-                            self.settings_open = !self.settings_open;
+                            self.set_state(true, !s.paused);
                         }
-                        ui::hint(
-                            ui,
-                            format!("{}건 · {}", self.stats.0, megabytes(self.stats.1)),
-                        );
+                        if ui.button("수집 끄기").clicked() {
+                            self.set_state(false, false);
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if crate::icons::toggle_icon(
+                                ui,
+                                Icon::Settings,
+                                "설정·삭제",
+                                self.settings_open,
+                            )
+                            .clicked()
+                            {
+                                self.settings_open = !self.settings_open;
+                            }
+                            ui::hint(
+                                ui,
+                                format!("{}건 · {}", self.stats.0, megabytes(self.stats.1)),
+                            );
+                        });
                     });
+                    ui.add_space(3.0);
+                    ui::hint(ui, "민감한 정보를 복사하기 전에는 ‘일시 중지’를 누르세요");
                 });
-                ui.add_space(3.0);
-                ui::hint(ui, "민감한 정보를 복사하기 전에는 ‘일시 중지’를 누르세요");
-            });
         }
         if self.settings_open {
             ui.add_space(6.0);
             self.settings_card(ui);
         }
         ui.add_space(10.0);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = Vec2::new(8., 8.);
             let r = ui.add(
                 egui::TextEdit::singleline(&mut self.search)
                     .hint_text("기록 검색")
-                    .desired_width(200.0),
+                    .desired_width(240.0_f32.min(ui.available_width())),
             );
             if r.changed() {
                 self.search_edited = now;
             }
             self.search_focused = r.has_focus();
             for (i, name) in FILTERS.iter().enumerate() {
-                if ui::pill(ui, self.filter == i, name).clicked() && self.filter != i {
+                let selected = self.filter == i;
+                let ink = if selected { Color32::WHITE } else { tone.muted };
+                let response = ui.add(
+                    egui::Button::new(RichText::new(*name).color(ink).strong())
+                        .fill(if selected { ui::ACCENT } else { tone.field })
+                        .stroke(Stroke::NONE)
+                        .corner_radius(8.)
+                        .min_size(Vec2::new(52., 32.)),
+                );
+                if response.clicked() && self.filter != i {
                     self.filter = i;
                     self.needs_refresh = true;
                 }
@@ -570,15 +593,19 @@ fn row(
     } else if resp.hovered() {
         c.hover
     } else {
-        c.bg
+        c.field
     };
-    painter.rect_filled(rect, 10.0, fill);
+    painter.rect_filled(rect, 12.0, fill);
     painter.rect_stroke(
         rect.shrink(0.5),
-        10.0,
+        12.0,
         Stroke::new(1.0_f32, if selected { ui::ACCENT } else { c.line }),
         StrokeKind::Inside,
     );
+    if selected {
+        let bar = Rect::from_min_size(rect.min + Vec2::new(0., 12.), Vec2::new(4., ROW_H - 24.));
+        painter.rect_filled(bar, 2., ui::ACCENT);
+    }
     // A compact colored tile gives each content type a recognizable silhouette.
     let left = Rect::from_min_size(rect.min + Vec2::new(10.0, 11.0), Vec2::splat(46.0));
     let (label, base_tint) = kind_label(&m.kind);
