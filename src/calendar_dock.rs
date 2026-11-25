@@ -356,11 +356,13 @@ impl App {
             builder,
             |ctx, _| {
                 let theme = self.cal.theme.checked_sub(1).and_then(|t| THEMES.get(t));
-                self.theme_with(
-                    ctx,
-                    theme.map_or(self.dark, |t| t.dark),
-                    theme.is_none() && self.dark_brighter,
-                );
+                if let Some(theme) = theme {
+                    self.theme_with(ctx, theme.dark, false);
+                } else {
+                    // Follow all aspects of the selected workspace design,
+                    // including the calendar layout, when no override is set.
+                    self.theme(ctx);
+                }
                 // Painted once right after it was pinned under the desktop
                 // icons or let go, even though it looks the same: it moved
                 // to another layer (`vendor/eframe` skips same-looking frames).
@@ -525,7 +527,7 @@ impl App {
         if drag.hovered() || drag.dragged() {
             ui.painter().line_segment(
                 [handle.center_top(), handle.center_bottom()],
-                Stroke::new(2.0_f32, ACCENT.gamma_multiply(0.6)),
+                Stroke::new(2.0_f32, crate::ui::accent(ui).gamma_multiply(0.6)),
             );
         }
         if drag.dragged() {
@@ -665,7 +667,7 @@ impl App {
             {
                 let on = self.prefs.cal_weeks == k;
                 let text = if on {
-                    RichText::new(format!("✓  {label}")).color(ACCENT)
+                    RichText::new(format!("✓  {label}")).color(crate::ui::accent(ui))
                 } else {
                     RichText::new(format!("     {label}"))
                 };
@@ -702,7 +704,7 @@ impl App {
                 };
                 let (rect, r) = ui.allocate_exact_size(Vec2::splat(24.), Sense::click());
                 let ring = if self.cal.theme == k {
-                    ACCENT
+                    crate::ui::accent(ui)
                 } else {
                     tone.line
                 };
@@ -719,7 +721,7 @@ impl App {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let (rect, r) = ui.allocate_exact_size(Vec2::new(96., 38.), Sense::click());
                 let fill = if r.hovered() {
-                    ui::lerp_color(tone.accent_soft, ACCENT, 0.25)
+                    ui::lerp_color(tone.accent_soft, crate::ui::accent(ui), 0.25)
                 } else {
                     tone.accent_soft
                 };
@@ -731,14 +733,14 @@ impl App {
                         Vec2::splat(20.),
                     ),
                     icons::Icon::Minus,
-                    ACCENT,
+                    crate::ui::accent(ui),
                 );
                 ui.painter().text(
                     rect.left_center() + Vec2::new(38., 0.),
                     egui::Align2::LEFT_CENTER,
                     "최소화",
                     egui::FontId::proportional(14.),
-                    ACCENT,
+                    crate::ui::accent(ui),
                 );
                 if r.on_hover_text("작은 캘린더 상자로 접기")
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -926,7 +928,7 @@ impl App {
                             ui.painter().circle_stroke(
                                 rect.center(),
                                 10.5,
-                                Stroke::new(2.0_f32, ACCENT),
+                                Stroke::new(2.0_f32, crate::ui::accent(ui)),
                             );
                         }
                         if r.clicked() {

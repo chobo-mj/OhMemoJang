@@ -88,13 +88,16 @@ fn catalog_tabs(ui: &mut egui::Ui, selected: &mut usize) {
         ui.painter().rect_stroke(
             rect.shrink(0.5),
             12.,
-            Stroke::new(1.0_f32, if active { ACCENT } else { tone.line }),
+            Stroke::new(1.0_f32, if active { ui::accent(ui) } else { tone.line }),
             egui::StrokeKind::Inside,
         );
         let icon_tile =
             egui::Rect::from_center_size(rect.left_center() + Vec2::new(27., 0.), Vec2::splat(34.));
-        ui.painter()
-            .rect_filled(icon_tile, 10., if active { ACCENT } else { tone.field });
+        ui.painter().rect_filled(
+            icon_tile,
+            10.,
+            if active { ui::accent(ui) } else { tone.field },
+        );
         crate::icons::paint_icon(
             ui.painter(),
             icon_tile.shrink(9.),
@@ -119,6 +122,79 @@ fn catalog_tabs(ui: &mut egui::Ui, selected: &mut usize) {
         if response.clicked() {
             *selected = i;
         }
+    }
+}
+
+fn catalog_tabs_light2(ui: &mut egui::Ui, selected: &mut usize) {
+    let tone = ui::t(ui);
+    let entries = [
+        ("프로젝트 보기", crate::icons::Icon::Grid),
+        ("폴더 보기", crate::icons::Icon::Folder),
+        ("전체 메모 보기", crate::icons::Icon::Notes),
+        ("관계 보드", crate::icons::Icon::Book),
+    ];
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let galleys: Vec<_> = entries
+        .iter()
+        .map(|(label, _)| {
+            ui.painter()
+                .layout_no_wrap((*label).into(), font.clone(), tone.ink)
+        })
+        .collect();
+    let widths: Vec<_> = galleys.iter().map(|g| g.size().x + 42.).collect();
+    let total = widths.iter().sum::<f32>() + 12.;
+    let (bar, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 46.), Sense::hover());
+    let track = egui::Rect::from_min_size(bar.min, Vec2::new(total.min(bar.width()), 42.));
+    ui.painter().rect_filled(track, 10., tone.field);
+    let base = ui.next_auto_id();
+    let mut x = track.left() + 3.;
+    for (i, ((label, icon), _)) in entries.iter().zip(galleys).enumerate() {
+        let width = widths[i];
+        let rect =
+            egui::Rect::from_min_size(egui::pos2(x, track.top() + 3.), Vec2::new(width, 36.));
+        let response = ui
+            .interact(rect, base.with(i), Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        let active = *selected == i;
+        if active {
+            let fill = if ui.visuals().dark_mode {
+                tone.pressed
+            } else {
+                Color32::WHITE
+            };
+            ui.painter().rect_filled(
+                rect.translate(Vec2::new(0., 1.)),
+                8.,
+                Color32::from_black_alpha(12),
+            );
+            ui.painter().rect_filled(rect, 8., fill);
+        } else if response.hovered() {
+            ui.painter().rect_filled(rect, 8., tone.hover);
+        }
+        let color = if active && ui.visuals().dark_mode {
+            Color32::from_rgb(255, 164, 140)
+        } else if active {
+            ui::accent(ui)
+        } else {
+            tone.muted
+        };
+        let galley = ui
+            .painter()
+            .layout_no_wrap((*label).into(), font.clone(), color);
+        let icon_rect = egui::Rect::from_center_size(
+            egui::pos2(rect.left() + 17., rect.center().y),
+            Vec2::splat(15.),
+        );
+        crate::icons::paint_icon(ui.painter(), icon_rect, *icon, color);
+        ui.painter().galley(
+            egui::pos2(rect.left() + 30., rect.center().y - galley.size().y / 2.),
+            galley,
+            color,
+        );
+        if response.clicked() {
+            *selected = i;
+        }
+        x += width + 2.;
     }
 }
 
@@ -537,7 +613,7 @@ fn action(ui: &mut egui::Ui, kind: Action, tooltip: &str, selected: bool) -> egu
             },
         );
     }
-    let c = if selected { ACCENT } else { MUTED };
+    let c = if selected { ui::accent(ui) } else { MUTED };
     let icon = match kind {
         Action::Eye => crate::icons::Icon::Eye,
         Action::Bell => crate::icons::Icon::Bell,
@@ -556,8 +632,24 @@ impl App {
         self.catalog.drag_targets.clear();
         self.catalog.batch_targets.clear();
         let previous_tab = self.catalog.tab;
-        catalog_tabs(ui, &mut self.catalog.tab);
-        ui.add_space(10.);
+        match ui::variant(ui) {
+            0 => {
+                ui::tabs(
+                    ui,
+                    &mut self.catalog.tab,
+                    &["프로젝트 보기", "폴더 보기", "전체 메모 보기", "관계 보드"],
+                );
+                ui.add_space(12.);
+            }
+            1 => {
+                catalog_tabs_light2(ui, &mut self.catalog.tab);
+                ui.add_space(10.);
+            }
+            _ => {
+                catalog_tabs(ui, &mut self.catalog.tab);
+                ui.add_space(10.);
+            }
+        }
         if self.catalog.tab != previous_tab {
             self.catalog.selection.clear();
             self.catalog.dragging = None;
@@ -970,7 +1062,7 @@ impl App {
                 if drag.hovered() || drag.dragged() {
                     ui.painter().line_segment(
                         [handle.center_top(), handle.center_bottom()],
-                        Stroke::new(2.0_f32, ACCENT.gamma_multiply(0.6)),
+                        Stroke::new(2.0_f32, ui::accent(ui).gamma_multiply(0.6)),
                     );
                 }
                 if drag.dragged() {
@@ -1025,7 +1117,9 @@ impl App {
                 ui.set_min_width(table_width);
                 let (rect, _) = ui.allocate_exact_size(Vec2::new(table_width, 34.), Sense::hover());
                 let tone = ui::t(ui);
-                ui.painter().rect_filled(rect, 6., tone.field);
+                if ui::variant(ui) != 0 {
+                    ui.painter().rect_filled(rect, 6., tone.field);
+                }
                 ui.painter().line_segment(
                     [rect.left_bottom(), rect.right_bottom()],
                     Stroke::new(1_f32, tone.line),
@@ -1088,7 +1182,7 @@ impl App {
                     if drag.hovered() || drag.dragged() {
                         ui.painter().line_segment(
                             [handle.center_top(), handle.center_bottom()],
-                            Stroke::new(2.0_f32, ACCENT.gamma_multiply(0.6)),
+                            Stroke::new(2.0_f32, ui::accent(ui).gamma_multiply(0.6)),
                         );
                     }
                     if drag.dragged() {
@@ -1288,29 +1382,53 @@ impl App {
                 },
             );
             let mut trash_clicked = trash && response.clicked();
-            let tone = ui::t(ui);
-            let fill = if selected {
-                tone.accent_soft
-            } else if ui.rect_contains_pointer(rect) {
-                tone.hover
-            } else if at % 2 == 1 {
-                ui.visuals().faint_bg_color
-            } else {
-                Color32::TRANSPARENT
-            };
-            ui.painter()
-                .rect_filled(rect.shrink2(Vec2::new(0., 1.)), 6., fill);
-            if selected {
-                let marker = egui::Rect::from_min_size(
-                    egui::pos2(rect.left() + 1., rect.top() + 7.),
-                    Vec2::new(3., (rect.height() - 14.).max(8.)),
+            if ui::variant(ui) == 0 {
+                let fill = if selected {
+                    ui.visuals().selection.bg_fill
+                } else if ui.rect_contains_pointer(rect) {
+                    ui::t(ui).hover.gamma_multiply(0.6)
+                } else {
+                    Color32::TRANSPARENT
+                };
+                let _ = at;
+                ui.painter().rect_filled(rect, 6., fill);
+                ui.painter().line_segment(
+                    [rect.left_bottom(), rect.right_bottom()],
+                    Stroke::new(
+                        1_f32,
+                        ui.visuals()
+                            .widgets
+                            .noninteractive
+                            .bg_stroke
+                            .color
+                            .gamma_multiply(0.18),
+                    ),
                 );
-                ui.painter().rect_filled(marker, 2., ACCENT);
+            } else {
+                let tone = ui::t(ui);
+                let fill = if selected {
+                    tone.accent_soft
+                } else if ui.rect_contains_pointer(rect) {
+                    tone.hover
+                } else if at % 2 == 1 {
+                    ui.visuals().faint_bg_color
+                } else {
+                    Color32::TRANSPARENT
+                };
+                ui.painter()
+                    .rect_filled(rect.shrink2(Vec2::new(0., 1.)), 6., fill);
+                if selected {
+                    let marker = egui::Rect::from_min_size(
+                        egui::pos2(rect.left() + 1., rect.top() + 7.),
+                        Vec2::new(3., (rect.height() - 14.).max(8.)),
+                    );
+                    ui.painter().rect_filled(marker, 2., ui::accent(ui));
+                }
+                ui.painter().line_segment(
+                    [rect.left_bottom(), rect.right_bottom()],
+                    Stroke::new(1_f32, tone.line.gamma_multiply(0.45)),
+                );
             }
-            ui.painter().line_segment(
-                [rect.left_bottom(), rect.right_bottom()],
-                Stroke::new(1_f32, tone.line.gamma_multiply(0.45)),
-            );
             if !trash
                 && self.catalog.selection_ui
                 && self.catalog.tab == ALL_MEMOS_TAB
@@ -1439,7 +1557,7 @@ impl App {
                     if let Some(text) = reminder {
                         if c.add(
                             egui::Label::new(RichText::new(text).size(12.).color(if has {
-                                ACCENT
+                                ui::accent(ui)
                             } else {
                                 MUTED
                             }))
@@ -1494,7 +1612,8 @@ impl App {
                 let mut c = table_cell(ui, cells[8], "wiki");
                 if wiki {
                     c.add(
-                        egui::Label::new(RichText::new("위키").size(12.).color(ACCENT)).truncate(),
+                        egui::Label::new(RichText::new("위키").size(12.).color(ui::accent(ui)))
+                            .truncate(),
                     )
                     .on_hover_text("위키에 보관된 메모");
                 }
@@ -1867,12 +1986,12 @@ impl App {
             if let DropTarget::Order(_, _, after) = target {
                 let y = if after { rect.bottom() } else { rect.top() };
                 ui.painter()
-                    .hline(rect.x_range(), y, Stroke::new(2_f32, ACCENT));
+                    .hline(rect.x_range(), y, Stroke::new(2_f32, ui::accent(ui)));
             } else {
                 ui.painter().rect_stroke(
                     rect,
                     4.,
-                    Stroke::new(2_f32, ACCENT),
+                    Stroke::new(2_f32, ui::accent(ui)),
                     egui::StrokeKind::Inside,
                 );
             }
@@ -1942,19 +2061,27 @@ impl App {
             let tone = ui::t(ui);
             egui::Frame::NONE
                 .fill(tone.sidebar)
-                .stroke(Stroke::new(1.0_f32, tone.line))
-                .corner_radius(16.)
+                .stroke(if ui::variant(ui) == 2 {
+                    Stroke::new(1.0_f32, tone.line)
+                } else {
+                    Stroke::NONE
+                })
+                .corner_radius(if ui::variant(ui) == 2 { 16. } else { 12. })
                 .inner_margin(18.)
                 .show(ui, |ui| {
                     ui.set_min_height(height - 36.);
                     ui.set_min_width(ui.available_width());
-                    ui.label(
-                        RichText::new("미리보기")
-                            .size(12.)
-                            .strong()
-                            .color(tone.muted),
-                    );
-                    ui.add_space((height * 0.25 - 18.).max(0.));
+                    if ui::variant(ui) == 2 {
+                        ui.label(
+                            RichText::new("미리보기")
+                                .size(12.)
+                                .strong()
+                                .color(tone.muted),
+                        );
+                        ui.add_space((height * 0.25 - 18.).max(0.));
+                    } else {
+                        ui.add_space(height * 0.28);
+                    }
                     ui::empty_state(
                         ui,
                         crate::icons::Icon::Notes,
@@ -2268,7 +2395,7 @@ impl App {
                     Vec2::splat(15.),
                 ),
                 crate::icons::Icon::Folder,
-                if selected { ACCENT } else { tone.muted },
+                if selected { ui::accent(ui) } else { tone.muted },
             );
             let count = self
                 .catalog_folder_index()
@@ -2279,7 +2406,7 @@ impl App {
                 egui::Align2::LEFT_CENTER,
                 shorten(&self.catalog.folders[f].title, 36),
                 egui::FontId::proportional(13.5),
-                if selected { ACCENT } else { tone.ink },
+                if selected { ui::accent(ui) } else { tone.ink },
             );
             if count > 0 {
                 ui.painter().text(
@@ -2501,7 +2628,7 @@ impl App {
             ui.painter().rect_stroke(
                 rect.expand(2.),
                 4.,
-                Stroke::new(1.5_f32, ACCENT),
+                Stroke::new(1.5_f32, ui::accent(ui)),
                 egui::StrokeKind::Inside,
             );
         }
@@ -2899,7 +3026,7 @@ impl App {
                 );
                 ui.add_space(4.);
                 if !self.catalog.replace_message.is_empty() {
-                    ui.label(RichText::new(&self.catalog.replace_message).color(ACCENT));
+                    ui.label(RichText::new(&self.catalog.replace_message).color(ui::accent(ui)));
                 }
                 ui.add_space(4.);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2910,7 +3037,7 @@ impl App {
                             egui::Button::new(
                                 RichText::new("모두 바꾸기").color(Color32::WHITE).strong(),
                             )
-                            .fill(ACCENT),
+                            .fill(ui::accent(ui)),
                         )
                         .clicked()
                     {
@@ -3162,7 +3289,7 @@ impl App {
                         } else {
                             tone.bg
                         },
-                        Stroke::new(1.0_f32, if selected { ACCENT } else { tone.line }),
+                        Stroke::new(1.0_f32, if selected { ui::accent(ui) } else { tone.line }),
                         egui::StrokeKind::Inside,
                     );
                     ui.painter().circle_filled(

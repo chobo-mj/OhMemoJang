@@ -2140,7 +2140,7 @@ fn content_impl(
             for (label, action) in [
                 (RichText::new("스티커 휴지통으로"), HostAction::Trash),
                 (
-                    RichText::new("스티커 영구삭제…").color(crate::ACCENT),
+                    RichText::new("스티커 영구삭제…").color(crate::ui::accent(ui)),
                     HostAction::Purge,
                 ),
             ] {
@@ -3954,7 +3954,7 @@ fn paint_pictures(
         painter.rect_stroke(
             rect.expand(1.),
             2.,
-            Stroke::new(2.0_f32, crate::ui::ACCENT),
+            Stroke::new(2.0_f32, crate::ui::accent(ui)),
             egui::StrokeKind::Outside,
         );
         let mut close = false;
@@ -4804,7 +4804,7 @@ fn table_widget(
     let gid = id.with(("table_grid", tab, bi));
     let edit_id = |r: usize, c: usize| id.with(("table_cell", tab, bi, r, c));
     let mut act: Option<TAct> = None;
-    let accent = crate::ui::ACCENT;
+    let accent = crate::ui::accent(ui);
     egui::ScrollArea::horizontal()
         .id_salt(id.with(("table_scroll", tab, bi)))
         .drag_to_scroll(false)
@@ -5444,7 +5444,7 @@ fn table_widget(
         } else {
             ui.label("이 표를 삭제할까요?");
             if ui
-                .button(egui::RichText::new("삭제").color(crate::ACCENT))
+                .button(egui::RichText::new("삭제").color(crate::ui::accent(ui)))
                 .clicked()
             {
                 act = Some(TAct::Remove);

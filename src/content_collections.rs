@@ -392,7 +392,7 @@ impl App {
                                 });
                             }
                             let label = if selected {
-                                RichText::new(&source_title).strong().color(ACCENT)
+                                RichText::new(&source_title).strong().color(ui::accent(ui))
                             } else {
                                 RichText::new(&source_title).strong()
                             };

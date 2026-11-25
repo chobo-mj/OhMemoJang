@@ -94,6 +94,8 @@ struct App {
     split: bool,
     dark: bool,
     dark_brighter: bool,
+    /// Main workspace appearance: light 1, 2 or 3 (zero based).
+    light_theme: usize,
     search: String,
     editor: bool,
     sticky: bool,
@@ -284,6 +286,7 @@ impl App {
             split: true,
             dark: false,
             dark_brighter: false,
+            light_theme: 1,
             search: String::new(),
             editor: false,
             sticky: false,
@@ -344,10 +347,21 @@ impl App {
         }
     }
     fn theme(&self, ctx: &egui::Context) {
-        self.theme_with(ctx, self.dark, self.dark_brighter);
+        let selected = egui::FontFamily::Name(self.desktop.font.clone().into());
+        let family = if ctx.fonts(|f| f.families().contains(&selected)) {
+            selected
+        } else {
+            egui::FontFamily::Proportional
+        };
+        ui::apply_light(
+            ctx,
+            self.light_theme,
+            family,
+            self.desktop.font_size * 4. / 3.,
+        );
     }
     fn app_tone(&self) -> ui::Tone {
-        ui::theme_tone(self.dark, self.dark_brighter)
+        ui::light_tone(self.light_theme)
     }
     fn theme_with(&self, ctx: &egui::Context, dark: bool, brighter: bool) {
         let selected = egui::FontFamily::Name(self.desktop.font.clone().into());
@@ -1007,6 +1021,90 @@ impl App {
     }
     /// Page title on the left and global window actions on the right.
     fn page_bar(&mut self, ui: &mut egui::Ui) {
+        if self.light_theme == 2 {
+            self.page_bar_light3(ui);
+        } else {
+            self.page_bar_light12(ui);
+        }
+    }
+    fn page_bar_light12(&mut self, ui: &mut egui::Ui) {
+        let title = if self.settings {
+            "설정"
+        } else if self.extra.search_mode && matches!(self.page, 0 | 2 | 3) {
+            "검색 결과"
+        } else {
+            PAGES
+                .iter()
+                .find(|(p, _, _)| *p == self.page)
+                .map(|(_, name, _)| *name)
+                .unwrap_or("OhMemoJang")
+        };
+        ui.horizontal(|ui| {
+            ui.set_min_height(34.);
+            if !self.sidebar
+                && icons::icon_button(ui, icons::Icon::Sidebar, "사이드바 열기").clicked()
+            {
+                self.sidebar = true;
+            }
+            let tone = ui::t(ui);
+            let (mark, _) = ui.allocate_exact_size(Vec2::new(4., 22.), egui::Sense::hover());
+            ui.painter().rect_filled(mark, 2., ui::accent(ui));
+            ui.add_space(3.);
+            ui.label(RichText::new(title).size(22.).strong().color(tone.ink));
+            if self.extra.search_mode {
+                ui.add_space(6.);
+                if ui::pill(
+                    ui,
+                    true,
+                    &format!("‘{}’ 검색 해제", shorten(&self.search, 12)),
+                )
+                .clicked()
+                {
+                    self.search.clear();
+                    self.extra.search_mode = false;
+                }
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if self.settings {
+                    if icons::icon_button(ui, icons::Icon::Close, "설정 닫기").clicked() {
+                        self.settings = false;
+                    }
+                    return;
+                }
+                let detach = icons::icon_button(ui, icons::Icon::Detach, "캘린더 분리창");
+                tutorial::mark(ui.ctx(), tutorial::Spot::Detach, detach.rect);
+                if detach.clicked() {
+                    self.show_calendar();
+                }
+                if icons::icon_button(
+                    ui,
+                    icons::Icon::StickyPlus,
+                    &format!("새 스티커 · {}", self.shortcut_label(2)),
+                )
+                .clicked()
+                {
+                    self.new_sticker();
+                }
+                if self.page == 0 {
+                    let label = if self.split {
+                        "캘린더 닫기 · 자세히 보기"
+                    } else {
+                        "캘린더 함께 보기"
+                    };
+                    if icons::toggle_icon(ui, icons::Icon::Calendar, label, self.split).clicked() {
+                        self.split = !self.split;
+                    }
+                }
+            });
+        });
+        ui.add_space(8.);
+        let line = ui.available_rect_before_wrap();
+        ui.painter().line_segment(
+            [line.left_top(), line.right_top()],
+            egui::Stroke::new(1.0_f32, ui::t(ui).line),
+        );
+    }
+    fn page_bar_light3(&mut self, ui: &mut egui::Ui) {
         let title = if self.settings {
             "설정"
         } else if self.extra.search_mode && matches!(self.page, 0 | 2 | 3) {
@@ -1218,27 +1316,9 @@ impl App {
             self.compact_sidebar(ui);
             return;
         }
-        let tone = ui::t(ui);
-        ui.add_space(5.);
-        ui.horizontal(|ui| {
-            let (mark, _) = ui.allocate_exact_size(Vec2::splat(36.), egui::Sense::hover());
-            ui.painter().rect_filled(mark, 11., ui::ACCENT);
-            icons::paint_icon(
-                ui.painter(),
-                mark.shrink(9.),
-                icons::Icon::Notes,
-                egui::Color32::WHITE,
-            );
-            ui.vertical(|ui| {
-                ui.label(RichText::new("OH MEMO").size(16.).strong().color(tone.ink));
-                ui.label(
-                    RichText::new("나의 생각을 위한 공간")
-                        .size(10.5)
-                        .color(tone.muted),
-                );
-            });
-        });
-        ui.add_space(22.);
+        // The original brand banner is present in every light theme.
+        ui::banner(ui, ui.available_width().max(16.));
+        ui.add_space(if self.light_theme == 2 { 14. } else { 10. });
         ui.horizontal(|ui| {
             let width = ui.available_width() - 28. - ui.spacing().item_spacing.x;
             if std::mem::take(&mut self.focus_search) {
@@ -1279,9 +1359,13 @@ impl App {
                 self.sidebar = false;
             }
         });
-        ui.add_space(12.);
-        ui::caption(ui, "WORKSPACE");
-        ui.add_space(5.);
+        if self.light_theme == 2 {
+            ui.add_space(12.);
+            ui::caption(ui, "WORKSPACE");
+            ui.add_space(5.);
+        } else {
+            ui.add_space(6.);
+        }
         let today = Local::now().date_naive();
         let mut cache = std::mem::take(&mut self.lists);
         let key = lists::key((today, self.data.notes.len()));

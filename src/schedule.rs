@@ -152,7 +152,7 @@ impl App {
                                 ui.painter(),
                                 egui::Rect::from_min_size(ui.cursor().min, egui::Vec2::splat(20.)),
                                 crate::icons::Icon::Calendar,
-                                crate::ui::ACCENT,
+                                crate::ui::accent(ui),
                             );
                             ui.add_space(26.);
                             ui.label(

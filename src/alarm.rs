@@ -358,7 +358,7 @@ impl App {
                                 ui.painter(),
                                 Rect::from_min_size(ui.cursor().min, Vec2::splat(20.)),
                                 icons::Icon::Bell,
-                                ACCENT,
+                                ui::accent(ui),
                             );
                             ui.add_space(26.);
                             ui.label(
@@ -418,7 +418,7 @@ impl App {
                                 egui::Align2::LEFT_TOP,
                                 format!("{text}{}", if late { " · 놓친 알람" } else { "" }),
                                 egui::FontId::proportional(11.5),
-                                if late { ACCENT } else { tone.muted },
+                                if late { ui::accent(ui) } else { tone.muted },
                             );
                             let buttons = Rect::from_min_max(
                                 rect.right_top() + Vec2::new(-150., 16.),

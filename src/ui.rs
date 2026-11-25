@@ -10,6 +10,44 @@ use std::hash::Hash;
 pub const ACCENT: Color32 = Color32::from_rgb(91, 89, 204);
 pub const ACCENT_SOFT: Color32 = Color32::from_rgb(228, 229, 253);
 pub const BLUE: Color32 = Color32::from_rgb(71, 100, 201);
+const CORAL: Color32 = Color32::from_rgb(217, 87, 56);
+
+fn variant_key(ctx: &egui::Context) -> Id {
+    Id::new(("workspace-light-variant", ctx.viewport_id()))
+}
+
+/// The current workspace theme: original light, design 1, or design 2.
+pub fn variant_ctx(ctx: &egui::Context) -> usize {
+    let key = variant_key(ctx);
+    ctx.data(|d| d.get_temp::<usize>(key)).unwrap_or(1)
+}
+pub fn variant(ui: &Ui) -> usize {
+    variant_ctx(ui.ctx())
+}
+pub fn accent_for(variant: usize) -> Color32 {
+    if variant == 2 {
+        ACCENT
+    } else {
+        CORAL
+    }
+}
+pub fn accent(ui: &Ui) -> Color32 {
+    let key = variant_key(ui.ctx());
+    let selected = ui.ctx().data(|d| d.get_temp::<usize>(key));
+    selected.map(accent_for).unwrap_or(CORAL)
+}
+fn blue(ui: &Ui) -> Color32 {
+    let key = variant_key(ui.ctx());
+    if ui
+        .ctx()
+        .data(|d| d.get_temp::<usize>(key))
+        .is_some_and(|v| v < 2)
+    {
+        Color32::from_rgb(56, 110, 196)
+    } else {
+        BLUE
+    }
+}
 
 /// Color tokens resolved for the current light or dark theme.
 #[derive(Clone, Copy)]
@@ -57,6 +95,28 @@ pub fn tone(dark: bool) -> Tone {
         }
     }
 }
+
+/// The two warm light designs share the original palette; the third uses
+/// the cool palette. Their layouts are chosen separately by the workspace.
+pub fn light_tone(variant: usize) -> Tone {
+    if variant == 2 {
+        tone(false)
+    } else {
+        Tone {
+            bg: Color32::WHITE,
+            sidebar: Color32::from_rgb(248, 247, 245),
+            field: Color32::from_rgb(242, 241, 238),
+            hover: Color32::from_rgb(235, 234, 231),
+            pressed: Color32::from_rgb(225, 224, 220),
+            line: Color32::from_rgb(234, 233, 230),
+            line_strong: Color32::from_rgb(214, 213, 209),
+            ink: Color32::from_rgb(44, 43, 40),
+            muted: Color32::from_rgb(120, 119, 115),
+            faint: Color32::from_rgb(166, 165, 160),
+            accent_soft: Color32::from_rgb(252, 237, 231),
+        }
+    }
+}
 const BRIGHTER_DARK_BG: Color32 = Color32::from_rgb(40, 47, 67);
 
 pub fn theme_tone(dark: bool, brighter: bool) -> Tone {
@@ -81,20 +141,52 @@ pub fn theme_tone(dark: bool, brighter: bool) -> Tone {
 }
 pub fn t(ui: &Ui) -> Tone {
     let visuals = ui.visuals();
+    if !visuals.dark_mode {
+        let key = variant_key(ui.ctx());
+        if let Some(variant) = ui.ctx().data(|d| d.get_temp::<usize>(key)) {
+            return light_tone(variant);
+        }
+    }
     theme_tone(visuals.dark_mode, visuals.panel_fill == BRIGHTER_DARK_BG)
 }
 
 /// Install visuals and spacing for a whole context. `body` is the body size in points.
 pub fn apply(ctx: &egui::Context, dark: bool, brighter: bool, family: egui::FontFamily, body: f32) {
+    let key = variant_key(ctx);
+    ctx.data_mut(|d| d.remove::<usize>(key));
+    apply_inner(ctx, dark, brighter, None, family, body);
+}
+
+/// Install one of the workspace's three light designs.
+pub fn apply_light(ctx: &egui::Context, variant: usize, family: egui::FontFamily, body: f32) {
+    let variant = variant.min(2);
+    let key = variant_key(ctx);
+    ctx.data_mut(|d| d.insert_temp(key, variant));
+    apply_inner(ctx, false, false, Some(variant), family, body);
+}
+
+fn apply_inner(
+    ctx: &egui::Context,
+    dark: bool,
+    brighter: bool,
+    variant: Option<usize>,
+    family: egui::FontFamily,
+    body: f32,
+) {
     // Every window asks for its look every frame; the style is shared, so
     // build and install it only when what it is made of has changed.
     let key = egui::Id::new("ui-applied");
-    let want = (dark, brighter, family.clone(), body.to_bits());
-    if ctx.data(|d| d.get_temp::<(bool, bool, egui::FontFamily, u32)>(key)) == Some(want.clone()) {
+    let want = (dark, brighter, variant, family.clone(), body.to_bits());
+    if ctx.data(|d| d.get_temp::<(bool, bool, Option<usize>, egui::FontFamily, u32)>(key))
+        == Some(want.clone())
+    {
         return;
     }
     ctx.data_mut(|d| d.insert_temp(key, want));
-    let c = theme_tone(dark, brighter);
+    let c = variant
+        .map(light_tone)
+        .unwrap_or_else(|| theme_tone(dark, brighter));
+    let active_accent = variant.map(accent_for).unwrap_or(ACCENT);
     let mut v = if dark {
         egui::Visuals::dark()
     } else {
@@ -106,15 +198,21 @@ pub fn apply(ctx: &egui::Context, dark: bool, brighter: bool, family: egui::Font
         Color32::from_rgb(46, 53, 73)
     } else if dark {
         Color32::from_rgb(27, 33, 51)
+    } else if variant.is_some_and(|v| v < 2) {
+        Color32::from_rgb(250, 250, 248)
     } else {
         Color32::from_rgb(241, 244, 251)
     };
     v.extreme_bg_color = c.field;
     v.code_bg_color = c.field;
     v.override_text_color = Some(c.ink);
-    v.hyperlink_color = BLUE;
+    v.hyperlink_color = if variant.is_some_and(|v| v < 2) {
+        Color32::from_rgb(56, 110, 196)
+    } else {
+        BLUE
+    };
     v.selection.bg_fill = c.accent_soft;
-    v.selection.stroke = Stroke::new(1.0_f32, ACCENT);
+    v.selection.stroke = Stroke::new(1.0_f32, active_accent);
     v.window_corner_radius = CornerRadius::same(10);
     v.menu_corner_radius = CornerRadius::same(8);
     v.window_stroke = Stroke::new(1.0_f32, c.line);
@@ -219,7 +317,7 @@ pub fn caption(ui: &mut Ui, text: &str) -> Response {
 pub fn primary(ui: &mut Ui, text: &str) -> Response {
     ui.add(
         egui::Button::new(RichText::new(text).color(Color32::WHITE).strong())
-            .fill(ACCENT)
+            .fill(accent(ui))
             .corner_radius(6.),
     )
     .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -353,7 +451,7 @@ pub fn tabs(ui: &mut Ui, value: &mut usize, labels: &[&str]) -> bool {
                     Pos2::new(r.left() + 6., r.bottom() - 1.),
                     Pos2::new(r.right() - 6., r.bottom() - 1.),
                 ],
-                Stroke::new(2.0_f32, ACCENT),
+                Stroke::new(2.0_f32, accent(ui)),
             );
         }
         if resp.clicked() && !selected {
@@ -376,7 +474,7 @@ pub fn switch(ui: &mut Ui, on: &mut bool) -> Response {
     let how_on = ui.ctx().animate_bool_responsive(r.id, *on);
     let c = t(ui);
     ui.painter()
-        .rect_filled(rect, 9., lerp_color(c.line_strong, ACCENT, how_on));
+        .rect_filled(rect, 9., lerp_color(c.line_strong, accent(ui), how_on));
     let x = egui::lerp((rect.left() + 9.)..=(rect.right() - 9.), how_on);
     ui.painter()
         .circle_filled(Pos2::new(x, rect.center().y), 7., Color32::WHITE);
@@ -414,7 +512,7 @@ pub fn round_check(ui: &mut Ui, checked: &mut bool, tint: Option<Color32>) -> Re
     let color = tint.unwrap_or(c.faint);
     let center = rect.center();
     if *checked {
-        ui.painter().circle_filled(center, 8., ACCENT);
+        ui.painter().circle_filled(center, 8., accent(ui));
         check_mark(ui.painter(), center, Color32::WHITE);
     } else {
         ui.painter()
@@ -459,9 +557,11 @@ pub fn pill(ui: &mut Ui, selected: bool, text: &str) -> Response {
             .family
             .clone(),
     );
-    let galley =
-        ui.painter()
-            .layout_no_wrap(text.into(), font, if selected { ACCENT } else { c.muted });
+    let galley = ui.painter().layout_no_wrap(
+        text.into(),
+        font,
+        if selected { accent(ui) } else { c.muted },
+    );
     let (rect, r) = ui.allocate_exact_size(galley.size() + Vec2::new(20., 10.), Sense::click());
     let fill = if selected {
         c.accent_soft
@@ -546,7 +646,7 @@ pub fn list_row(
     let title_galley = ui.painter().layout(
         title.into(),
         FontId::proportional(13.5),
-        if selected { ACCENT } else { c.ink },
+        if selected { accent(ui) } else { c.ink },
         f32::INFINITY,
     );
     let room = (rect.right() - 10. - meta_w - x).max(10.);
@@ -615,12 +715,12 @@ pub fn tree_row(
             Vec2::splat(15.),
         ),
         icon,
-        if selected { ACCENT } else { c.muted },
+        if selected { accent(ui) } else { c.muted },
     );
     let title_galley = ui.painter().layout_no_wrap(
         title.into(),
         FontId::proportional(13.5),
-        if selected { ACCENT } else { c.ink },
+        if selected { accent(ui) } else { c.ink },
     );
     let clip = egui::Rect::from_min_max(
         egui::pos2(rect.left() + 48., rect.top()),
@@ -813,7 +913,7 @@ pub fn search_field(
         ui.painter().rect_stroke(
             rect,
             7.,
-            Stroke::new(1.0_f32, ACCENT.gamma_multiply(0.7)),
+            Stroke::new(1.0_f32, accent(ui).gamma_multiply(0.7)),
             StrokeKind::Inside,
         );
     }
@@ -890,8 +990,8 @@ pub fn month_grid(ui: &mut Ui, month: &mut chrono::NaiveDate, day: &mut chrono::
             *s,
             FontId::proportional(11.5),
             match i {
-                0 => ACCENT,
-                6 => BLUE,
+                0 => accent(ui),
+                6 => blue(ui),
                 _ => c.faint,
             },
         );
@@ -914,12 +1014,12 @@ pub fn month_grid(ui: &mut Ui, month: &mut chrono::NaiveDate, day: &mut chrono::
             .on_hover_cursor(egui::CursorIcon::PointingHand);
         let selected = *day == d;
         if selected {
-            ui.painter().circle_filled(r.center(), 14., ACCENT);
+            ui.painter().circle_filled(r.center(), 14., accent(ui));
         } else if resp.hovered() {
             ui.painter().circle_filled(r.center(), 14., c.hover);
         } else if d == today {
             ui.painter()
-                .circle_stroke(r.center(), 13.5, Stroke::new(1.0_f32, ACCENT));
+                .circle_stroke(r.center(), 13.5, Stroke::new(1.0_f32, accent(ui)));
         }
         let wd = d.weekday().num_days_from_sunday();
         let holiday = crate::holidays::name(d);
@@ -934,9 +1034,9 @@ pub fn month_grid(ui: &mut Ui, month: &mut chrono::NaiveDate, day: &mut chrono::
             if selected {
                 Color32::WHITE
             } else if wd == 0 || holiday.is_some() {
-                ACCENT
+                accent(ui)
             } else if wd == 6 || crate::holidays::is_blue_friday(d) {
-                BLUE
+                blue(ui)
             } else {
                 c.ink
             },
@@ -1065,7 +1165,7 @@ fn pick_cell(ui: &mut Ui, selected: bool, text: String) -> Response {
     let c = t(ui);
     let (rect, r) = ui.allocate_exact_size(Vec2::new(36., 26.), Sense::click());
     let fill = if selected {
-        ACCENT
+        accent(ui)
     } else if r.hovered() {
         c.hover
     } else {
@@ -1128,6 +1228,22 @@ pub fn banner(ui: &mut Ui, width: f32) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn light_design_switch_updates_palette_and_accent() {
+        let ctx = egui::Context::default();
+        for variant in [0, 1, 2, 1] {
+            apply_light(&ctx, variant, egui::FontFamily::Proportional, 14.);
+            let _ = ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    assert_eq!(super::variant(ui), variant);
+                    assert_eq!(super::t(ui).bg, light_tone(variant).bg);
+                    assert_eq!(super::accent(ui), accent_for(variant));
+                    assert_eq!(ui.visuals().selection.stroke.color, accent_for(variant));
+                });
+            });
+        }
+    }
 
     #[test]
     fn the_banner_keeps_the_pictures_proportions_at_any_width() {

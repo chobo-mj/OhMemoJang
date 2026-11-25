@@ -3109,7 +3109,18 @@ pub fn nav_button(
     accent: bool,
 ) -> egui::Response {
     let tone = crate::ui::t(ui);
-    let (rect, r) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 36.), Sense::click());
+    let accent_color = crate::ui::accent(ui);
+    let (rect, r) = ui.allocate_exact_size(
+        Vec2::new(
+            ui.available_width(),
+            if crate::ui::variant(ui) == 2 {
+                36.
+            } else {
+                30.
+            },
+        ),
+        Sense::click(),
+    );
     r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, text));
     if selected || r.hovered() || accent {
         ui.painter().rect_filled(
@@ -3123,13 +3134,23 @@ pub fn nav_button(
         );
     }
     if selected {
-        let marker = Rect::from_min_size(rect.left_top() + Vec2::new(0., 7.), Vec2::new(3., 22.));
-        ui.painter().rect_filled(marker, 2., ACCENT);
+        let marker = Rect::from_min_size(
+            rect.left_top() + Vec2::new(0., 7.),
+            Vec2::new(
+                3.,
+                if crate::ui::variant(ui) == 2 {
+                    22.
+                } else {
+                    16.
+                },
+            ),
+        );
+        ui.painter().rect_filled(marker, 2., accent_color);
     }
     let highlight = if ui.visuals().dark_mode {
         Color32::from_rgb(191, 190, 255)
     } else {
-        ACCENT
+        accent_color
     };
     let color = if selected || accent {
         highlight
@@ -3172,6 +3193,7 @@ pub fn nav_button(
 /// Sidebar project row with a hash mark.
 pub fn project_button(ui: &mut egui::Ui, name: &str, selected: bool) -> egui::Response {
     let tone = crate::ui::t(ui);
+    let accent_color = crate::ui::accent(ui);
     let (rect, r) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 28.), Sense::click());
     if selected || r.hovered() {
         ui.painter().rect_filled(
@@ -3189,12 +3211,12 @@ pub fn project_button(ui: &mut egui::Ui, name: &str, selected: bool) -> egui::Re
         egui::Align2::CENTER_CENTER,
         "#",
         egui::FontId::proportional(14.),
-        if selected { ACCENT } else { tone.faint },
+        if selected { accent_color } else { tone.faint },
     );
     let galley = ui.painter().layout(
         name.into(),
         egui::FontId::proportional(13.5),
-        if selected { ACCENT } else { tone.ink },
+        if selected { accent_color } else { tone.ink },
         rect.width() - 44.,
     );
     ui.painter().galley(

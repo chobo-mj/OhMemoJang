@@ -260,7 +260,7 @@ impl App {
             Stroke::new(
                 1.0_f32,
                 if response.hovered() || response.dragged() {
-                    ACCENT
+                    ui::accent(ui)
                 } else {
                     ui::t(ui).line
                 },
@@ -276,38 +276,55 @@ impl App {
         let tree_rect =
             egui::Rect::from_min_max(full.min, egui::pos2(handle.left(), full.bottom()));
         let memo_rect = egui::Rect::from_min_max(egui::pos2(split, full.top()), full.max);
-        let tone = ui::t(ui);
-        ui.painter().rect_filled(tree_rect, 14., tone.sidebar);
-        ui.painter().rect_stroke(
-            tree_rect,
-            14.,
-            Stroke::new(1_f32, tone.line),
-            egui::StrokeKind::Inside,
-        );
-        // Reserve a clear header above the tree, keeping the drag and drop
-        // targets inside the scroll area's actual content rectangle.
-        let header = egui::Rect::from_min_max(
-            tree_rect.min + Vec2::new(14., 12.),
-            egui::pos2(tree_rect.right() - 14., tree_rect.top() + 48.),
-        );
-        ui.painter().text(
-            header.left_top(),
-            egui::Align2::LEFT_TOP,
-            "프로젝트 구조",
-            egui::FontId::proportional(14.),
-            tone.ink,
-        );
-        ui.painter().text(
-            header.left_top() + Vec2::new(0., 21.),
-            egui::Align2::LEFT_TOP,
-            "폴더와 메모",
-            egui::FontId::proportional(11.),
-            tone.muted,
-        );
-        let tree_content = egui::Rect::from_min_max(
-            egui::pos2(tree_rect.left() + 6., tree_rect.top() + 56.),
-            egui::pos2(tree_rect.right() - 6., tree_rect.bottom() - 6.),
-        );
+        let variant = ui::variant(ui);
+        let tree_content = if variant == 0 {
+            tree_rect
+        } else if variant == 1 {
+            let tone = ui::t(ui);
+            ui.painter()
+                .rect_filled(tree_rect, 10., ui.visuals().faint_bg_color);
+            ui.painter().rect_stroke(
+                tree_rect,
+                10.,
+                Stroke::new(1_f32, tone.line),
+                egui::StrokeKind::Inside,
+            );
+            tree_rect.shrink2(Vec2::new(6., 6.))
+        } else {
+            let tone = ui::t(ui);
+            ui.painter().rect_filled(tree_rect, 14., tone.sidebar);
+            ui.painter().rect_stroke(
+                tree_rect,
+                14.,
+                Stroke::new(1_f32, tone.line),
+                egui::StrokeKind::Inside,
+            );
+            // Reserve a clear header above the tree, keeping the drag and drop
+            // targets inside the scroll area's actual content rectangle.
+            let header = egui::Rect::from_min_max(
+                tree_rect.min + Vec2::new(14., 12.),
+                egui::pos2(tree_rect.right() - 14., tree_rect.top() + 48.),
+            );
+            ui.painter().text(
+                header.left_top(),
+                egui::Align2::LEFT_TOP,
+                "프로젝트 구조",
+                egui::FontId::proportional(14.),
+                tone.ink,
+            );
+            ui.painter().text(
+                header.left_top() + Vec2::new(0., 21.),
+                egui::Align2::LEFT_TOP,
+                "폴더와 메모",
+                egui::FontId::proportional(11.),
+                tone.muted,
+            );
+            let tree_content = egui::Rect::from_min_max(
+                egui::pos2(tree_rect.left() + 6., tree_rect.top() + 56.),
+                egui::pos2(tree_rect.right() - 6., tree_rect.bottom() - 6.),
+            );
+            tree_content
+        };
         let mut tree = ui.new_child(
             egui::UiBuilder::new()
                 .id_salt("project_tree")
@@ -316,7 +333,15 @@ impl App {
         tree.set_clip_rect(tree_content.intersect(ui.clip_rect()));
         egui::ScrollArea::vertical()
             .id_salt("catalog_project_items")
-            .max_height((height - 62.).max(0.))
+            .max_height(
+                (height
+                    - match variant {
+                        0 => 0.,
+                        1 => 12.,
+                        _ => 62.,
+                    })
+                .max(0.),
+            )
             .auto_shrink([false, false])
             .show_rows(&mut tree, 30., rows.len(), |ui, range| {
                 self.catalog_drag_scroll(ui);
@@ -448,7 +473,7 @@ impl App {
         if done {
             title = title.strikethrough().color(MUTED);
         } else if selected {
-            title = title.color(ACCENT);
+            title = title.color(ui::accent(ui));
         }
         let progress = project_check_progress(note);
         ui.push_id(("project_memo", id), |ui| {

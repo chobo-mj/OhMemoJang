@@ -361,7 +361,7 @@ impl App {
                                     t.format("%Y.%m.%d %H:%M")
                                 ))
                                 .small()
-                                .color(ACCENT),
+                                .color(crate::ui::accent(ui)),
                             )
                             .frame(false),
                         )
@@ -1107,7 +1107,7 @@ impl App {
                             .zip(self.extra.scheduled_to)
                             .is_some_and(|(a, b)| a > b));
                 if invalid {
-                    ui.colored_label(ACCENT, "시작 날짜가 끝 날짜보다 늦습니다");
+                    ui.colored_label(crate::ui::accent(ui), "시작 날짜가 끝 날짜보다 늦습니다");
                 }
                 ui.add_space(8.);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1115,7 +1115,7 @@ impl App {
                         .add_enabled(
                             !invalid,
                             egui::Button::new(RichText::new("검색").color(Color32::WHITE).strong())
-                                .fill(ACCENT),
+                                .fill(crate::ui::accent(ui)),
                         )
                         .clicked()
                     {
@@ -1137,6 +1137,132 @@ impl App {
 }
 impl App {
     pub fn utilities(&mut self, ui: &mut egui::Ui) {
+        match ui::variant(ui) {
+            0 => self.utilities_light1(ui),
+            1 => self.utilities_light2(ui),
+            _ => self.utilities_light3(ui),
+        }
+    }
+    fn utilities_light1(&mut self, ui: &mut egui::Ui) {
+        let top = ui.cursor().min;
+        let previous_tab = self.extra.utilities_tab;
+        ui::tabs(
+            ui,
+            &mut self.extra.utilities_tab,
+            &[
+                "업무일지",
+                "표 모아보기",
+                "이미지 모아보기",
+                "링크 · 즐겨찾기",
+                "휴지통",
+            ],
+        );
+        ui.add_space(12.);
+        if self.extra.utilities_tab != previous_tab {
+            self.content_selection.clear();
+            self.content_purge.clear();
+            self.desktop.trash_selection.clear();
+            self.desktop.trash_selected_groups.clear();
+        }
+        match self.extra.utilities_tab {
+            0 => self.journal(ui),
+            1 => self.content_tables(ui),
+            2 => self.content_images(ui),
+            3 => self.real_bookmark_gallery(ui),
+            _ => self.trash_ui(ui),
+        }
+        // What the page shows (the tutorial lights it and keeps clear of it).
+        let shown = egui::Rect::from_min_max(top, ui.min_rect().max);
+        crate::tutorial::mark(
+            ui.ctx(),
+            crate::tutorial::Spot::Utilities,
+            shown.intersect(ui.clip_rect()),
+        );
+    }
+    fn utilities_light2(&mut self, ui: &mut egui::Ui) {
+        let top = ui.cursor().min;
+        let previous_tab = self.extra.utilities_tab;
+        let tone = ui::t(ui);
+        let tabs = [
+            ("업무일지", "완료한 일을 날짜별로 돌아보세요"),
+            ("표 모아보기", "메모에 담긴 표를 한곳에서 살펴보세요"),
+            (
+                "이미지 모아보기",
+                "메모에 담긴 이미지를 한곳에서 살펴보세요",
+            ),
+            ("링크 · 즐겨찾기", "자주 찾는 링크를 모아두세요"),
+            ("휴지통", "삭제한 항목을 확인하고 관리하세요"),
+        ];
+        // Keep this navigation local to utilities: the content below owns its
+        // own scrolling and selection, while the tabs remain easy to scan.
+        egui::Frame::NONE
+            .fill(tone.sidebar)
+            .stroke(egui::Stroke::new(1.0_f32, tone.line))
+            .corner_radius(12)
+            .inner_margin(egui::Margin::symmetric(14, 12))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal_wrapped(|ui| {
+                    for (index, (label, _)) in tabs.iter().enumerate() {
+                        let selected = self.extra.utilities_tab == index;
+                        let text = RichText::new(*label).strong().color(
+                            if selected && ui.visuals().dark_mode {
+                                Color32::from_rgb(255, 164, 140)
+                            } else if selected {
+                                ui::accent(ui)
+                            } else {
+                                tone.muted
+                            },
+                        );
+                        let response = ui.add(
+                            egui::Button::new(text)
+                                .fill(if selected {
+                                    tone.accent_soft
+                                } else {
+                                    Color32::TRANSPARENT
+                                })
+                                .stroke(egui::Stroke::NONE)
+                                .corner_radius(7)
+                                .min_size(Vec2::new(0., 30.)),
+                        );
+                        if response
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .clicked()
+                        {
+                            self.extra.utilities_tab = index;
+                        }
+                    }
+                });
+                ui.add_space(5.);
+                ui.label(
+                    RichText::new(tabs[self.extra.utilities_tab.min(tabs.len() - 1)].1)
+                        .size(12.)
+                        .color(tone.muted),
+                );
+            });
+        ui.add_space(16.);
+        if self.extra.utilities_tab != previous_tab {
+            self.content_selection.clear();
+            self.content_purge.clear();
+            self.desktop.trash_selection.clear();
+            self.desktop.trash_selected_groups.clear();
+        }
+        match self.extra.utilities_tab {
+            0 => self.journal(ui),
+            1 => self.content_tables(ui),
+            2 => self.content_images(ui),
+            3 => self.real_bookmark_gallery(ui),
+            _ => self.trash_ui(ui),
+        }
+        // What the page shows (the tutorial lights it and keeps clear of it).
+        let shown = egui::Rect::from_min_max(top, ui.min_rect().max);
+        crate::tutorial::mark(
+            ui.ctx(),
+            crate::tutorial::Spot::Utilities,
+            shown.intersect(ui.clip_rect()),
+        );
+    }
+    fn utilities_light3(&mut self, ui: &mut egui::Ui) {
         let top = ui.cursor().min;
         let previous_tab = self.extra.utilities_tab;
         let tone = ui::t(ui);
@@ -1165,10 +1291,18 @@ impl App {
                 let response = ui.add_sized(
                     [tile_width, 54.],
                     egui::Button::new(text)
-                        .fill(if selected { ACCENT } else { tone.field })
+                        .fill(if selected {
+                            crate::ui::accent(ui)
+                        } else {
+                            tone.field
+                        })
                         .stroke(egui::Stroke::new(
                             1.0_f32,
-                            if selected { ACCENT } else { tone.line },
+                            if selected {
+                                crate::ui::accent(ui)
+                            } else {
+                                tone.line
+                            },
                         ))
                         .corner_radius(10.),
                 );
@@ -1183,7 +1317,7 @@ impl App {
         ui.add_space(12.);
         ui.horizontal(|ui| {
             let (mark, _) = ui.allocate_exact_size(Vec2::new(4., 30.), egui::Sense::hover());
-            ui.painter().rect_filled(mark, 2., ACCENT);
+            ui.painter().rect_filled(mark, 2., crate::ui::accent(ui));
             ui.vertical(|ui| {
                 let current = self.extra.utilities_tab.min(tabs.len() - 1);
                 ui.label(

@@ -125,7 +125,7 @@ pub fn toggle_icon_sized(ui: &mut Ui, icon: Icon, tooltip: &str, on: bool, side:
         );
     }
     let color = if on {
-        crate::ui::ACCENT
+        crate::ui::accent(ui)
     } else {
         ui.visuals()
             .text_color()
@@ -462,7 +462,7 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
             line((10.5, 17.), (13.5, 17.));
         }
         Icon::PlusCircle => {
-            painter.circle_filled(p(12., 12.), 9.5 * scale, crate::ui::ACCENT);
+            painter.circle_filled(p(12., 12.), 9.5 * scale, color);
             let s = Stroke::new((1.8 * scale).max(1.0), Color32::WHITE);
             painter.line_segment([p(8., 12.), p(16., 12.)], s);
             painter.line_segment([p(12., 8.), p(12., 16.)], s);

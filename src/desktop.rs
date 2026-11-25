@@ -798,7 +798,7 @@ impl App {
                             ui.painter(),
                             egui::Rect::from_min_size(ui.cursor().min, Vec2::splat(20.)),
                             crate::icons::Icon::Lock,
-                            ACCENT,
+                            crate::ui::accent(ui),
                         );
                         ui.add_space(26.);
                         ui.label(RichText::new(&self.data.notes[i].title).strong().size(15.));
@@ -828,7 +828,7 @@ impl App {
                         );
                     }
                     if !self.desktop.lock_error.is_empty() {
-                        ui.colored_label(ACCENT, &self.desktop.lock_error);
+                        ui.colored_label(crate::ui::accent(ui), &self.desktop.lock_error);
                     }
                     let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
                     let (ok, cancel) =
@@ -900,7 +900,7 @@ impl App {
                                 ui.painter(),
                                 egui::Rect::from_min_size(ui.cursor().min, Vec2::splat(20.)),
                                 crate::icons::Icon::Alarm,
-                                ACCENT,
+                                crate::ui::accent(ui),
                             );
                             ui.add_space(26.);
                             ui.label(
@@ -1170,7 +1170,7 @@ impl App {
                         self.settings_page(ui);
                         if !self.desktop.last_action.is_empty() {
                             ui.add_space(12.);
-                            ui.colored_label(ACCENT, &self.desktop.last_action);
+                            ui.colored_label(crate::ui::accent(ui), &self.desktop.last_action);
                         }
                     });
                 });
@@ -1258,19 +1258,11 @@ impl App {
             }
             1 => {
                 section(ui, "테마");
-                let mut theme = if self.dark {
-                    1 + usize::from(self.dark_brighter)
-                } else {
-                    0
-                };
-                if segmented(
+                segmented(
                     ui,
-                    &mut theme,
-                    &["라이트 모드", "다크 모드 1", "다크 모드 2"],
-                ) {
-                    self.dark = theme != 0;
-                    self.dark_brighter = theme == 2;
-                }
+                    &mut self.light_theme,
+                    &["라이트 1", "라이트 2", "라이트 3"],
+                );
                 section(ui, "글꼴");
                 font_choice(ui, "main_font", &mut self.desktop.font);
                 section(ui, "글꼴 크기");
@@ -1769,7 +1761,7 @@ impl App {
                     ),
                 );
                 if !self.saving.error.is_empty() {
-                    ui.colored_label(ACCENT, &self.saving.error);
+                    ui.colored_label(crate::ui::accent(ui), &self.saving.error);
                 }
                 section(ui, "백업 / 복원");
                 ui.horizontal(|ui| {
@@ -1875,8 +1867,11 @@ fn color_turns(ui: &mut egui::Ui, turn: &mut usize) {
                 egui::Stroke::new(1.0_f32, Color32::from_black_alpha(30)),
             );
             if k == *turn % PALETTE.len() {
-                ui.painter()
-                    .circle_stroke(rect.center(), 12.5, egui::Stroke::new(2.0_f32, ACCENT));
+                ui.painter().circle_stroke(
+                    rect.center(),
+                    12.5,
+                    egui::Stroke::new(2.0_f32, crate::ui::accent(ui)),
+                );
             }
             if r.on_hover_text("다음 새 메모를 이 색부터")
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -1926,8 +1921,11 @@ pub fn color_choices(ui: &mut egui::Ui, color: &mut Color32) {
                 egui::Stroke::new(1.0_f32, Color32::from_black_alpha(30)),
             );
             if selected {
-                ui.painter()
-                    .circle_stroke(rect.center(), 12.5, egui::Stroke::new(2.0_f32, ACCENT));
+                ui.painter().circle_stroke(
+                    rect.center(),
+                    12.5,
+                    egui::Stroke::new(2.0_f32, crate::ui::accent(ui)),
+                );
             }
             if r.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                 *color = c;
@@ -1959,8 +1957,11 @@ pub fn color_choices(ui: &mut egui::Ui, color: &mut Color32) {
             );
         }
         if custom || open {
-            ui.painter()
-                .circle_stroke(rect.center(), 12.5, egui::Stroke::new(2.0_f32, ACCENT));
+            ui.painter().circle_stroke(
+                rect.center(),
+                12.5,
+                egui::Stroke::new(2.0_f32, crate::ui::accent(ui)),
+            );
         }
         if r.on_hover_cursor(egui::CursorIcon::PointingHand)
             .on_hover_text("기타 색상")

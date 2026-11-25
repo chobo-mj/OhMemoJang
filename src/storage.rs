@@ -254,6 +254,8 @@ pub struct CatalogFolderRec {
 pub struct SettingsRec {
     pub dark: bool,
     pub dark_brighter: bool,
+    /// None means a save made before the light-only themes existed.
+    pub light_theme: Option<usize>,
     pub shortcuts: Vec<String>,
     pub hide_completed: bool,
     pub hide_locked: bool,
@@ -319,6 +321,7 @@ impl Default for SettingsRec {
         let mut s = Self {
             dark: false,
             dark_brighter: false,
+            light_theme: None,
             shortcuts: vec![],
             hide_completed: false,
             hide_locked: false,
@@ -1000,8 +1003,11 @@ impl App {
         }
         let mut settings = SettingsRec::default();
         settings.read_desktop(&self.desktop);
-        settings.dark = self.dark;
-        settings.dark_brighter = self.dark_brighter;
+        // Keep the old fields readable by older versions, but never persist a
+        // dark main-window selection in the light-only workspace.
+        settings.dark = false;
+        settings.dark_brighter = false;
+        settings.light_theme = Some(self.light_theme.min(2));
         settings.shortcuts = self.shortcuts.to_vec();
         settings.show_done = self.extra.show_done;
         settings.cal_box_color = color(self.cal.box_color);
@@ -1214,8 +1220,11 @@ impl App {
         }
         let st = &s.settings;
         st.write_desktop(&mut self.desktop);
-        self.dark = st.dark;
-        self.dark_brighter = st.dark_brighter;
+        // Older workspaces may contain a dark selection. Migrate those to the
+        // new default rather than reopening a dark main workspace.
+        self.dark = false;
+        self.dark_brighter = false;
+        self.light_theme = st.light_theme.filter(|v| *v < 3).unwrap_or(1);
         for (k, v) in st.shortcuts.iter().enumerate().take(3) {
             if !v.trim().is_empty() {
                 self.shortcuts[k] = v.clone();
@@ -1998,6 +2007,26 @@ mod tests {
         assert!(c.cal.state == crate::calendar_dock::DockState::Hidden);
     }
     #[test]
+    fn light_theme_defaults_and_legacy_dark_settings_migrate_safely() {
+        let today = NaiveDate::from_ymd_opt(2026, 11, 11).unwrap();
+        let mut app = App::sample(today);
+        assert_eq!(app.light_theme, 1);
+        let mut saved = app.snapshot(&std::env::temp_dir());
+        // Old settings have no light_theme field, including old dark themes.
+        saved.settings = serde_json::from_str(r#"{"dark":true,"dark_brighter":true}"#).unwrap();
+        app.restore(&saved);
+        assert_eq!(app.light_theme, 1);
+        assert!(!app.dark);
+        assert!(!app.dark_brighter);
+        saved.settings.light_theme = Some(99);
+        app.restore(&saved);
+        assert_eq!(app.light_theme, 1);
+        saved.settings.light_theme = Some(0);
+        app.restore(&saved);
+        assert_eq!(app.light_theme, 0);
+    }
+
+    #[test]
     fn memos_wiki_settings_and_pictures_survive_saving() {
         let dir = std::env::temp_dir().join(format!(
             "ohmemojang-store-{}-{}",
@@ -2022,7 +2051,7 @@ mod tests {
         a.extra.wiki_tabs.push("사용법".into());
         a.desktop.passwords.insert(3, hash_password("1234"));
         a.data.notes[3].locked = true;
-        a.dark = true;
+        a.light_theme = 2;
         let snap = a.snapshot(&dir);
         write_all(&dir, &snap).unwrap();
         let loaded = read(&dir).unwrap().unwrap();
@@ -2035,7 +2064,7 @@ mod tests {
         assert_eq!(b.data.notes[1].duration, 3);
         assert_eq!(b.data.notes[2].reminder, a.data.notes[2].reminder);
         assert_eq!(b.extra.wiki_tabs, a.extra.wiki_tabs);
-        assert!(b.dark);
+        assert_eq!(b.light_theme, 2);
         assert!(b.data.notes[3].locked);
         assert!(check_password(&b.desktop.passwords[&3], "1234"));
         assert!(!check_password(&b.desktop.passwords[&3], "0000"));

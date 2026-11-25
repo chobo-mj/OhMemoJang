@@ -94,18 +94,23 @@ impl App {
             );
             let hovered = ui.rect_contains_pointer(rect);
             let selected = preview && self.catalog.selected == Some(i);
-            if preview && !selected && !hovered {
+            if ui::variant(ui) == 2 && preview && !selected && !hovered {
                 ui.painter()
                     .rect_filled(rect.shrink2(Vec2::new(1., 2.)), 9., tone.field);
             }
-            if selected {
+            if ui::variant(ui) == 0 && selected {
+                ui.painter().rect_filled(rect, 6., tone.accent_soft);
+            } else if ui::variant(ui) == 0 && hovered {
+                ui.painter()
+                    .rect_filled(rect, 6., tone.hover.gamma_multiply(0.6));
+            } else if selected {
                 ui.painter()
                     .rect_filled(rect.shrink2(Vec2::new(1., 2.)), 8., tone.accent_soft);
                 let marker = Rect::from_min_size(
                     rect.left_top() + Vec2::new(1., 9.),
                     Vec2::new(3., (height - 18.).max(8.)),
                 );
-                ui.painter().rect_filled(marker, 2., ACCENT);
+                ui.painter().rect_filled(marker, 2., ui::accent(ui));
             } else if hovered {
                 ui.painter().rect_filled(
                     rect.shrink2(Vec2::new(1., 2.)),
@@ -343,20 +348,25 @@ impl App {
             egui::pos2(list_rect.right() + 16., rect.top()),
             Vec2::new(preview_width, height),
         );
-        let tone = ui::t(ui);
-        let surface = if ui.visuals().dark_mode {
-            tone.sidebar
+        let list_content = if ui::variant(ui) == 2 {
+            let tone = ui::t(ui);
+            let surface = if ui.visuals().dark_mode {
+                tone.sidebar
+            } else {
+                Color32::WHITE
+            };
+            ui.painter().rect_filled(list_rect, 14., surface);
+            ui.painter().rect_stroke(
+                list_rect,
+                14.,
+                Stroke::new(1.0_f32, tone.line),
+                egui::StrokeKind::Inside,
+            );
+            let list_content = list_rect.shrink2(Vec2::new(14., 14.));
+            list_content
         } else {
-            Color32::WHITE
+            list_rect
         };
-        ui.painter().rect_filled(list_rect, 14., surface);
-        ui.painter().rect_stroke(
-            list_rect,
-            14.,
-            Stroke::new(1.0_f32, tone.line),
-            egui::StrokeKind::Inside,
-        );
-        let list_content = list_rect.shrink2(Vec2::new(14., 14.));
         let mut list = ui.new_child(
             egui::UiBuilder::new()
                 .id_salt("agenda_list_pane")
@@ -381,7 +391,7 @@ impl App {
         if drag.hovered() || drag.dragged() {
             ui.painter().line_segment(
                 [handle.center_top(), handle.center_bottom()],
-                Stroke::new(2.0_f32, ACCENT.gamma_multiply(0.6)),
+                Stroke::new(2.0_f32, ui::accent(ui).gamma_multiply(0.6)),
             );
         }
         if drag.dragged() {
@@ -538,14 +548,17 @@ impl App {
         let mut toggled = false;
         let today = Local::now().date_naive();
         let (tone, sun, sat, today_mark) = self.calendar_tone(ui);
+        let tiles = ui::variant(ui) == 2;
         ui.horizontal(|ui| {
             ui.set_min_height(32.);
-            let (month_mark, _) = ui.allocate_exact_size(Vec2::new(5., 25.), Sense::hover());
-            ui.painter().rect_filled(month_mark, 3., today_mark);
-            ui.add_space(4.);
+            if tiles {
+                let (month_mark, _) = ui.allocate_exact_size(Vec2::new(5., 25.), Sense::hover());
+                ui.painter().rect_filled(month_mark, 3., today_mark);
+                ui.add_space(4.);
+            }
             ui.label(
                 RichText::new(self.month.format("%Y년 %-m월").to_string())
-                    .size(22.)
+                    .size(if tiles { 22. } else { 18. })
                     .strong()
                     .color(tone.ink),
             );
@@ -606,30 +619,48 @@ impl App {
                     .on_hover_text("연결된 엑셀 파일의 근무자 보기 · 준비 중");
             });
         });
-        ui.add_space(14.);
+        ui.add_space(if tiles { 14. } else { 10. });
         let width = ui.available_width().max(280.);
         let col = width / 7.;
-        let (header, _) = ui.allocate_exact_size(Vec2::new(width, 30.), Sense::hover());
-        let header_fill = self.cal.active().map_or(tone.sidebar, |theme| theme.card);
-        ui.painter()
-            .rect_filled(header.shrink2(Vec2::new(2., 1.)), 8., header_fill);
+        let (header, _) = ui.allocate_exact_size(
+            Vec2::new(width, if tiles { 30. } else { 26. }),
+            Sense::hover(),
+        );
+        if tiles {
+            let header_fill = self.cal.active().map_or(tone.sidebar, |theme| theme.card);
+            ui.painter()
+                .rect_filled(header.shrink2(Vec2::new(2., 1.)), 8., header_fill);
+        }
         for (i, label) in ["일", "월", "화", "수", "목", "금", "토"]
             .iter()
             .enumerate()
         {
             ui.painter().text(
-                header.min + Vec2::new(i as f32 * col + 14., 15.),
+                header.min
+                    + if tiles {
+                        Vec2::new(i as f32 * col + 14., 15.)
+                    } else {
+                        Vec2::new(i as f32 * col + 10., 13.)
+                    },
                 egui::Align2::LEFT_CENTER,
                 label,
                 egui::FontId::proportional(12.),
                 match i {
                     0 => sun,
                     6 => sat,
-                    _ => tone.muted,
+                    _ => {
+                        if tiles {
+                            tone.muted
+                        } else {
+                            tone.faint
+                        }
+                    }
                 },
             );
         }
-        ui.add_space(4.);
+        if tiles {
+            ui.add_space(4.);
+        }
         let weeks = self.prefs.cal_weeks;
         // Month view starts on the Sunday before the 1st; week views on the
         // Sunday of the selected day's week.
@@ -653,6 +684,31 @@ impl App {
         };
         let (all, _) =
             ui.allocate_exact_size(Vec2::new(width, rows as f32 * height), Sense::hover());
+        if !tiles {
+            if let Some(theme) = self.cal.active() {
+                ui.painter().rect_filled(all, 8., theme.card);
+            }
+            ui.painter().rect_stroke(
+                all,
+                8.,
+                Stroke::new(1.0_f32, tone.line),
+                egui::StrokeKind::Inside,
+            );
+            for r in 1..rows {
+                let y = all.top() + r as f32 * height;
+                ui.painter().line_segment(
+                    [egui::pos2(all.left(), y), egui::pos2(all.right(), y)],
+                    Stroke::new(1.0_f32, tone.line),
+                );
+            }
+            for c in 1..7 {
+                let x = all.left() + c as f32 * col;
+                ui.painter().line_segment(
+                    [egui::pos2(x, all.top()), egui::pos2(x, all.bottom())],
+                    Stroke::new(1.0_f32, tone.line),
+                );
+            }
+        }
         // Each day has a quiet, separated surface. Hit rectangles stay full
         // size so a narrow gutter never interferes with scheduling or drops.
         let surface = self
@@ -673,21 +729,29 @@ impl App {
             } else {
                 1.
             };
-            let tile = rect.shrink(2.);
-            let tile_fill = if day == self.day {
-                tone.accent_soft
-            } else if weekday == 0 || weekday == 6 {
-                ui::lerp_color(surface, tone.line, 0.22)
-            } else {
-                surface
-            };
-            ui.painter().rect_filled(tile, 8., tile_fill);
-            if day == self.day {
-                ui.painter().rect_stroke(
-                    tile,
-                    8.,
-                    Stroke::new(1.0_f32, today_mark),
-                    egui::StrokeKind::Inside,
+            if tiles {
+                let tile = rect.shrink(2.);
+                let tile_fill = if day == self.day {
+                    tone.accent_soft
+                } else if weekday == 0 || weekday == 6 {
+                    ui::lerp_color(surface, tone.line, 0.22)
+                } else {
+                    surface
+                };
+                ui.painter().rect_filled(tile, 8., tile_fill);
+                if day == self.day {
+                    ui.painter().rect_stroke(
+                        tile,
+                        8.,
+                        Stroke::new(1.0_f32, today_mark),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+            } else if day == self.day {
+                ui.painter().rect_filled(
+                    rect.shrink(1.),
+                    if slot == 0 { 7. } else { 0. },
+                    tone.accent_soft.gamma_multiply(0.55),
                 );
             }
             self.targets.push(dragging::Target {
@@ -716,8 +780,11 @@ impl App {
             }
             if let Some((owner, a, b)) = self.range_drag {
                 if owner == viewport && a != b && (a.min(b)..=a.max(b)).contains(&day) {
-                    ui.painter()
-                        .rect_filled(rect.shrink(2.), 4., ACCENT.gamma_multiply(0.18));
+                    ui.painter().rect_filled(
+                        rect.shrink(2.),
+                        4.,
+                        ui::accent(ui).gamma_multiply(0.18),
+                    );
                 }
             }
             let standing_move = self.cal.painting
@@ -743,7 +810,7 @@ impl App {
                 ui.painter().rect_stroke(
                     rect.shrink(2.),
                     4.,
-                    Stroke::new(2.0_f32, ACCENT),
+                    Stroke::new(2.0_f32, ui::accent(ui)),
                     egui::StrokeKind::Inside,
                 );
             }
@@ -757,15 +824,21 @@ impl App {
                 tone.ink
             }
             .gamma_multiply(fade);
-            let number = rect.min + Vec2::new(19., 20.);
+            let number = rect.min
+                + if tiles {
+                    Vec2::new(19., 20.)
+                } else {
+                    Vec2::new(17., 18.)
+                };
             if day == today {
-                ui.painter().circle_filled(number, 12., today_mark);
+                ui.painter()
+                    .circle_filled(number, if tiles { 12. } else { 11. }, today_mark);
             }
             ui.painter().text(
                 number,
                 egui::Align2::CENTER_CENTER,
                 day.day().to_string(),
-                egui::FontId::proportional(13.),
+                egui::FontId::proportional(if tiles { 13. } else { 12.5 }),
                 if day == today {
                     Color32::WHITE
                 } else {
@@ -822,7 +895,7 @@ impl App {
                     plus,
                     6.,
                     tone.bg,
-                    Stroke::new(1.2_f32, ACCENT),
+                    Stroke::new(1.2_f32, ui::accent(ui)),
                     egui::StrokeKind::Inside,
                 );
                 overlay(ui, plus, slot + 25000, |ui| {
@@ -957,7 +1030,7 @@ impl App {
         if drag.hovered() || drag.dragged() {
             ui.painter().line_segment(
                 [handle.center_top(), handle.center_bottom()],
-                egui::Stroke::new(2.0_f32, ui::ACCENT.gamma_multiply(0.6)),
+                egui::Stroke::new(2.0_f32, ui::accent(ui).gamma_multiply(0.6)),
             );
         }
         if drag.dragged() {
@@ -982,9 +1055,12 @@ impl App {
         let drop_area = ui.available_rect_before_wrap().intersect(ui.clip_rect());
         ui.horizontal(|ui| {
             let tone = ui::t(ui);
-            let (mark, _) = ui.allocate_exact_size(Vec2::new(5., 23.), Sense::hover());
-            ui.painter().rect_filled(mark, 3., ACCENT);
-            ui.add_space(4.);
+            let tiles = ui::variant(ui) == 2;
+            if tiles {
+                let (mark, _) = ui.allocate_exact_size(Vec2::new(5., 23.), Sense::hover());
+                ui.painter().rect_filled(mark, 3., ui::accent(ui));
+                ui.add_space(4.);
+            }
             ui.label(
                 RichText::new(format!(
                     "{} {}",
@@ -992,7 +1068,7 @@ impl App {
                     ui::weekday(self.day)
                 ))
                 .strong()
-                .size(22.)
+                .size(if tiles { 22. } else { 20. })
                 .color(tone.ink),
             );
             let new_memo = self.stand_allows(crate::calendar_dock::StandFeature::NewMemo);
@@ -1285,7 +1361,7 @@ impl App {
         ui.painter().rect_stroke(
             cell.shrink(2.),
             4.,
-            Stroke::new(2.0_f32, ACCENT),
+            Stroke::new(2.0_f32, ui::accent(ui)),
             egui::StrokeKind::Inside,
         );
         let title = if note.title.trim().is_empty() {
@@ -1306,7 +1382,7 @@ impl App {
         painter.rect_stroke(
             rect,
             4.,
-            Stroke::new(1.0_f32, ACCENT),
+            Stroke::new(1.0_f32, ui::accent(ui)),
             egui::StrokeKind::Inside,
         );
         let ink = if egui::Rgba::from(note.color).intensity() < 0.18 {
@@ -1659,7 +1735,7 @@ impl App {
                 tone.accent_soft = t.select;
                 (tone, t.sun, t.sat, t.today)
             }
-            None => (tone, ACCENT, ui::BLUE, ACCENT),
+            None => (tone, ui::accent(ui), ui::BLUE, ui::accent(ui)),
         }
     }
     pub(crate) fn calendar_matches(&self, n: &Note, day: NaiveDate) -> bool {
@@ -1893,7 +1969,7 @@ impl App {
                         if self.picked.is_empty() {
                             tone.faint
                         } else {
-                            ACCENT
+                            ui::accent(ui)
                         },
                     ),
                 );
@@ -2053,7 +2129,7 @@ impl App {
                         fill,
                         Stroke::new(
                             if selected { 2.0_f32 } else { 1.0_f32 },
-                            if selected { ACCENT } else { tone.line_strong },
+                            if selected { ui::accent(ui) } else { tone.line_strong },
                         ),
                         egui::StrokeKind::Inside,
                     );
@@ -2133,7 +2209,7 @@ impl App {
                                     ui.painter(),
                                     star.rect.shrink(5.),
                                     crate::icons::Icon::Star,
-                                    ACCENT,
+                                    ui::accent(ui),
                                 );
                             }
                             if star.clicked() {
@@ -2233,10 +2309,15 @@ fn group_header(ui: &mut egui::Ui, label: &str, count: usize) {
     let tone = ui::t(ui);
     ui.horizontal(|ui| {
         ui.add_space(4.);
-        let (dot, _) = ui.allocate_exact_size(Vec2::splat(6.), Sense::hover());
-        ui.painter().circle_filled(dot.center(), 3., ACCENT);
-        ui.label(RichText::new(label).strong().size(13.5).color(tone.ink));
-        ui::chip(ui, &count.to_string(), tone.field, tone.muted);
+        if ui::variant(ui) == 0 {
+            ui.label(RichText::new(label).strong().size(13.5));
+            ui.label(RichText::new(count.to_string()).size(12.).color(tone.faint));
+        } else {
+            let (dot, _) = ui.allocate_exact_size(Vec2::splat(6.), Sense::hover());
+            ui.painter().circle_filled(dot.center(), 3., ui::accent(ui));
+            ui.label(RichText::new(label).strong().size(13.5).color(tone.ink));
+            ui::chip(ui, &count.to_string(), tone.field, tone.muted);
+        }
     });
     ui.add_space(2.);
     ui::divider(ui);
