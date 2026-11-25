@@ -319,11 +319,10 @@ impl App {
                 egui::FontId::proportional(11.),
                 tone.muted,
             );
-            let tree_content = egui::Rect::from_min_max(
+            egui::Rect::from_min_max(
                 egui::pos2(tree_rect.left() + 6., tree_rect.top() + 56.),
                 egui::pos2(tree_rect.right() - 6., tree_rect.bottom() - 6.),
-            );
-            tree_content
+            )
         };
         let mut tree = ui.new_child(
             egui::UiBuilder::new()

@@ -53,7 +53,7 @@ fn catalog_tabs(ui: &mut egui::Ui, selected: &mut usize) {
     let card_width = ((width - gap * (columns - 1) as f32) / columns as f32).max(1.);
     let base = ui.next_auto_id();
     let height = 62.;
-    let rows = (entries.len() + columns - 1) / columns;
+    let rows = entries.len().div_ceil(columns);
     let (area, _) = ui.allocate_exact_size(
         Vec2::new(width, rows as f32 * height + (rows - 1) as f32 * gap),
         Sense::hover(),

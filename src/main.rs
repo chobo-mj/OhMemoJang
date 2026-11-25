@@ -353,15 +353,29 @@ impl App {
         } else {
             egui::FontFamily::Proportional
         };
-        ui::apply_light(
-            ctx,
-            self.light_theme,
-            family,
-            self.desktop.font_size * 4. / 3.,
-        );
+        if self.dark {
+            ui::apply(
+                ctx,
+                true,
+                self.dark_brighter,
+                family,
+                self.desktop.font_size * 4. / 3.,
+            );
+        } else {
+            ui::apply_light(
+                ctx,
+                self.light_theme,
+                family,
+                self.desktop.font_size * 4. / 3.,
+            );
+        }
     }
     fn app_tone(&self) -> ui::Tone {
-        ui::light_tone(self.light_theme)
+        if self.dark {
+            ui::theme_tone(true, self.dark_brighter)
+        } else {
+            ui::light_tone(self.light_theme)
+        }
     }
     fn theme_with(&self, ctx: &egui::Context, dark: bool, brighter: bool) {
         let selected = egui::FontFamily::Name(self.desktop.font.clone().into());
@@ -1021,7 +1035,7 @@ impl App {
     }
     /// Page title on the left and global window actions on the right.
     fn page_bar(&mut self, ui: &mut egui::Ui) {
-        if self.light_theme == 2 {
+        if !self.dark && self.light_theme == 2 {
             self.page_bar_light3(ui);
         } else {
             self.page_bar_light12(ui);
@@ -1318,7 +1332,11 @@ impl App {
         }
         // The original brand banner is present in every light theme.
         ui::banner(ui, ui.available_width().max(16.));
-        ui.add_space(if self.light_theme == 2 { 14. } else { 10. });
+        ui.add_space(if !self.dark && self.light_theme == 2 {
+            14.
+        } else {
+            10.
+        });
         ui.horizontal(|ui| {
             let width = ui.available_width() - 28. - ui.spacing().item_spacing.x;
             if std::mem::take(&mut self.focus_search) {
@@ -1359,7 +1377,7 @@ impl App {
                 self.sidebar = false;
             }
         });
-        if self.light_theme == 2 {
+        if !self.dark && self.light_theme == 2 {
             ui.add_space(12.);
             ui::caption(ui, "WORKSPACE");
             ui.add_space(5.);

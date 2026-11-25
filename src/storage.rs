@@ -1003,10 +1003,9 @@ impl App {
         }
         let mut settings = SettingsRec::default();
         settings.read_desktop(&self.desktop);
-        // Keep the old fields readable by older versions, but never persist a
-        // dark main-window selection in the light-only workspace.
-        settings.dark = false;
-        settings.dark_brighter = false;
+        // Keep dark mode in the original fields for backward compatibility.
+        settings.dark = self.dark;
+        settings.dark_brighter = self.dark_brighter;
         settings.light_theme = Some(self.light_theme.min(2));
         settings.shortcuts = self.shortcuts.to_vec();
         settings.show_done = self.extra.show_done;
@@ -1220,10 +1219,9 @@ impl App {
         }
         let st = &s.settings;
         st.write_desktop(&mut self.desktop);
-        // Older workspaces may contain a dark selection. Migrate those to the
-        // new default rather than reopening a dark main workspace.
-        self.dark = false;
-        self.dark_brighter = false;
+        // The original dark fields remain authoritative for old and new saves.
+        self.dark = st.dark;
+        self.dark_brighter = st.dark_brighter;
         self.light_theme = st.light_theme.filter(|v| *v < 3).unwrap_or(1);
         for (k, v) in st.shortcuts.iter().enumerate().take(3) {
             if !v.trim().is_empty() {
@@ -2007,17 +2005,21 @@ mod tests {
         assert!(c.cal.state == crate::calendar_dock::DockState::Hidden);
     }
     #[test]
-    fn light_theme_defaults_and_legacy_dark_settings_migrate_safely() {
+    fn light_theme_defaults_and_legacy_dark_settings_restore_safely() {
         let today = NaiveDate::from_ymd_opt(2026, 11, 11).unwrap();
         let mut app = App::sample(today);
         assert_eq!(app.light_theme, 1);
         let mut saved = app.snapshot(&std::env::temp_dir());
-        // Old settings have no light_theme field, including old dark themes.
+        // Old settings have no light_theme field; preserve their dark selection.
         saved.settings = serde_json::from_str(r#"{"dark":true,"dark_brighter":true}"#).unwrap();
         app.restore(&saved);
         assert_eq!(app.light_theme, 1);
-        assert!(!app.dark);
-        assert!(!app.dark_brighter);
+        assert!(app.dark);
+        assert!(app.dark_brighter);
+        let roundtrip = app.snapshot(&std::env::temp_dir());
+        assert!(roundtrip.settings.dark);
+        assert!(roundtrip.settings.dark_brighter);
+        assert_eq!(roundtrip.settings.light_theme, Some(1));
         saved.settings.light_theme = Some(99);
         app.restore(&saved);
         assert_eq!(app.light_theme, 1);

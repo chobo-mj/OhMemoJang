@@ -1258,11 +1258,30 @@ impl App {
             }
             1 => {
                 section(ui, "테마");
-                segmented(
-                    ui,
-                    &mut self.light_theme,
-                    &["라이트 1", "라이트 2", "라이트 3"],
-                );
+                // Two responsive groups keep all five choices reachable in
+                // a narrow settings pane. An out-of-range value means that
+                // the other group owns the current selection.
+                ui.horizontal_wrapped(|ui| {
+                    let mut light = if self.dark {
+                        3
+                    } else {
+                        self.light_theme.min(2)
+                    };
+                    if segmented(ui, &mut light, &["라이트 1", "라이트 2", "라이트 3"]) {
+                        self.light_theme = light;
+                        self.dark = false;
+                        self.dark_brighter = false;
+                    }
+                    let mut dark = if self.dark {
+                        usize::from(self.dark_brighter)
+                    } else {
+                        2
+                    };
+                    if segmented(ui, &mut dark, &["다크 모드 1", "다크 모드 2"]) {
+                        self.dark = true;
+                        self.dark_brighter = dark == 1;
+                    }
+                });
                 section(ui, "글꼴");
                 font_choice(ui, "main_font", &mut self.desktop.font);
                 section(ui, "글꼴 크기");

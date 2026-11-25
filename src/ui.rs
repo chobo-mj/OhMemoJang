@@ -41,7 +41,7 @@ fn blue(ui: &Ui) -> Color32 {
     if ui
         .ctx()
         .data(|d| d.get_temp::<usize>(key))
-        .is_some_and(|v| v < 2)
+        .is_none_or(|v| v < 2)
     {
         Color32::from_rgb(56, 110, 196)
     } else {
@@ -67,17 +67,17 @@ pub struct Tone {
 pub fn tone(dark: bool) -> Tone {
     if dark {
         Tone {
-            bg: Color32::from_rgb(21, 25, 42),
-            sidebar: Color32::from_rgb(17, 21, 36),
-            field: Color32::from_rgb(35, 41, 62),
-            hover: Color32::from_rgb(43, 50, 74),
-            pressed: Color32::from_rgb(53, 61, 88),
-            line: Color32::from_rgb(49, 57, 80),
-            line_strong: Color32::from_rgb(70, 79, 106),
-            ink: Color32::from_rgb(235, 238, 249),
-            muted: Color32::from_rgb(168, 178, 201),
-            faint: Color32::from_rgb(132, 144, 171),
-            accent_soft: Color32::from_rgb(52, 51, 96),
+            bg: Color32::from_rgb(30, 30, 29),
+            sidebar: Color32::from_rgb(25, 25, 24),
+            field: Color32::from_rgb(43, 43, 41),
+            hover: Color32::from_rgb(50, 50, 48),
+            pressed: Color32::from_rgb(60, 60, 57),
+            line: Color32::from_rgb(52, 52, 50),
+            line_strong: Color32::from_rgb(70, 70, 67),
+            ink: Color32::from_rgb(234, 233, 229),
+            muted: Color32::from_rgb(158, 157, 152),
+            faint: Color32::from_rgb(110, 109, 105),
+            accent_soft: Color32::from_rgb(70, 42, 34),
         }
     } else {
         Tone {
@@ -117,22 +117,22 @@ pub fn light_tone(variant: usize) -> Tone {
         }
     }
 }
-const BRIGHTER_DARK_BG: Color32 = Color32::from_rgb(40, 47, 67);
+const BRIGHTER_DARK_BG: Color32 = Color32::from_rgb(48, 48, 46);
 
 pub fn theme_tone(dark: bool, brighter: bool) -> Tone {
     let base = tone(dark);
     if dark && brighter {
         Tone {
             bg: BRIGHTER_DARK_BG,
-            sidebar: Color32::from_rgb(33, 39, 57),
-            field: Color32::from_rgb(53, 61, 88),
-            hover: Color32::from_rgb(60, 69, 93),
-            pressed: Color32::from_rgb(70, 80, 106),
-            line: Color32::from_rgb(60, 69, 93),
-            line_strong: Color32::from_rgb(88, 98, 124),
-            muted: Color32::from_rgb(191, 199, 218),
-            faint: Color32::from_rgb(151, 163, 188),
-            accent_soft: Color32::from_rgb(73, 72, 116),
+            sidebar: Color32::from_rgb(41, 41, 39),
+            field: Color32::from_rgb(60, 60, 57),
+            hover: Color32::from_rgb(68, 68, 65),
+            pressed: Color32::from_rgb(78, 78, 75),
+            line: Color32::from_rgb(68, 68, 65),
+            line_strong: Color32::from_rgb(87, 87, 83),
+            muted: Color32::from_rgb(176, 175, 169),
+            faint: Color32::from_rgb(138, 137, 131),
+            accent_soft: Color32::from_rgb(88, 54, 45),
             ..base
         }
     } else {
@@ -186,7 +186,7 @@ fn apply_inner(
     let c = variant
         .map(light_tone)
         .unwrap_or_else(|| theme_tone(dark, brighter));
-    let active_accent = variant.map(accent_for).unwrap_or(ACCENT);
+    let active_accent = variant.map(accent_for).unwrap_or(CORAL);
     let mut v = if dark {
         egui::Visuals::dark()
     } else {
@@ -195,9 +195,9 @@ fn apply_inner(
     v.panel_fill = c.bg;
     v.window_fill = c.bg;
     v.faint_bg_color = if dark && brighter {
-        Color32::from_rgb(46, 53, 73)
+        Color32::from_rgb(54, 54, 52)
     } else if dark {
-        Color32::from_rgb(27, 33, 51)
+        Color32::from_rgb(35, 35, 34)
     } else if variant.is_some_and(|v| v < 2) {
         Color32::from_rgb(250, 250, 248)
     } else {
@@ -206,7 +206,7 @@ fn apply_inner(
     v.extreme_bg_color = c.field;
     v.code_bg_color = c.field;
     v.override_text_color = Some(c.ink);
-    v.hyperlink_color = if variant.is_some_and(|v| v < 2) {
+    v.hyperlink_color = if variant.is_none_or(|v| v < 2) {
         Color32::from_rgb(56, 110, 196)
     } else {
         BLUE

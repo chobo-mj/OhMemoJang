@@ -3148,7 +3148,7 @@ pub fn nav_button(
         ui.painter().rect_filled(marker, 2., accent_color);
     }
     let highlight = if ui.visuals().dark_mode {
-        Color32::from_rgb(191, 190, 255)
+        Color32::from_rgb(255, 164, 140)
     } else {
         accent_color
     };

@@ -362,8 +362,7 @@ impl App {
                 Stroke::new(1.0_f32, tone.line),
                 egui::StrokeKind::Inside,
             );
-            let list_content = list_rect.shrink2(Vec2::new(14., 14.));
-            list_content
+            list_rect.shrink2(Vec2::new(14., 14.))
         } else {
             list_rect
         };
