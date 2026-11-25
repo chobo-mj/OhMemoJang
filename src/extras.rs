@@ -1139,18 +1139,65 @@ impl App {
     pub fn utilities(&mut self, ui: &mut egui::Ui) {
         let top = ui.cursor().min;
         let previous_tab = self.extra.utilities_tab;
-        ui::tabs(
-            ui,
-            &mut self.extra.utilities_tab,
-            &[
-                "업무일지",
-                "표 모아보기",
+        let tone = ui::t(ui);
+        let tabs = [
+            ("업무일지", "완료한 일을 날짜별로 돌아보세요"),
+            ("표 모아보기", "메모에 담긴 표를 한곳에서 살펴보세요"),
+            (
                 "이미지 모아보기",
-                "링크 · 즐겨찾기",
-                "휴지통",
-            ],
-        );
-        ui.add_space(12.);
+                "메모에 담긴 이미지를 한곳에서 살펴보세요",
+            ),
+            ("링크 · 즐겨찾기", "자주 찾는 링크를 모아두세요"),
+            ("휴지통", "삭제한 항목을 확인하고 관리하세요"),
+        ];
+        // Keep this navigation local to utilities: the content below owns its
+        // own scrolling and selection, while the tabs remain easy to scan.
+        egui::Frame::NONE
+            .fill(tone.sidebar)
+            .stroke(egui::Stroke::new(1.0_f32, tone.line))
+            .corner_radius(12)
+            .inner_margin(egui::Margin::symmetric(14, 12))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal_wrapped(|ui| {
+                    for (index, (label, _)) in tabs.iter().enumerate() {
+                        let selected = self.extra.utilities_tab == index;
+                        let text = RichText::new(*label).strong().color(
+                            if selected && ui.visuals().dark_mode {
+                                Color32::from_rgb(255, 164, 140)
+                            } else if selected {
+                                ACCENT
+                            } else {
+                                tone.muted
+                            },
+                        );
+                        let response = ui.add(
+                            egui::Button::new(text)
+                                .fill(if selected {
+                                    tone.accent_soft
+                                } else {
+                                    Color32::TRANSPARENT
+                                })
+                                .stroke(egui::Stroke::NONE)
+                                .corner_radius(7)
+                                .min_size(Vec2::new(0., 30.)),
+                        );
+                        if response
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .clicked()
+                        {
+                            self.extra.utilities_tab = index;
+                        }
+                    }
+                });
+                ui.add_space(5.);
+                ui.label(
+                    RichText::new(tabs[self.extra.utilities_tab.min(tabs.len() - 1)].1)
+                        .size(12.)
+                        .color(tone.muted),
+                );
+            });
+        ui.add_space(16.);
         if self.extra.utilities_tab != previous_tab {
             self.content_selection.clear();
             self.content_purge.clear();

@@ -1025,7 +1025,11 @@ impl App {
             {
                 self.sidebar = true;
             }
-            ui.label(RichText::new(title).size(20.).strong());
+            let tone = ui::t(ui);
+            let (mark, _) = ui.allocate_exact_size(Vec2::new(4., 22.), egui::Sense::hover());
+            ui.painter().rect_filled(mark, 2., ui::ACCENT);
+            ui.add_space(3.);
+            ui.label(RichText::new(title).size(22.).strong().color(tone.ink));
             if self.extra.search_mode {
                 ui.add_space(6.);
                 if ui::pill(
@@ -1072,6 +1076,12 @@ impl App {
                 }
             });
         });
+        ui.add_space(8.);
+        let line = ui.available_rect_before_wrap();
+        ui.painter().line_segment(
+            [line.left_top(), line.right_top()],
+            egui::Stroke::new(1.0_f32, ui::t(ui).line),
+        );
     }
     fn compact_sidebar(&mut self, ui: &mut egui::Ui) {
         let id = egui::Id::new("sidebar_app_icon");

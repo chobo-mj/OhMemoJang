@@ -276,15 +276,25 @@ impl App {
         let tree_rect =
             egui::Rect::from_min_max(full.min, egui::pos2(handle.left(), full.bottom()));
         let memo_rect = egui::Rect::from_min_max(egui::pos2(split, full.top()), full.max);
+        let tone = ui::t(ui);
+        ui.painter()
+            .rect_filled(tree_rect, 10., ui.visuals().faint_bg_color);
+        ui.painter().rect_stroke(
+            tree_rect,
+            10.,
+            Stroke::new(1_f32, tone.line),
+            egui::StrokeKind::Inside,
+        );
+        let tree_content = tree_rect.shrink2(Vec2::new(6., 6.));
         let mut tree = ui.new_child(
             egui::UiBuilder::new()
                 .id_salt("project_tree")
-                .max_rect(tree_rect),
+                .max_rect(tree_content),
         );
-        tree.set_clip_rect(tree_rect.intersect(ui.clip_rect()));
+        tree.set_clip_rect(tree_content.intersect(ui.clip_rect()));
         egui::ScrollArea::vertical()
             .id_salt("catalog_project_items")
-            .max_height(height)
+            .max_height((height - 12.).max(0.))
             .auto_shrink([false, false])
             .show_rows(&mut tree, 30., rows.len(), |ui, range| {
                 self.catalog_drag_scroll(ui);

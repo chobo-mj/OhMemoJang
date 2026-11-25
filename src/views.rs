@@ -95,10 +95,19 @@ impl App {
             let hovered = ui.rect_contains_pointer(rect);
             let selected = preview && self.catalog.selected == Some(i);
             if selected {
-                ui.painter().rect_filled(rect, 6., tone.accent_soft);
-            } else if hovered {
                 ui.painter()
-                    .rect_filled(rect, 6., tone.hover.gamma_multiply(0.6));
+                    .rect_filled(rect.shrink2(Vec2::new(1., 2.)), 8., tone.accent_soft);
+                let marker = Rect::from_min_size(
+                    rect.left_top() + Vec2::new(1., 9.),
+                    Vec2::new(3., (height - 18.).max(8.)),
+                );
+                ui.painter().rect_filled(marker, 2., ACCENT);
+            } else if hovered {
+                ui.painter().rect_filled(
+                    rect.shrink2(Vec2::new(1., 2.)),
+                    8.,
+                    tone.hover.gamma_multiply(0.6),
+                );
             }
             ui.painter().line_segment(
                 [rect.left_bottom() + Vec2::new(40., 0.), rect.right_bottom()],
@@ -2200,8 +2209,10 @@ fn group_header(ui: &mut egui::Ui, label: &str, count: usize) {
     let tone = ui::t(ui);
     ui.horizontal(|ui| {
         ui.add_space(4.);
-        ui.label(RichText::new(label).strong().size(13.5));
-        ui.label(RichText::new(count.to_string()).size(12.).color(tone.faint));
+        let (dot, _) = ui.allocate_exact_size(Vec2::splat(6.), Sense::hover());
+        ui.painter().circle_filled(dot.center(), 3., ACCENT);
+        ui.label(RichText::new(label).strong().size(13.5).color(tone.ink));
+        ui::chip(ui, &count.to_string(), tone.field, tone.muted);
     });
     ui.add_space(2.);
     ui::divider(ui);

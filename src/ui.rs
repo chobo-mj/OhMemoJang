@@ -315,6 +315,7 @@ pub fn segmented(ui: &mut Ui, value: &mut usize, labels: &[&str]) -> bool {
 }
 
 /// Text tabs with an accent underline for the selected one.
+#[allow(dead_code)]
 pub fn tabs(ui: &mut Ui, value: &mut usize, labels: &[&str]) -> bool {
     let c = t(ui);
     let mut changed = false;

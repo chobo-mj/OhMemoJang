@@ -3111,18 +3111,31 @@ pub fn nav_button(
     let tone = crate::ui::t(ui);
     let (rect, r) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 30.), Sense::click());
     r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, text));
-    if selected || r.hovered() {
+    if selected || r.hovered() || accent {
         ui.painter().rect_filled(
-            rect,
-            6.,
-            if selected {
+            rect.shrink2(Vec2::new(0., 1.)),
+            8.,
+            if selected || accent {
                 tone.accent_soft
             } else {
                 tone.hover
             },
         );
     }
-    let color = if selected || accent { ACCENT } else { tone.ink };
+    if selected {
+        let marker = Rect::from_min_size(rect.left_top() + Vec2::new(0., 7.), Vec2::new(3., 16.));
+        ui.painter().rect_filled(marker, 2., ACCENT);
+    }
+    let highlight = if ui.visuals().dark_mode {
+        Color32::from_rgb(255, 164, 140)
+    } else {
+        ACCENT
+    };
+    let color = if selected || accent {
+        highlight
+    } else {
+        tone.ink
+    };
     crate::icons::paint_icon(
         ui.painter(),
         Rect::from_center_size(
@@ -3131,7 +3144,7 @@ pub fn nav_button(
         ),
         icon,
         if selected || accent {
-            ACCENT
+            highlight
         } else {
             tone.muted
         },
@@ -3144,13 +3157,15 @@ pub fn nav_button(
         color,
     );
     if let Some(b) = badge {
-        ui.painter().text(
-            egui::pos2(rect.right() - 10., rect.center().y),
-            egui::Align2::RIGHT_CENTER,
-            b,
-            egui::FontId::proportional(12.),
-            tone.faint,
+        let font = egui::FontId::proportional(11.);
+        let galley = ui.painter().layout_no_wrap(b, font, highlight);
+        let badge = Rect::from_center_size(
+            egui::pos2(rect.right() - 14., rect.center().y),
+            Vec2::new((galley.size().x + 12.).max(22.), 20.),
         );
+        ui.painter().rect_filled(badge, 10., tone.accent_soft);
+        ui.painter()
+            .galley(badge.center() - galley.size() / 2., galley, highlight);
     }
     r.on_hover_cursor(egui::CursorIcon::PointingHand)
 }

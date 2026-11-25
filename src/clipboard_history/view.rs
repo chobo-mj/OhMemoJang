@@ -4,10 +4,12 @@ use super::{ClipboardHistory, Cmd, Confirm, Detail, ItemMeta, Settings};
 use crate::icons::Icon;
 use crate::ui;
 use chrono::{Local, NaiveDate, TimeZone};
-use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Vec2};
+use eframe::egui::{
+    self, Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2,
+};
 
-const ROW_H: f32 = 56.0;
-const ROW_GAP: f32 = 4.0;
+const ROW_H: f32 = 68.0;
+const ROW_GAP: f32 = 7.0;
 const FILTERS: [&str; 5] = ["전체", "텍스트", "링크", "표", "이미지"];
 
 fn kind_label(kind: &str) -> (&'static str, Color32) {
@@ -149,7 +151,6 @@ impl ClipboardHistory {
     }
 
     fn header(&mut self, ui: &mut egui::Ui, now: f64) {
-        let c = ui::t(ui);
         let s = self.settings.clone();
         if !s.enabled {
             ui::card(ui, |ui| {
@@ -172,62 +173,75 @@ impl ClipboardHistory {
             });
             ui.add_space(6.0);
         } else {
-            ui.horizontal(|ui| {
-                let (text, fill, ink) = if s.paused {
-                    (
-                        "● 일시 중지",
-                        Color32::from_rgb(250, 236, 200),
-                        Color32::from_rgb(140, 100, 20),
-                    )
-                } else {
-                    (
-                        "● 수집 중",
-                        Color32::from_rgb(214, 238, 222),
-                        Color32::from_rgb(30, 100, 60),
-                    )
-                };
-                ui::chip(ui, text, fill, ink);
-                if ui
-                    .button(if s.paused {
-                        "다시 시작"
-                    } else {
-                        "일시 중지"
-                    })
-                    .clicked()
-                {
-                    self.set_state(true, !s.paused);
-                }
-                if ui.button("수집 끄기").clicked() {
-                    self.set_state(false, false);
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if crate::icons::toggle_icon(
-                        ui,
-                        Icon::Settings,
-                        "설정·삭제",
-                        self.settings_open,
-                    )
-                    .clicked()
+            ui::card(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let (text, fill, ink) = match (s.paused, ui.visuals().dark_mode) {
+                        (true, true) => (
+                            "● 일시 중지",
+                            Color32::from_rgb(79, 63, 36),
+                            Color32::from_rgb(244, 205, 126),
+                        ),
+                        (true, false) => (
+                            "● 일시 중지",
+                            Color32::from_rgb(250, 236, 200),
+                            Color32::from_rgb(140, 100, 20),
+                        ),
+                        (false, true) => (
+                            "● 수집 중",
+                            Color32::from_rgb(35, 69, 51),
+                            Color32::from_rgb(148, 222, 174),
+                        ),
+                        (false, false) => (
+                            "● 수집 중",
+                            Color32::from_rgb(214, 238, 222),
+                            Color32::from_rgb(30, 100, 60),
+                        ),
+                    };
+                    ui::chip(ui, text, fill, ink);
+                    if ui
+                        .button(if s.paused {
+                            "다시 시작"
+                        } else {
+                            "일시 중지"
+                        })
+                        .clicked()
                     {
-                        self.settings_open = !self.settings_open;
+                        self.set_state(true, !s.paused);
                     }
-                    ui::hint(
-                        ui,
-                        format!("{}건 · {}", self.stats.0, megabytes(self.stats.1)),
-                    );
+                    if ui.button("수집 끄기").clicked() {
+                        self.set_state(false, false);
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if crate::icons::toggle_icon(
+                            ui,
+                            Icon::Settings,
+                            "설정·삭제",
+                            self.settings_open,
+                        )
+                        .clicked()
+                        {
+                            self.settings_open = !self.settings_open;
+                        }
+                        ui::hint(
+                            ui,
+                            format!("{}건 · {}", self.stats.0, megabytes(self.stats.1)),
+                        );
+                    });
                 });
+                ui.add_space(3.0);
+                ui::hint(ui, "민감한 정보를 복사하기 전에는 ‘일시 중지’를 누르세요");
             });
-            ui::hint(ui, "민감한 정보를 복사하기 전에는 ‘일시 중지’를 누르세요");
         }
         if self.settings_open {
+            ui.add_space(6.0);
             self.settings_card(ui);
         }
-        ui.add_space(4.0);
+        ui.add_space(10.0);
         ui.horizontal(|ui| {
             let r = ui.add(
                 egui::TextEdit::singleline(&mut self.search)
-                    .hint_text("검색")
-                    .desired_width(180.0),
+                    .hint_text("기록 검색")
+                    .desired_width(200.0),
             );
             if r.changed() {
                 self.search_edited = now;
@@ -240,7 +254,7 @@ impl ClipboardHistory {
                 }
             }
         });
-        let _ = c;
+        ui.add_space(4.0);
     }
 
     pub(super) fn set_state(&mut self, enabled: bool, paused: bool) {
@@ -556,12 +570,28 @@ fn row(
     } else if resp.hovered() {
         c.hover
     } else {
-        Color32::TRANSPARENT
+        c.bg
     };
-    painter.rect_filled(rect, 8.0, fill);
-    // left column: thumbnail or the kind label
-    let left = Rect::from_min_size(rect.min + Vec2::new(8.0, 6.0), Vec2::splat(ROW_H - 12.0));
-    let (label, tint) = kind_label(&m.kind);
+    painter.rect_filled(rect, 10.0, fill);
+    painter.rect_stroke(
+        rect.shrink(0.5),
+        10.0,
+        Stroke::new(1.0_f32, if selected { ui::ACCENT } else { c.line }),
+        StrokeKind::Inside,
+    );
+    // A compact colored tile gives each content type a recognizable silhouette.
+    let left = Rect::from_min_size(rect.min + Vec2::new(10.0, 11.0), Vec2::splat(46.0));
+    let (label, base_tint) = kind_label(&m.kind);
+    let tint = if ui.visuals().dark_mode {
+        match m.kind.as_str() {
+            "link" => Color32::from_rgb(255, 165, 137),
+            "table" => Color32::from_rgb(123, 207, 161),
+            "image" => Color32::from_rgb(205, 165, 231),
+            _ => c.muted,
+        }
+    } else {
+        base_tint
+    };
     match (m.kind.as_str(), tex) {
         ("image", Some(t)) => {
             let s = t.size_vec2();
@@ -575,7 +605,12 @@ fn row(
             );
         }
         _ => {
-            painter.rect_filled(left, 6.0, tint.gamma_multiply(0.14));
+            let tile_fill = if ui.visuals().dark_mode {
+                Color32::from_rgba_unmultiplied(tint.r(), tint.g(), tint.b(), 35)
+            } else {
+                Color32::from_rgba_unmultiplied(tint.r(), tint.g(), tint.b(), 24)
+            };
+            painter.rect_filled(left, 9.0, tile_fill);
             painter.text(
                 left.center(),
                 Align2::CENTER_CENTER,
@@ -600,7 +635,7 @@ fn row(
     );
     let tp = painter.with_clip_rect(clip);
     tp.text(
-        Pos2::new(text_left, rect.top() + 9.0),
+        Pos2::new(text_left, rect.top() + 15.0),
         Align2::LEFT_TOP,
         &m.summary,
         FontId::proportional(14.0),
@@ -615,7 +650,7 @@ fn row(
         sub.push_str(" · 일부 형식만 저장됨");
     }
     tp.text(
-        Pos2::new(text_left, rect.top() + 31.0),
+        Pos2::new(text_left, rect.top() + 38.0),
         Align2::LEFT_TOP,
         sub,
         FontId::proportional(11.5),

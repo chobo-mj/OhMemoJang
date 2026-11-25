@@ -22,6 +22,81 @@ const BOARD_TAB: usize = 3;
 
 type FindHit = (usize, Option<(usize, Range<usize>)>);
 
+/// The catalog's navigation sits inside the workspace, so it has its own
+/// compact treatment rather than changing the shared tabs used by other windows.
+fn catalog_tabs(ui: &mut egui::Ui, selected: &mut usize) {
+    let tone = ui::t(ui);
+    let entries = [
+        ("프로젝트 보기", crate::icons::Icon::Grid),
+        ("폴더 보기", crate::icons::Icon::Folder),
+        ("전체 메모 보기", crate::icons::Icon::Notes),
+        ("관계 보드", crate::icons::Icon::Book),
+    ];
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let galleys: Vec<_> = entries
+        .iter()
+        .map(|(label, _)| {
+            ui.painter()
+                .layout_no_wrap((*label).into(), font.clone(), tone.ink)
+        })
+        .collect();
+    let widths: Vec<_> = galleys.iter().map(|g| g.size().x + 42.).collect();
+    let total = widths.iter().sum::<f32>() + 12.;
+    let (bar, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 46.), Sense::hover());
+    let track = egui::Rect::from_min_size(bar.min, Vec2::new(total.min(bar.width()), 42.));
+    ui.painter().rect_filled(track, 10., tone.field);
+    let base = ui.next_auto_id();
+    let mut x = track.left() + 3.;
+    for (i, ((label, icon), _)) in entries.iter().zip(galleys).enumerate() {
+        let width = widths[i];
+        let rect =
+            egui::Rect::from_min_size(egui::pos2(x, track.top() + 3.), Vec2::new(width, 36.));
+        let response = ui
+            .interact(rect, base.with(i), Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        let active = *selected == i;
+        if active {
+            let fill = if ui.visuals().dark_mode {
+                tone.pressed
+            } else {
+                Color32::WHITE
+            };
+            ui.painter().rect_filled(
+                rect.translate(Vec2::new(0., 1.)),
+                8.,
+                Color32::from_black_alpha(12),
+            );
+            ui.painter().rect_filled(rect, 8., fill);
+        } else if response.hovered() {
+            ui.painter().rect_filled(rect, 8., tone.hover);
+        }
+        let color = if active && ui.visuals().dark_mode {
+            Color32::from_rgb(255, 164, 140)
+        } else if active {
+            ACCENT
+        } else {
+            tone.muted
+        };
+        let galley = ui
+            .painter()
+            .layout_no_wrap((*label).into(), font.clone(), color);
+        let icon_rect = egui::Rect::from_center_size(
+            egui::pos2(rect.left() + 17., rect.center().y),
+            Vec2::splat(15.),
+        );
+        crate::icons::paint_icon(ui.painter(), icon_rect, *icon, color);
+        ui.painter().galley(
+            egui::pos2(rect.left() + 30., rect.center().y - galley.size().y / 2.),
+            galley,
+            color,
+        );
+        if response.clicked() {
+            *selected = i;
+        }
+        x += width + 2.;
+    }
+}
+
 fn catalog_list_focus() -> egui::Id {
     egui::Id::new("catalog_memo_list")
 }
@@ -456,12 +531,8 @@ impl App {
         self.catalog.drag_targets.clear();
         self.catalog.batch_targets.clear();
         let previous_tab = self.catalog.tab;
-        ui::tabs(
-            ui,
-            &mut self.catalog.tab,
-            &["프로젝트 보기", "폴더 보기", "전체 메모 보기", "관계 보드"],
-        );
-        ui.add_space(12.);
+        catalog_tabs(ui, &mut self.catalog.tab);
+        ui.add_space(10.);
         if self.catalog.tab != previous_tab {
             self.catalog.selection.clear();
             self.catalog.dragging = None;
@@ -928,9 +999,11 @@ impl App {
                 let table_width = self.catalog.table_width.max(TABLE_WIDTH);
                 ui.set_min_width(table_width);
                 let (rect, _) = ui.allocate_exact_size(Vec2::new(table_width, 34.), Sense::hover());
+                let tone = ui::t(ui);
+                ui.painter().rect_filled(rect, 6., tone.field);
                 ui.painter().line_segment(
                     [rect.left_bottom(), rect.right_bottom()],
-                    Stroke::new(1_f32, ui::t(ui).line),
+                    Stroke::new(1_f32, tone.line),
                 );
                 // Right-click a column title: choose the columns to show. Made
                 // before the titles and resize handles, which stay on top of it.
@@ -964,8 +1037,10 @@ impl App {
                 {
                     let mut cell = table_cell(ui, cells[col], ("header", col));
                     cell.add(
-                        egui::Label::new(RichText::new(*title).size(12.).color(MUTED).strong())
-                            .truncate(),
+                        egui::Label::new(
+                            RichText::new(*title).size(12.).color(tone.muted).strong(),
+                        )
+                        .truncate(),
                     );
                 }
                 // A grip on the left edge of every shown column but the first.
@@ -1188,26 +1263,28 @@ impl App {
                 },
             );
             let mut trash_clicked = trash && response.clicked();
+            let tone = ui::t(ui);
             let fill = if selected {
-                ui.visuals().selection.bg_fill
+                tone.accent_soft
             } else if ui.rect_contains_pointer(rect) {
-                ui::t(ui).hover.gamma_multiply(0.6)
+                tone.hover
+            } else if at % 2 == 1 {
+                ui.visuals().faint_bg_color
             } else {
                 Color32::TRANSPARENT
             };
-            let _ = at;
-            ui.painter().rect_filled(rect, 6., fill);
+            ui.painter()
+                .rect_filled(rect.shrink2(Vec2::new(0., 1.)), 6., fill);
+            if selected {
+                let marker = egui::Rect::from_min_size(
+                    egui::pos2(rect.left() + 1., rect.top() + 7.),
+                    Vec2::new(3., (rect.height() - 14.).max(8.)),
+                );
+                ui.painter().rect_filled(marker, 2., ACCENT);
+            }
             ui.painter().line_segment(
                 [rect.left_bottom(), rect.right_bottom()],
-                Stroke::new(
-                    1_f32,
-                    ui.visuals()
-                        .widgets
-                        .noninteractive
-                        .bg_stroke
-                        .color
-                        .gamma_multiply(0.18),
-                ),
+                Stroke::new(1_f32, tone.line.gamma_multiply(0.45)),
             );
             if !trash
                 && self.catalog.selection_ui

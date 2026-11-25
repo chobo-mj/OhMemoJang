@@ -493,6 +493,9 @@ impl App {
         let inner = rect.shrink(8.);
         let left_w = wiki_left_col_width(self.extra.wiki_left_width, inner.width());
         let left = egui::Rect::from_min_size(inner.min, Vec2::new(left_w, inner.height()));
+        // Give the navigation column its own quiet surface without changing
+        // the rectangles used by the folder tree or its drop targets.
+        ui.painter().rect_filled(left, 8., tone.sidebar);
         let tree_h = (left.height() * 0.58).round();
         let tree_rect = egui::Rect::from_min_size(left.min, Vec2::new(left_w, tree_h));
         let unfiled_rect =
@@ -689,21 +692,21 @@ impl App {
                     .unwrap_or(ACCENT);
                 let text = egui::RichText::new(&self.extra.wiki_tabs[t])
                     .size(13.)
-                    .color(if on { egui::Color32::WHITE } else { tone.ink });
+                    .strong()
+                    .color(if on { tone.ink } else { tone.muted });
                 let r = ui
                     .add(
                         egui::Button::new(text)
                             .fill(if on {
-                                base
+                                crate::ui::lerp_color(tone.bg, base, 0.20)
                             } else {
-                                crate::ui::lerp_color(tone.bg, base, 0.22)
+                                tone.sidebar
                             })
-                            .corner_radius(egui::CornerRadius {
-                                nw: 8,
-                                ne: 8,
-                                sw: 0,
-                                se: 0,
-                            })
+                            .stroke(egui::Stroke::new(
+                                1.0_f32,
+                                if on { base } else { tone.line },
+                            ))
+                            .corner_radius(8.)
                             .min_size(Vec2::new(72., 30.)),
                     )
                     .on_hover_text("누르면 이 위키의 트리 보기 · 더블클릭: 이름 바꾸기");
@@ -764,7 +767,9 @@ impl App {
             if ui
                 .add(
                     egui::Button::new(egui::RichText::new("+").size(14.))
-                        .fill(tone.accent_soft)
+                        .fill(tone.sidebar)
+                        .stroke(egui::Stroke::new(1.0_f32, tone.line))
+                        .corner_radius(8.)
                         .min_size(Vec2::new(32., 30.)),
                 )
                 .on_hover_text("새 위키 탭")
@@ -1041,7 +1046,7 @@ impl App {
         if focused {
             ui.painter().rect_stroke(
                 body.expand(1.),
-                19.,
+                12.,
                 egui::Stroke::new(1.5_f32, tone.accent_soft),
                 egui::StrokeKind::Outside,
             );
@@ -1073,7 +1078,7 @@ impl App {
                 }
             }
             None => {
-                ui.painter().rect_filled(body, 18., tone.sidebar);
+                ui.painter().rect_filled(body, 12., tone.sidebar);
                 self.in_rect(ui, body, ("wiki_empty_pane", k), |a, ui| {
                     ui.add_space(body.height() * 0.36);
                     ui.vertical_centered(|ui| {
