@@ -1105,7 +1105,6 @@ impl App {
         }
     }
     pub fn ppt_settings(&mut self, ui: &mut egui::Ui) {
-        let tone = crate::ui::t(ui);
         use crate::icons::Icon;
         let tabs = [
             ("일반", Icon::Settings),
@@ -1117,47 +1116,13 @@ impl App {
             ("백업 / 복원", Icon::Folder),
             ("정보", Icon::Help),
         ];
-        if crate::ui::paper(ui) {
-            let previous = self.desktop.settings_tab;
-            crate::ui::paper_tabs(ui, &mut self.desktop.settings_tab, &tabs);
-            if previous != self.desktop.settings_tab {
-                self.desktop.last_action.clear();
-            }
-            ui.add_space(10.);
-            self.settings_content(ui, &tabs);
-            return;
+        let previous = self.desktop.settings_tab;
+        crate::ui::workspace_tabs(ui, &mut self.desktop.settings_tab, &tabs);
+        if previous != self.desktop.settings_tab {
+            self.desktop.last_action.clear();
         }
-        ui.horizontal_top(|ui| {
-            ui.vertical(|ui| {
-                ui.set_width(150.);
-                ui.label(RichText::new("설정").size(18.).strong());
-                ui.add_space(12.);
-                for (i, &(text, icon)) in tabs.iter().enumerate() {
-                    if crate::studio::nav_button(
-                        ui,
-                        text,
-                        self.desktop.settings_tab == i,
-                        icon,
-                        None,
-                        false,
-                    )
-                    .clicked()
-                    {
-                        self.desktop.settings_tab = i;
-                        self.desktop.last_action.clear();
-                    }
-                }
-            });
-            ui.add_space(14.);
-            let (line, _) =
-                ui.allocate_exact_size(Vec2::new(1., ui.available_height()), egui::Sense::hover());
-            ui.painter().line_segment(
-                [line.center_top(), line.center_bottom()],
-                egui::Stroke::new(1.0_f32, tone.line),
-            );
-            ui.add_space(18.);
-            self.settings_content(ui, &tabs);
-        });
+        ui.add_space(10.);
+        self.settings_content(ui, &tabs);
     }
     fn settings_content(&mut self, ui: &mut egui::Ui, tabs: &[(&str, crate::icons::Icon)]) {
         egui::ScrollArea::vertical()

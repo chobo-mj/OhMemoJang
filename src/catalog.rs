@@ -22,182 +22,6 @@ const BOARD_TAB: usize = 3;
 
 type FindHit = (usize, Option<(usize, Range<usize>)>);
 
-/// The catalog's navigation sits inside the workspace, so it has its own
-/// compact treatment rather than changing the shared tabs used by other windows.
-fn catalog_tabs(ui: &mut egui::Ui, selected: &mut usize) {
-    let tone = ui::t(ui);
-    let entries = [
-        (
-            "프로젝트 보기",
-            "프로젝트별로 모아보기",
-            crate::icons::Icon::Grid,
-        ),
-        ("폴더 보기", "폴더로 정리하기", crate::icons::Icon::Folder),
-        (
-            "전체 메모 보기",
-            "모든 메모 살펴보기",
-            crate::icons::Icon::Notes,
-        ),
-        ("관계 보드", "연결과 흐름 보기", crate::icons::Icon::Book),
-    ];
-    let width = ui.available_width().max(1.);
-    // Keep descriptions readable as the window becomes narrow.
-    let columns = if width >= 800. {
-        4
-    } else if width >= 380. {
-        2
-    } else {
-        1
-    };
-    let gap = 8.;
-    let card_width = ((width - gap * (columns - 1) as f32) / columns as f32).max(1.);
-    let base = ui.next_auto_id();
-    let height = 62.;
-    let rows = entries.len().div_ceil(columns);
-    let (area, _) = ui.allocate_exact_size(
-        Vec2::new(width, rows as f32 * height + (rows - 1) as f32 * gap),
-        Sense::hover(),
-    );
-    for (i, (label, description, icon)) in entries.iter().enumerate() {
-        let col = i % columns;
-        let row = i / columns;
-        let rect = egui::Rect::from_min_size(
-            area.min + Vec2::new(col as f32 * (card_width + gap), row as f32 * (height + gap)),
-            Vec2::new(card_width, height),
-        );
-        let response = ui
-            .interact(rect, base.with(i), Sense::click())
-            .on_hover_cursor(egui::CursorIcon::PointingHand);
-        response.widget_info(|| {
-            egui::WidgetInfo::selected(
-                egui::WidgetType::SelectableLabel,
-                true,
-                *selected == i,
-                *label,
-            )
-        });
-        let active = *selected == i;
-        let fill = if active {
-            tone.accent_soft
-        } else if response.hovered() {
-            tone.hover
-        } else {
-            tone.sidebar
-        };
-        ui.painter().rect_filled(rect, 12., fill);
-        ui.painter().rect_stroke(
-            rect.shrink(0.5),
-            12.,
-            Stroke::new(1.0_f32, if active { ui::accent(ui) } else { tone.line }),
-            egui::StrokeKind::Inside,
-        );
-        let icon_tile =
-            egui::Rect::from_center_size(rect.left_center() + Vec2::new(27., 0.), Vec2::splat(34.));
-        ui.painter().rect_filled(
-            icon_tile,
-            10.,
-            if active { ui::accent(ui) } else { tone.field },
-        );
-        crate::icons::paint_icon(
-            ui.painter(),
-            icon_tile.shrink(9.),
-            *icon,
-            if active { Color32::WHITE } else { tone.muted },
-        );
-        let clip = ui.painter().with_clip_rect(rect.shrink2(Vec2::new(8., 0.)));
-        clip.text(
-            rect.left_top() + Vec2::new(52., 14.),
-            egui::Align2::LEFT_TOP,
-            *label,
-            egui::TextStyle::Button.resolve(ui.style()),
-            tone.ink,
-        );
-        clip.text(
-            rect.left_top() + Vec2::new(52., 36.),
-            egui::Align2::LEFT_TOP,
-            *description,
-            egui::FontId::proportional(11.),
-            tone.muted,
-        );
-        if response.clicked() {
-            *selected = i;
-        }
-    }
-}
-
-fn catalog_tabs_light2(ui: &mut egui::Ui, selected: &mut usize) {
-    let tone = ui::t(ui);
-    let entries = [
-        ("프로젝트 보기", crate::icons::Icon::Grid),
-        ("폴더 보기", crate::icons::Icon::Folder),
-        ("전체 메모 보기", crate::icons::Icon::Notes),
-        ("관계 보드", crate::icons::Icon::Book),
-    ];
-    let font = egui::TextStyle::Button.resolve(ui.style());
-    let galleys: Vec<_> = entries
-        .iter()
-        .map(|(label, _)| {
-            ui.painter()
-                .layout_no_wrap((*label).into(), font.clone(), tone.ink)
-        })
-        .collect();
-    let widths: Vec<_> = galleys.iter().map(|g| g.size().x + 42.).collect();
-    let total = widths.iter().sum::<f32>() + 12.;
-    let (bar, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 46.), Sense::hover());
-    let track = egui::Rect::from_min_size(bar.min, Vec2::new(total.min(bar.width()), 42.));
-    ui.painter().rect_filled(track, 10., tone.field);
-    let base = ui.next_auto_id();
-    let mut x = track.left() + 3.;
-    for (i, ((label, icon), _)) in entries.iter().zip(galleys).enumerate() {
-        let width = widths[i];
-        let rect =
-            egui::Rect::from_min_size(egui::pos2(x, track.top() + 3.), Vec2::new(width, 36.));
-        let response = ui
-            .interact(rect, base.with(i), Sense::click())
-            .on_hover_cursor(egui::CursorIcon::PointingHand);
-        let active = *selected == i;
-        if active {
-            let fill = if ui.visuals().dark_mode {
-                tone.pressed
-            } else {
-                Color32::WHITE
-            };
-            ui.painter().rect_filled(
-                rect.translate(Vec2::new(0., 1.)),
-                8.,
-                Color32::from_black_alpha(12),
-            );
-            ui.painter().rect_filled(rect, 8., fill);
-        } else if response.hovered() {
-            ui.painter().rect_filled(rect, 8., tone.hover);
-        }
-        let color = if active && ui.visuals().dark_mode {
-            Color32::from_rgb(255, 164, 140)
-        } else if active {
-            ui::accent(ui)
-        } else {
-            tone.muted
-        };
-        let galley = ui
-            .painter()
-            .layout_no_wrap((*label).into(), font.clone(), color);
-        let icon_rect = egui::Rect::from_center_size(
-            egui::pos2(rect.left() + 17., rect.center().y),
-            Vec2::splat(15.),
-        );
-        crate::icons::paint_icon(ui.painter(), icon_rect, *icon, color);
-        ui.painter().galley(
-            egui::pos2(rect.left() + 30., rect.center().y - galley.size().y / 2.),
-            galley,
-            color,
-        );
-        if response.clicked() {
-            *selected = i;
-        }
-        x += width + 2.;
-    }
-}
-
 fn catalog_list_focus() -> egui::Id {
     egui::Id::new("catalog_memo_list")
 }
@@ -632,30 +456,18 @@ impl App {
         self.catalog.drag_targets.clear();
         self.catalog.batch_targets.clear();
         let previous_tab = self.catalog.tab;
-        match ui::variant(ui) {
-            0 => {
-                use crate::icons::Icon;
-                ui::paper_tabs(
-                    ui,
-                    &mut self.catalog.tab,
-                    &[
-                        ("프로젝트 보기", Icon::Grid),
-                        ("폴더 보기", Icon::Folder),
-                        ("전체 메모 보기", Icon::Notes),
-                        ("관계 보드", Icon::Arrange),
-                    ],
-                );
-                ui.add_space(12.);
-            }
-            1 => {
-                catalog_tabs_light2(ui, &mut self.catalog.tab);
-                ui.add_space(10.);
-            }
-            _ => {
-                catalog_tabs(ui, &mut self.catalog.tab);
-                ui.add_space(10.);
-            }
-        }
+        use crate::icons::Icon;
+        ui::workspace_tabs(
+            ui,
+            &mut self.catalog.tab,
+            &[
+                ("프로젝트 보기", Icon::Grid),
+                ("폴더 보기", Icon::Folder),
+                ("전체 메모 보기", Icon::Notes),
+                ("관계 보드", Icon::Arrange),
+            ],
+        );
+        ui.add_space(12.);
         if self.catalog.tab != previous_tab {
             self.catalog.selection.clear();
             self.catalog.dragging = None;
@@ -2074,31 +1886,15 @@ impl App {
                 } else {
                     tone.sidebar
                 })
-                .stroke(if ui::variant(ui) == 2 || ui::paper(ui) {
-                    Stroke::new(1.0_f32, tone.line)
-                } else {
-                    Stroke::NONE
-                })
+                .stroke(Stroke::new(1_f32, tone.line))
                 .corner_radius(if ui::variant(ui) == 2 { 16. } else { 12. })
                 .inner_margin(18.)
                 .show(ui, |ui| {
                     ui.set_min_height(height - 36.);
                     ui.set_min_width(ui.available_width());
-                    if ui::paper(ui) {
-                        ui::section_header(ui, icons::Icon::Notes, "미리보기", None);
-                        ui::divider(ui);
-                        ui.add_space((height * 0.24 - 26.).max(0.));
-                    } else if ui::variant(ui) == 2 {
-                        ui.label(
-                            RichText::new("미리보기")
-                                .size(12.)
-                                .strong()
-                                .color(tone.muted),
-                        );
-                        ui.add_space((height * 0.25 - 18.).max(0.));
-                    } else {
-                        ui.add_space(height * 0.28);
-                    }
+                    ui::section_header(ui, icons::Icon::Notes, "미리보기", None);
+                    ui::divider(ui);
+                    ui.add_space((height * 0.24 - 26.).max(0.));
                     ui::empty_state(
                         ui,
                         crate::icons::Icon::Notes,

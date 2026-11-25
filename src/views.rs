@@ -15,24 +15,13 @@ fn dragged_sticker_bar(cell: Rect, pointer: egui::Pos2, height: f32) -> Rect {
 }
 impl App {
     pub fn filters(&mut self, ui: &mut egui::Ui) {
-        if ui::paper(ui) {
-            ui.horizontal(|ui| {
-                self.project_filter_combo(ui);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    self.new_schedule_button(ui)
-                });
+        ui.horizontal(|ui| {
+            self.project_filter_combo(ui);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                self.new_schedule_button(ui)
             });
-            ui.horizontal_wrapped(|ui| self.agenda_filter_toggles(ui));
-        } else {
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.;
-                self.project_filter_combo(ui);
-                self.agenda_filter_toggles(ui);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    self.new_schedule_button(ui)
-                });
-            });
-        }
+        });
+        ui.horizontal_wrapped(|ui| self.agenda_filter_toggles(ui));
     }
     fn project_filter_combo(&mut self, ui: &mut egui::Ui) {
         let combo = egui::ComboBox::from_id_salt(ui.id().with("projects"))
@@ -370,34 +359,15 @@ impl App {
             egui::pos2(list_rect.right() + 16., rect.top()),
             Vec2::new(preview_width, height),
         );
-        let list_content = if ui::paper(ui) {
-            let tone = ui::t(ui);
-            ui.painter().rect(
-                list_rect,
-                6.,
-                Color32::WHITE,
-                Stroke::new(1_f32, tone.line),
-                egui::StrokeKind::Inside,
-            );
-            list_rect.shrink2(Vec2::new(10., 10.))
-        } else if ui::variant(ui) == 2 {
-            let tone = ui::t(ui);
-            let surface = if ui.visuals().dark_mode {
-                tone.sidebar
-            } else {
-                Color32::WHITE
-            };
-            ui.painter().rect_filled(list_rect, 14., surface);
-            ui.painter().rect_stroke(
-                list_rect,
-                14.,
-                Stroke::new(1.0_f32, tone.line),
-                egui::StrokeKind::Inside,
-            );
-            list_rect.shrink2(Vec2::new(14., 14.))
-        } else {
-            list_rect
-        };
+        let tone = ui::t(ui);
+        ui.painter().rect(
+            list_rect,
+            6.,
+            ui.visuals().faint_bg_color,
+            Stroke::new(1_f32, tone.line),
+            egui::StrokeKind::Inside,
+        );
+        let list_content = list_rect.shrink2(Vec2::new(10., 10.));
         let mut list = ui.new_child(
             egui::UiBuilder::new()
                 .id_salt("agenda_list_pane")
@@ -520,23 +490,13 @@ impl App {
                 ui.add_space(18.);
             }
         }
-        if rows.is_empty() && ui::paper(ui) {
+        if rows.is_empty() {
             ui::empty_state(
                 ui,
                 icons::Icon::Notes,
                 "표시할 메모가 없습니다",
                 "필터를 바꾸거나 새 메모를 추가해 보세요",
             );
-        } else if rows.is_empty() {
-            ui.add_space(40.);
-            ui.vertical_centered(|ui| {
-                ui.label(
-                    RichText::new("표시할 메모가 없습니다")
-                        .size(15.)
-                        .color(ui::t(ui).muted),
-                );
-                ui::hint(ui, "필터를 바꾸거나 새 메모를 추가해 보세요");
-            });
         }
         type Row = (usize, Option<NaiveDate>);
         let mut groups: Vec<(Option<NaiveDate>, Vec<Row>)> = vec![];
@@ -587,16 +547,18 @@ impl App {
         let today = Local::now().date_naive();
         let (tone, sun, sat, today_mark) = self.calendar_tone(ui);
         let tiles = ui::variant(ui) == 2;
+        // The detached calendar keeps its own header spacing.
+        let spaced_header = tiles && ui.ctx().viewport_id() != crate::main_viewport();
         ui.horizontal(|ui| {
             ui.set_min_height(32.);
-            if tiles {
+            if spaced_header {
                 let (month_mark, _) = ui.allocate_exact_size(Vec2::new(5., 25.), Sense::hover());
                 ui.painter().rect_filled(month_mark, 3., today_mark);
                 ui.add_space(4.);
             }
             ui.label(
                 RichText::new(self.month.format("%Y년 %-m월").to_string())
-                    .size(if tiles { 22. } else { 18. })
+                    .size(if spaced_header { 22. } else { 18. })
                     .strong()
                     .color(tone.ink),
             );
@@ -657,11 +619,11 @@ impl App {
                     .on_hover_text("연결된 엑셀 파일의 근무자 보기 · 준비 중");
             });
         });
-        ui.add_space(if tiles { 14. } else { 10. });
+        ui.add_space(if spaced_header { 14. } else { 10. });
         let width = ui.available_width().max(280.);
         let col = width / 7.;
         let (header, _) = ui.allocate_exact_size(
-            Vec2::new(width, if tiles { 30. } else { 26. }),
+            Vec2::new(width, if spaced_header { 30. } else { 26. }),
             Sense::hover(),
         );
         if tiles {
@@ -675,7 +637,7 @@ impl App {
         {
             ui.painter().text(
                 header.min
-                    + if tiles {
+                    + if spaced_header {
                         Vec2::new(i as f32 * col + 14., 15.)
                     } else {
                         Vec2::new(i as f32 * col + 10., 13.)
@@ -696,7 +658,7 @@ impl App {
                 },
             );
         }
-        if tiles {
+        if spaced_header {
             ui.add_space(4.);
         }
         let weeks = self.prefs.cal_weeks;
@@ -863,7 +825,7 @@ impl App {
             }
             .gamma_multiply(fade);
             let number = rect.min
-                + if tiles {
+                + if spaced_header {
                     Vec2::new(19., 20.)
                 } else {
                     Vec2::new(17., 18.)
@@ -1093,8 +1055,9 @@ impl App {
         let drop_area = ui.available_rect_before_wrap().intersect(ui.clip_rect());
         ui.horizontal(|ui| {
             let tone = ui::t(ui);
-            let tiles = ui::variant(ui) == 2;
-            if tiles {
+            let spaced_header =
+                ui::variant(ui) == 2 && ui.ctx().viewport_id() != crate::main_viewport();
+            if spaced_header {
                 let (mark, _) = ui.allocate_exact_size(Vec2::new(5., 23.), Sense::hover());
                 ui.painter().rect_filled(mark, 3., ui::accent(ui));
                 ui.add_space(4.);
@@ -1106,7 +1069,7 @@ impl App {
                     ui::weekday(self.day)
                 ))
                 .strong()
-                .size(if tiles { 22. } else { 20. })
+                .size(if spaced_header { 22. } else { 20. })
                 .color(tone.ink),
             );
             let new_memo = self.stand_allows(crate::calendar_dock::StandFeature::NewMemo);
@@ -2356,30 +2319,20 @@ fn group_header(ui: &mut egui::Ui, label: &str, count: usize) {
     let tone = ui::t(ui);
     ui.horizontal(|ui| {
         ui.add_space(4.);
-        if ui::paper(ui) {
-            egui::Frame::NONE
-                .fill(tone.accent_soft)
-                .corner_radius(3.)
-                .inner_margin(egui::Margin::symmetric(7, 3))
-                .show(ui, |ui| {
-                    ui.label(RichText::new(label).strong().size(13.5).color(tone.ink));
-                });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(
-                    RichText::new(format!("{count}건"))
-                        .size(12.)
-                        .color(tone.muted),
-                );
+        egui::Frame::NONE
+            .fill(tone.accent_soft)
+            .corner_radius(3.)
+            .inner_margin(egui::Margin::symmetric(7, 3))
+            .show(ui, |ui| {
+                ui.label(RichText::new(label).strong().size(13.5).color(tone.ink));
             });
-        } else if ui::variant(ui) == 0 {
-            ui.label(RichText::new(label).strong().size(13.5));
-            ui.label(RichText::new(count.to_string()).size(12.).color(tone.faint));
-        } else {
-            let (dot, _) = ui.allocate_exact_size(Vec2::splat(6.), Sense::hover());
-            ui.painter().circle_filled(dot.center(), 3., ui::accent(ui));
-            ui.label(RichText::new(label).strong().size(13.5).color(tone.ink));
-            ui::chip(ui, &count.to_string(), tone.field, tone.muted);
-        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                RichText::new(format!("{count}건"))
+                    .size(12.)
+                    .color(tone.muted),
+            );
+        });
     });
     ui.add_space(2.);
     ui::divider(ui);

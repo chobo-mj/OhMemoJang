@@ -1035,13 +1035,6 @@ impl App {
     }
     /// Page title on the left and global window actions on the right.
     fn page_bar(&mut self, ui: &mut egui::Ui) {
-        if !self.dark && self.light_theme == 2 {
-            self.page_bar_light3(ui);
-        } else {
-            self.page_bar_light12(ui);
-        }
-    }
-    fn page_bar_light12(&mut self, ui: &mut egui::Ui) {
         let title = if self.settings {
             "설정"
         } else if self.extra.search_mode && matches!(self.page, 0 | 2 | 3) {
@@ -1061,107 +1054,18 @@ impl App {
                 self.sidebar = true;
             }
             let tone = ui::t(ui);
-            if ui::paper(ui) {
-                let highlight = ui.painter().add(egui::Shape::Noop);
-                let title_rect = ui
-                    .label(RichText::new(title).size(25.).strong().color(tone.ink))
-                    .rect;
-                let underline = egui::Rect::from_min_max(
-                    title_rect.left_bottom() - Vec2::new(1., 9.),
-                    title_rect.right_bottom() + Vec2::new(4., -1.),
-                );
-                ui.painter().set(
-                    highlight,
-                    egui::Shape::rect_filled(underline, 1., ui::MEMO_YELLOW),
-                );
-            } else {
-                let (mark, _) = ui.allocate_exact_size(Vec2::new(4., 22.), egui::Sense::hover());
-                ui.painter().rect_filled(mark, 2., ui::accent(ui));
-                ui.add_space(3.);
-                ui.label(RichText::new(title).size(22.).strong().color(tone.ink));
-            }
-            if self.extra.search_mode {
-                ui.add_space(6.);
-                if ui::pill(
-                    ui,
-                    true,
-                    &format!("‘{}’ 검색 해제", shorten(&self.search, 12)),
-                )
-                .clicked()
-                {
-                    self.search.clear();
-                    self.extra.search_mode = false;
-                }
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if self.settings {
-                    if icons::icon_button(ui, icons::Icon::Close, "설정 닫기").clicked() {
-                        self.settings = false;
-                    }
-                    return;
-                }
-                let detach = icons::icon_button(ui, icons::Icon::Detach, "캘린더 분리창");
-                tutorial::mark(ui.ctx(), tutorial::Spot::Detach, detach.rect);
-                if detach.clicked() {
-                    self.show_calendar();
-                }
-                if icons::icon_button(
-                    ui,
-                    icons::Icon::StickyPlus,
-                    &format!("새 스티커 · {}", self.shortcut_label(2)),
-                )
-                .clicked()
-                {
-                    self.new_sticker();
-                }
-                if self.page == 0 {
-                    let label = if self.split {
-                        "캘린더 닫기 · 자세히 보기"
-                    } else {
-                        "캘린더 함께 보기"
-                    };
-                    if icons::toggle_icon(ui, icons::Icon::Calendar, label, self.split).clicked() {
-                        self.split = !self.split;
-                    }
-                }
-            });
-        });
-        ui.add_space(8.);
-        let line = ui.available_rect_before_wrap();
-        ui.painter().line_segment(
-            [line.left_top(), line.right_top()],
-            egui::Stroke::new(1.0_f32, ui::t(ui).line),
-        );
-    }
-    fn page_bar_light3(&mut self, ui: &mut egui::Ui) {
-        let title = if self.settings {
-            "설정"
-        } else if self.extra.search_mode && matches!(self.page, 0 | 2 | 3) {
-            "검색 결과"
-        } else {
-            PAGES
-                .iter()
-                .find(|(p, _, _)| *p == self.page)
-                .map(|(_, name, _)| *name)
-                .unwrap_or("OhMemoJang")
-        };
-        ui.horizontal(|ui| {
-            ui.set_min_height(48.);
-            if !self.sidebar
-                && icons::icon_button(ui, icons::Icon::Sidebar, "사이드바 열기").clicked()
-            {
-                self.sidebar = true;
-            }
-            let tone = ui::t(ui);
-            ui.vertical(|ui| {
-                ui.label(
-                    RichText::new("OH MEMO  /  WORKSPACE")
-                        .size(10.)
-                        .strong()
-                        .color(tone.muted),
-                );
-                ui.label(RichText::new(title).size(26.).strong().color(tone.ink));
-            });
+            let highlight = ui.painter().add(egui::Shape::Noop);
+            let title_rect = ui
+                .label(RichText::new(title).size(25.).strong().color(tone.ink))
+                .rect;
+            let underline = egui::Rect::from_min_max(
+                title_rect.left_bottom() - Vec2::new(1., 9.),
+                title_rect.right_bottom() + Vec2::new(4., -1.),
+            );
+            ui.painter().set(
+                highlight,
+                egui::Shape::rect_filled(underline, 1., ui::workspace_highlight(ui)),
+            );
             if self.extra.search_mode {
                 ui.add_space(6.);
                 if ui::pill(
@@ -1347,11 +1251,7 @@ impl App {
         }
         // The original brand banner is present in every light theme.
         ui::banner(ui, ui.available_width().max(16.));
-        ui.add_space(if !self.dark && self.light_theme == 2 {
-            14.
-        } else {
-            10.
-        });
+        ui.add_space(10.);
         ui.horizontal(|ui| {
             let width = ui.available_width() - 28. - ui.spacing().item_spacing.x;
             if std::mem::take(&mut self.focus_search) {
@@ -1392,13 +1292,7 @@ impl App {
                 self.sidebar = false;
             }
         });
-        if !self.dark && self.light_theme == 2 {
-            ui.add_space(12.);
-            ui::caption(ui, "WORKSPACE");
-            ui.add_space(5.);
-        } else {
-            ui.add_space(6.);
-        }
+        ui.add_space(6.);
         let today = Local::now().date_naive();
         let mut cache = std::mem::take(&mut self.lists);
         let key = lists::key((today, self.data.notes.len()));
@@ -1771,6 +1665,92 @@ fn main() -> eframe::Result {
         quit::QUIT.terminate();
     }
     result
+}
+
+#[cfg(test)]
+mod workspace_layout_tests {
+    use super::*;
+
+    #[test]
+    fn themes_keep_workspace_controls_in_the_same_places() {
+        let pages: &[(usize, bool, &[&str])] = &[
+            (2, false, &["+ 새 일정", "정기 일정 포함", "미리보기"]),
+            (3, false, &["+ 새 일정", "생성일 기준", "미리보기"]),
+            (
+                4,
+                false,
+                &["프로젝트 보기", "관계 보드", "프로젝트 구조", "미리보기"],
+            ),
+            (1, false, &["+  새 폴더", "영역 1", "영역 2"]),
+            (
+                5,
+                false,
+                &["오늘", "근무자 보기", "화", "+ 이 날짜에 스티커"],
+            ),
+            (6, false, &["업무일지", "표 모아보기", "휴지통", "날짜별"]),
+            (
+                0,
+                true,
+                &["일반", "백업 / 복원", "Windows 시작 시 자동 실행"],
+            ),
+        ];
+        for width in [980., 1440.] {
+            let mut reference = Vec::new();
+            for (dark, brighter, light) in [
+                (false, false, 0),
+                (false, false, 1),
+                (false, false, 2),
+                (true, false, 0),
+                (true, true, 2),
+            ] {
+                let mut app = App::sample(Local::now().date_naive());
+                app.dark = dark;
+                app.dark_brighter = brighter;
+                app.light_theme = light;
+                app.sidebar = true;
+                let ctx = egui::Context::default();
+                let mut positions = Vec::new();
+                for &(page, settings, labels) in pages {
+                    app.page = page;
+                    app.settings = settings;
+                    app.settings_from = page;
+                    let mut input = egui::RawInput {
+                        viewport_id: main_viewport(),
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            Vec2::new(width, 900.),
+                        )),
+                        ..Default::default()
+                    };
+                    input.viewports.entry(main_viewport()).or_default();
+                    let draw = |ctx: &egui::Context| {
+                        app.theme(ctx);
+                        app.main_ui(ctx);
+                    };
+                    let output = ctx.run(input, draw);
+                    for &label in labels.iter().chain([&"빠른 메모"]) {
+                        let pos = output
+                            .shapes
+                            .iter()
+                            .find_map(|s| match &s.shape {
+                                egui::Shape::Text(t) if t.galley.job.text == label => Some(t.pos),
+                                _ => None,
+                            })
+                            .unwrap_or_else(|| panic!("missing {label} on page {page} at {width}"));
+                        positions.push((label, pos));
+                    }
+                }
+                if reference.is_empty() {
+                    reference = positions;
+                } else {
+                    assert_eq!(
+                        positions, reference,
+                        "width={width}, light={light}, dark={dark}, brighter={brighter}"
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

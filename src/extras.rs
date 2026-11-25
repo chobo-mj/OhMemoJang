@@ -1137,17 +1137,10 @@ impl App {
 }
 impl App {
     pub fn utilities(&mut self, ui: &mut egui::Ui) {
-        match ui::variant(ui) {
-            0 => self.utilities_light1(ui),
-            1 => self.utilities_light2(ui),
-            _ => self.utilities_light3(ui),
-        }
-    }
-    fn utilities_light1(&mut self, ui: &mut egui::Ui) {
         let top = ui.cursor().min;
         let previous_tab = self.extra.utilities_tab;
         use crate::icons::Icon;
-        ui::paper_tabs(
+        ui::workspace_tabs(
             ui,
             &mut self.extra.utilities_tab,
             &[
@@ -1166,7 +1159,7 @@ impl App {
             self.desktop.trash_selected_groups.clear();
         }
         egui::Frame::NONE
-            .fill(Color32::WHITE)
+            .fill(ui.visuals().faint_bg_color)
             .stroke(egui::Stroke::new(1_f32, ui::t(ui).line))
             .corner_radius(6)
             .inner_margin(egui::Margin::symmetric(14, 12))
@@ -1180,178 +1173,6 @@ impl App {
                     _ => self.trash_ui(ui),
                 }
             });
-        // What the page shows (the tutorial lights it and keeps clear of it).
-        let shown = egui::Rect::from_min_max(top, ui.min_rect().max);
-        crate::tutorial::mark(
-            ui.ctx(),
-            crate::tutorial::Spot::Utilities,
-            shown.intersect(ui.clip_rect()),
-        );
-    }
-    fn utilities_light2(&mut self, ui: &mut egui::Ui) {
-        let top = ui.cursor().min;
-        let previous_tab = self.extra.utilities_tab;
-        let tone = ui::t(ui);
-        let tabs = [
-            ("업무일지", "완료한 일을 날짜별로 돌아보세요"),
-            ("표 모아보기", "메모에 담긴 표를 한곳에서 살펴보세요"),
-            (
-                "이미지 모아보기",
-                "메모에 담긴 이미지를 한곳에서 살펴보세요",
-            ),
-            ("링크 · 즐겨찾기", "자주 찾는 링크를 모아두세요"),
-            ("휴지통", "삭제한 항목을 확인하고 관리하세요"),
-        ];
-        // Keep this navigation local to utilities: the content below owns its
-        // own scrolling and selection, while the tabs remain easy to scan.
-        egui::Frame::NONE
-            .fill(tone.sidebar)
-            .stroke(egui::Stroke::new(1.0_f32, tone.line))
-            .corner_radius(12)
-            .inner_margin(egui::Margin::symmetric(14, 12))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal_wrapped(|ui| {
-                    for (index, (label, _)) in tabs.iter().enumerate() {
-                        let selected = self.extra.utilities_tab == index;
-                        let text = RichText::new(*label).strong().color(
-                            if selected && ui.visuals().dark_mode {
-                                Color32::from_rgb(255, 164, 140)
-                            } else if selected {
-                                ui::accent(ui)
-                            } else {
-                                tone.muted
-                            },
-                        );
-                        let response = ui.add(
-                            egui::Button::new(text)
-                                .fill(if selected {
-                                    tone.accent_soft
-                                } else {
-                                    Color32::TRANSPARENT
-                                })
-                                .stroke(egui::Stroke::NONE)
-                                .corner_radius(7)
-                                .min_size(Vec2::new(0., 30.)),
-                        );
-                        if response
-                            .on_hover_cursor(egui::CursorIcon::PointingHand)
-                            .clicked()
-                        {
-                            self.extra.utilities_tab = index;
-                        }
-                    }
-                });
-                ui.add_space(5.);
-                ui.label(
-                    RichText::new(tabs[self.extra.utilities_tab.min(tabs.len() - 1)].1)
-                        .size(12.)
-                        .color(tone.muted),
-                );
-            });
-        ui.add_space(16.);
-        if self.extra.utilities_tab != previous_tab {
-            self.content_selection.clear();
-            self.content_purge.clear();
-            self.desktop.trash_selection.clear();
-            self.desktop.trash_selected_groups.clear();
-        }
-        match self.extra.utilities_tab {
-            0 => self.journal(ui),
-            1 => self.content_tables(ui),
-            2 => self.content_images(ui),
-            3 => self.real_bookmark_gallery(ui),
-            _ => self.trash_ui(ui),
-        }
-        // What the page shows (the tutorial lights it and keeps clear of it).
-        let shown = egui::Rect::from_min_max(top, ui.min_rect().max);
-        crate::tutorial::mark(
-            ui.ctx(),
-            crate::tutorial::Spot::Utilities,
-            shown.intersect(ui.clip_rect()),
-        );
-    }
-    fn utilities_light3(&mut self, ui: &mut egui::Ui) {
-        let top = ui.cursor().min;
-        let previous_tab = self.extra.utilities_tab;
-        let tone = ui::t(ui);
-        let tabs = [
-            ("업무일지", "완료한 일을 날짜별로 돌아보세요"),
-            ("표 모아보기", "메모에 담긴 표를 한곳에서 살펴보세요"),
-            (
-                "이미지 모아보기",
-                "메모에 담긴 이미지를 한곳에서 살펴보세요",
-            ),
-            ("링크 · 즐겨찾기", "자주 찾는 링크를 모아두세요"),
-            ("휴지통", "삭제한 항목을 확인하고 관리하세요"),
-        ];
-        // The utility index is a compact collection of tiles. Wrapping keeps
-        // every destination available when the main window becomes narrow.
-        let tile_width = ((ui.available_width() - 32.) / 5.).clamp(142., 220.);
-        let selected_text = Color32::WHITE;
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = Vec2::new(8., 8.);
-            for (index, (label, _)) in tabs.iter().enumerate() {
-                let selected = self.extra.utilities_tab == index;
-                let text = RichText::new(format!("{:02}   {}", index + 1, label))
-                    .size(13.)
-                    .strong()
-                    .color(if selected { selected_text } else { tone.ink });
-                let response = ui.add_sized(
-                    [tile_width, 54.],
-                    egui::Button::new(text)
-                        .fill(if selected {
-                            crate::ui::accent(ui)
-                        } else {
-                            tone.field
-                        })
-                        .stroke(egui::Stroke::new(
-                            1.0_f32,
-                            if selected {
-                                crate::ui::accent(ui)
-                            } else {
-                                tone.line
-                            },
-                        ))
-                        .corner_radius(10.),
-                );
-                if response
-                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .clicked()
-                {
-                    self.extra.utilities_tab = index;
-                }
-            }
-        });
-        ui.add_space(12.);
-        ui.horizontal(|ui| {
-            let (mark, _) = ui.allocate_exact_size(Vec2::new(4., 30.), egui::Sense::hover());
-            ui.painter().rect_filled(mark, 2., crate::ui::accent(ui));
-            ui.vertical(|ui| {
-                let current = self.extra.utilities_tab.min(tabs.len() - 1);
-                ui.label(
-                    RichText::new(tabs[current].0)
-                        .size(17.)
-                        .strong()
-                        .color(tone.ink),
-                );
-                ui.label(RichText::new(tabs[current].1).size(12.).color(tone.muted));
-            });
-        });
-        ui.add_space(15.);
-        if self.extra.utilities_tab != previous_tab {
-            self.content_selection.clear();
-            self.content_purge.clear();
-            self.desktop.trash_selection.clear();
-            self.desktop.trash_selected_groups.clear();
-        }
-        match self.extra.utilities_tab {
-            0 => self.journal(ui),
-            1 => self.content_tables(ui),
-            2 => self.content_images(ui),
-            3 => self.real_bookmark_gallery(ui),
-            _ => self.trash_ui(ui),
-        }
         // What the page shows (the tutorial lights it and keeps clear of it).
         let shown = egui::Rect::from_min_max(top, ui.min_rect().max);
         crate::tutorial::mark(

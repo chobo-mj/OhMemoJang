@@ -276,72 +276,25 @@ impl App {
         let tree_rect =
             egui::Rect::from_min_max(full.min, egui::pos2(handle.left(), full.bottom()));
         let memo_rect = egui::Rect::from_min_max(egui::pos2(split, full.top()), full.max);
-        let variant = ui::variant(ui);
-        let tree_content = if variant == 0 {
-            let tone = ui::t(ui);
-            ui.painter().rect(
-                tree_rect,
-                6.,
-                Color32::WHITE,
-                Stroke::new(1_f32, tone.line),
-                egui::StrokeKind::Inside,
-            );
-            let inner = tree_rect.shrink(8.);
-            let header = egui::Rect::from_min_size(inner.min, Vec2::new(inner.width(), 28.));
-            ui.painter().rect_filled(header, 3., tone.sidebar);
-            ui.painter().text(
-                header.left_center() + Vec2::new(8., 0.),
-                egui::Align2::LEFT_CENTER,
-                "프로젝트 구조",
-                egui::TextStyle::Button.resolve(ui.style()),
-                tone.ink,
-            );
-            egui::Rect::from_min_max(inner.min + Vec2::new(0., 34.), inner.max)
-        } else if variant == 1 {
-            let tone = ui::t(ui);
-            ui.painter()
-                .rect_filled(tree_rect, 10., ui.visuals().faint_bg_color);
-            ui.painter().rect_stroke(
-                tree_rect,
-                10.,
-                Stroke::new(1_f32, tone.line),
-                egui::StrokeKind::Inside,
-            );
-            tree_rect.shrink2(Vec2::new(6., 6.))
-        } else {
-            let tone = ui::t(ui);
-            ui.painter().rect_filled(tree_rect, 14., tone.sidebar);
-            ui.painter().rect_stroke(
-                tree_rect,
-                14.,
-                Stroke::new(1_f32, tone.line),
-                egui::StrokeKind::Inside,
-            );
-            // Reserve a clear header above the tree, keeping the drag and drop
-            // targets inside the scroll area's actual content rectangle.
-            let header = egui::Rect::from_min_max(
-                tree_rect.min + Vec2::new(14., 12.),
-                egui::pos2(tree_rect.right() - 14., tree_rect.top() + 48.),
-            );
-            ui.painter().text(
-                header.left_top(),
-                egui::Align2::LEFT_TOP,
-                "프로젝트 구조",
-                egui::FontId::proportional(14.),
-                tone.ink,
-            );
-            ui.painter().text(
-                header.left_top() + Vec2::new(0., 21.),
-                egui::Align2::LEFT_TOP,
-                "폴더와 메모",
-                egui::FontId::proportional(11.),
-                tone.muted,
-            );
-            egui::Rect::from_min_max(
-                egui::pos2(tree_rect.left() + 6., tree_rect.top() + 56.),
-                egui::pos2(tree_rect.right() - 6., tree_rect.bottom() - 6.),
-            )
-        };
+        let tone = ui::t(ui);
+        ui.painter().rect(
+            tree_rect,
+            6.,
+            ui.visuals().faint_bg_color,
+            Stroke::new(1_f32, tone.line),
+            egui::StrokeKind::Inside,
+        );
+        let inner = tree_rect.shrink(8.);
+        let header = egui::Rect::from_min_size(inner.min, Vec2::new(inner.width(), 28.));
+        ui.painter().rect_filled(header, 3., tone.sidebar);
+        ui.painter().text(
+            header.left_center() + Vec2::new(8., 0.),
+            egui::Align2::LEFT_CENTER,
+            "프로젝트 구조",
+            egui::TextStyle::Button.resolve(ui.style()),
+            tone.ink,
+        );
+        let tree_content = egui::Rect::from_min_max(inner.min + Vec2::new(0., 34.), inner.max);
         let mut tree = ui.new_child(
             egui::UiBuilder::new()
                 .id_salt("project_tree")

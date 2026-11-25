@@ -3111,19 +3111,7 @@ pub fn nav_button(
     let tone = crate::ui::t(ui);
     let accent_color = crate::ui::accent(ui);
     let paper = crate::ui::paper(ui);
-    let (rect, r) = ui.allocate_exact_size(
-        Vec2::new(
-            ui.available_width(),
-            if crate::ui::variant(ui) == 2 {
-                36.
-            } else if paper {
-                33.
-            } else {
-                30.
-            },
-        ),
-        Sense::click(),
-    );
+    let (rect, r) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 33.), Sense::click());
     r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, text));
     if selected || r.hovered() || accent {
         ui.painter().rect_filled(

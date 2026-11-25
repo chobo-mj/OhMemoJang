@@ -30,7 +30,16 @@ pub fn paper(ui: &Ui) -> bool {
 pub const MEMO_YELLOW: Color32 = Color32::from_rgb(255, 218, 95);
 const OCHRE: Color32 = Color32::from_rgb(117, 79, 10);
 
-/// The layout variant is local to each viewport.
+/// Fill for selected controls on the main workspace.
+pub fn workspace_highlight(ui: &Ui) -> Color32 {
+    if paper(ui) {
+        MEMO_YELLOW
+    } else {
+        t(ui).accent_soft
+    }
+}
+
+/// The palette variant is local to each viewport.
 pub fn variant_ctx(ctx: &egui::Context) -> usize {
     let key = variant_key(ctx);
     ctx.data(|d| d.get_temp::<usize>(key)).unwrap_or(1)
@@ -458,7 +467,7 @@ pub fn segmented(ui: &mut Ui, value: &mut usize, labels: &[&str]) -> bool {
 }
 
 /// File-folder tabs size to their labels and flow onto another line at narrow widths.
-pub fn paper_tabs(ui: &mut Ui, selected: &mut usize, entries: &[(&str, Icon)]) {
+pub fn workspace_tabs(ui: &mut Ui, selected: &mut usize, entries: &[(&str, Icon)]) {
     let c = t(ui);
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = Vec2::new(4., 3.);
@@ -474,7 +483,7 @@ pub fn paper_tabs(ui: &mut Ui, selected: &mut usize, entries: &[(&str, Icon)]) {
                 Sense::click(),
             );
             let fill = if active {
-                MEMO_YELLOW
+                workspace_highlight(ui)
             } else if response.hovered() {
                 c.hover
             } else {
@@ -490,7 +499,7 @@ pub fn paper_tabs(ui: &mut Ui, selected: &mut usize, entries: &[(&str, Icon)]) {
             if active || response.has_focus() {
                 ui.painter().line_segment(
                     [rect.left_bottom(), rect.right_bottom()],
-                    Stroke::new(2_f32, if active { c.ink } else { OCHRE }),
+                    Stroke::new(2_f32, if active { c.ink } else { accent(ui) }),
                 );
             }
             paint_icon(
@@ -885,8 +894,18 @@ pub fn empty_state(ui: &mut Ui, icon: Icon, title: &str, hint_text: &str) {
             ));
             paint_icon(ui.painter(), rect.shrink(10.), icon, OCHRE);
         } else {
-            let (rect, _) = ui.allocate_exact_size(Vec2::splat(26.), Sense::hover());
-            paint_icon(ui.painter(), rect, icon, c.faint);
+            let side = if ui.ctx().viewport_id() == crate::main_viewport() {
+                40.
+            } else {
+                26.
+            };
+            let (rect, _) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
+            paint_icon(
+                ui.painter(),
+                Rect::from_center_size(rect.center(), Vec2::splat(26.)),
+                icon,
+                c.faint,
+            );
         }
         ui.add_space(6.);
         ui.label(RichText::new(title).size(13.).color(c.muted));
