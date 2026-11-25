@@ -16,7 +16,21 @@ fn variant_key(ctx: &egui::Context) -> Id {
     Id::new(("workspace-light-variant", ctx.viewport_id()))
 }
 
-/// The current workspace theme: original light, design 1, or design 2.
+/// Light 1 uses the yellow paper palette only in the main workspace.
+pub fn palette_variant(ctx: &egui::Context, variant: usize) -> usize {
+    if variant == 0 && ctx.viewport_id() != crate::main_viewport() {
+        1
+    } else {
+        variant
+    }
+}
+pub fn paper(ui: &Ui) -> bool {
+    variant(ui) == 0 && ui.ctx().viewport_id() == crate::main_viewport()
+}
+pub const MEMO_YELLOW: Color32 = Color32::from_rgb(255, 218, 95);
+const OCHRE: Color32 = Color32::from_rgb(117, 79, 10);
+
+/// The layout variant is local to each viewport.
 pub fn variant_ctx(ctx: &egui::Context) -> usize {
     let key = variant_key(ctx);
     ctx.data(|d| d.get_temp::<usize>(key)).unwrap_or(1)
@@ -25,16 +39,18 @@ pub fn variant(ui: &Ui) -> usize {
     variant_ctx(ui.ctx())
 }
 pub fn accent_for(variant: usize) -> Color32 {
-    if variant == 2 {
-        ACCENT
-    } else {
-        CORAL
+    match variant {
+        0 => OCHRE,
+        2 => ACCENT,
+        _ => CORAL,
     }
 }
 pub fn accent(ui: &Ui) -> Color32 {
     let key = variant_key(ui.ctx());
     let selected = ui.ctx().data(|d| d.get_temp::<usize>(key));
-    selected.map(accent_for).unwrap_or(CORAL)
+    selected
+        .map(|v| accent_for(palette_variant(ui.ctx(), v)))
+        .unwrap_or(CORAL)
 }
 fn blue(ui: &Ui) -> Color32 {
     let key = variant_key(ui.ctx());
@@ -96,10 +112,23 @@ pub fn tone(dark: bool) -> Tone {
     }
 }
 
-/// The two warm light designs share the original palette; the third uses
-/// the cool palette. Their layouts are chosen separately by the workspace.
+/// Paper, coral, and indigo workspace palettes.
 pub fn light_tone(variant: usize) -> Tone {
-    if variant == 2 {
+    if variant == 0 {
+        Tone {
+            bg: Color32::from_rgb(250, 249, 244),
+            sidebar: Color32::from_rgb(244, 241, 229),
+            field: Color32::from_rgb(239, 237, 225),
+            hover: Color32::from_rgb(244, 238, 209),
+            pressed: Color32::from_rgb(237, 223, 166),
+            line: Color32::from_rgb(223, 221, 206),
+            line_strong: Color32::from_rgb(196, 191, 169),
+            ink: Color32::from_rgb(47, 48, 36),
+            muted: Color32::from_rgb(94, 95, 77),
+            faint: Color32::from_rgb(109, 109, 91),
+            accent_soft: Color32::from_rgb(255, 238, 171),
+        }
+    } else if variant == 2 {
         tone(false)
     } else {
         Tone {
@@ -144,7 +173,7 @@ pub fn t(ui: &Ui) -> Tone {
     if !visuals.dark_mode {
         let key = variant_key(ui.ctx());
         if let Some(variant) = ui.ctx().data(|d| d.get_temp::<usize>(key)) {
-            return light_tone(variant);
+            return light_tone(palette_variant(ui.ctx(), variant));
         }
     }
     theme_tone(visuals.dark_mode, visuals.panel_fill == BRIGHTER_DARK_BG)
@@ -162,7 +191,14 @@ pub fn apply_light(ctx: &egui::Context, variant: usize, family: egui::FontFamily
     let variant = variant.min(2);
     let key = variant_key(ctx);
     ctx.data_mut(|d| d.insert_temp(key, variant));
-    apply_inner(ctx, false, false, Some(variant), family, body);
+    apply_inner(
+        ctx,
+        false,
+        false,
+        Some(palette_variant(ctx, variant)),
+        family,
+        body,
+    );
 }
 
 fn apply_inner(
@@ -198,7 +234,9 @@ fn apply_inner(
         Color32::from_rgb(54, 54, 52)
     } else if dark {
         Color32::from_rgb(35, 35, 34)
-    } else if variant.is_some_and(|v| v < 2) {
+    } else if variant == Some(0) {
+        Color32::WHITE
+    } else if variant == Some(1) {
         Color32::from_rgb(250, 250, 248)
     } else {
         Color32::from_rgb(241, 244, 251)
@@ -315,9 +353,14 @@ pub fn caption(ui: &mut Ui, text: &str) -> Response {
 
 /// Filled accent button for the single primary action of a view.
 pub fn primary(ui: &mut Ui, text: &str) -> Response {
+    let (fill, ink) = if paper(ui) {
+        (MEMO_YELLOW, t(ui).ink)
+    } else {
+        (accent(ui), Color32::WHITE)
+    };
     ui.add(
-        egui::Button::new(RichText::new(text).color(Color32::WHITE).strong())
-            .fill(accent(ui))
+        egui::Button::new(RichText::new(text).color(ink).strong())
+            .fill(fill)
             .corner_radius(6.),
     )
     .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -391,6 +434,8 @@ pub fn segmented(ui: &mut Ui, value: &mut usize, labels: &[&str]) -> bool {
                 6.,
                 if ui.visuals().dark_mode {
                     c.pressed
+                } else if paper(ui) {
+                    MEMO_YELLOW
                 } else {
                     Color32::WHITE
                 },
@@ -410,6 +455,66 @@ pub fn segmented(ui: &mut Ui, value: &mut usize, labels: &[&str]) -> bool {
         x += w;
     }
     changed
+}
+
+/// File-folder tabs size to their labels and flow onto another line at narrow widths.
+pub fn paper_tabs(ui: &mut Ui, selected: &mut usize, entries: &[(&str, Icon)]) {
+    let c = t(ui);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::new(4., 3.);
+        let font = egui::TextStyle::Button.resolve(ui.style());
+        for (i, &(label, icon)) in entries.iter().enumerate() {
+            let active = *selected == i;
+            let ink = if active { c.ink } else { c.muted };
+            let title = ui
+                .painter()
+                .layout_no_wrap(label.to_owned(), font.clone(), ink);
+            let (rect, response) = ui.allocate_exact_size(
+                Vec2::new(title.size().x + 40., title.size().y + 17.),
+                Sense::click(),
+            );
+            let fill = if active {
+                MEMO_YELLOW
+            } else if response.hovered() {
+                c.hover
+            } else {
+                c.field
+            };
+            let radius = CornerRadius {
+                nw: 8,
+                ne: 8,
+                sw: 1,
+                se: 1,
+            };
+            ui.painter().rect_filled(rect, radius, fill);
+            if active || response.has_focus() {
+                ui.painter().line_segment(
+                    [rect.left_bottom(), rect.right_bottom()],
+                    Stroke::new(2_f32, if active { c.ink } else { OCHRE }),
+                );
+            }
+            paint_icon(
+                ui.painter(),
+                Rect::from_center_size(rect.left_center() + Vec2::new(15., 0.), Vec2::splat(15.)),
+                icon,
+                ink,
+            );
+            ui.painter().galley(
+                Pos2::new(rect.left() + 28., rect.center().y - title.size().y * 0.5),
+                title,
+                ink,
+            );
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, active, label)
+            });
+            if response
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .clicked()
+            {
+                *selected = i;
+            }
+        }
+    });
 }
 
 /// Text tabs with an accent underline for the selected one.
@@ -602,9 +707,9 @@ pub fn section_header(ui: &mut Ui, icon: Icon, title: &str, count: Option<usize>
 pub fn card<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     let c = t(ui);
     egui::Frame::NONE
-        .fill(c.bg)
+        .fill(if paper(ui) { Color32::WHITE } else { c.bg })
         .stroke(Stroke::new(1.0_f32, c.line))
-        .corner_radius(10.)
+        .corner_radius(if paper(ui) { 6. } else { 10. })
         .inner_margin(egui::Margin::symmetric(8, 8))
         .show(ui, add)
         .inner
@@ -756,8 +861,33 @@ pub fn empty_state(ui: &mut Ui, icon: Icon, title: &str, hint_text: &str) {
     let c = t(ui);
     ui.vertical_centered(|ui| {
         ui.add_space(18.);
-        let (rect, _) = ui.allocate_exact_size(Vec2::splat(26.), Sense::hover());
-        paint_icon(ui.painter(), rect, icon, c.faint);
+        if paper(ui) {
+            let (rect, _) = ui.allocate_exact_size(Vec2::splat(40.), Sense::hover());
+            let fold = 9.;
+            let p = rect.right_top();
+            let a = p - Vec2::new(fold, 0.);
+            let b = p + Vec2::new(0., fold);
+            ui.painter().add(egui::Shape::convex_polygon(
+                vec![
+                    rect.left_top(),
+                    a,
+                    b,
+                    rect.right_bottom(),
+                    rect.left_bottom(),
+                ],
+                c.accent_soft,
+                Stroke::NONE,
+            ));
+            ui.painter().add(egui::Shape::convex_polygon(
+                vec![a, b, a + Vec2::new(0., fold)],
+                MEMO_YELLOW,
+                Stroke::NONE,
+            ));
+            paint_icon(ui.painter(), rect.shrink(10.), icon, OCHRE);
+        } else {
+            let (rect, _) = ui.allocate_exact_size(Vec2::splat(26.), Sense::hover());
+            paint_icon(ui.painter(), rect, icon, c.faint);
+        }
         ui.add_space(6.);
         ui.label(RichText::new(title).size(13.).color(c.muted));
         if !hint_text.is_empty() {
@@ -1232,16 +1362,32 @@ mod tests {
     #[test]
     fn light_design_switch_updates_palette_and_accent() {
         let ctx = egui::Context::default();
-        for variant in [0, 1, 2, 1] {
-            apply_light(&ctx, variant, egui::FontFamily::Proportional, 14.);
-            let _ = ctx.run(Default::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    assert_eq!(super::variant(ui), variant);
-                    assert_eq!(super::t(ui).bg, light_tone(variant).bg);
-                    assert_eq!(super::accent(ui), accent_for(variant));
-                    assert_eq!(ui.visuals().selection.stroke.color, accent_for(variant));
+        for viewport in [
+            crate::main_viewport(),
+            egui::ViewportId::from_hash_of("calendar"),
+        ] {
+            for variant in [0, 1, 2, 0] {
+                let mut input = egui::RawInput {
+                    viewport_id: viewport,
+                    ..Default::default()
+                };
+                input.viewports.entry(viewport).or_default();
+                let _ = ctx.run(input, |ctx| {
+                    apply_light(ctx, variant, egui::FontFamily::Proportional, 14.);
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let expected = if viewport != crate::main_viewport() && variant == 0 {
+                            1
+                        } else {
+                            variant
+                        };
+                        assert_eq!(super::variant(ui), variant);
+                        assert_eq!(paper(ui), expected == 0);
+                        assert_eq!(t(ui).bg, light_tone(expected).bg);
+                        assert_eq!(accent(ui), accent_for(expected));
+                        assert_eq!(ui.visuals().selection.stroke.color, accent_for(expected));
+                    });
                 });
-            });
+            }
         }
     }
 

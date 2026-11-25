@@ -683,38 +683,45 @@ impl App {
     }
     fn wiki_tabs_light12(&mut self, ui: &mut egui::Ui) {
         let tone = crate::ui::t(ui);
-        ui.horizontal(|ui| {
+        let paper = crate::ui::paper(ui);
+        let tab_buttons = |app: &mut Self, ui: &mut egui::Ui| {
             ui.spacing_mut().item_spacing.x = 4.;
-            for t in 0..self.extra.wiki_tabs.len() {
-                if self.extra.deleted_wiki_tabs.contains(&t) {
+            for t in 0..app.extra.wiki_tabs.len() {
+                if app.extra.deleted_wiki_tabs.contains(&t) {
                     continue;
                 }
-                if self.extra.wiki_rename == Some(crate::extras::WikiRename::Tab(t)) {
+                if app.extra.wiki_rename == Some(crate::extras::WikiRename::Tab(t)) {
                     let r = ui.add(
-                        egui::TextEdit::singleline(&mut self.extra.wiki_tabs[t]).desired_width(90.),
+                        egui::TextEdit::singleline(&mut app.extra.wiki_tabs[t]).desired_width(90.),
                     );
-                    if std::mem::take(&mut self.extra.wiki_rename_focus) {
+                    if std::mem::take(&mut app.extra.wiki_rename_focus) {
                         r.request_focus();
                     } else if r.lost_focus() {
-                        self.extra.wiki_rename = None;
+                        app.extra.wiki_rename = None;
                     }
                     continue;
                 }
-                let on = self.extra.wiki_tab == t;
-                let base = self
+                let on = app.extra.wiki_tab == t;
+                let base = app
                     .extra
                     .wiki_tab_colors
                     .get(&t)
                     .copied()
-                    .unwrap_or(crate::ui::accent(ui));
-                let text = egui::RichText::new(&self.extra.wiki_tabs[t])
+                    .unwrap_or(if paper {
+                        crate::ui::MEMO_YELLOW
+                    } else {
+                        crate::ui::accent(ui)
+                    });
+                let text = egui::RichText::new(&app.extra.wiki_tabs[t])
                     .size(13.)
                     .strong()
                     .color(if on { tone.ink } else { tone.muted });
                 let r = ui
                     .add(
                         egui::Button::new(text)
-                            .fill(if on {
+                            .fill(if on && paper {
+                                crate::ui::lerp_color(egui::Color32::WHITE, base, 0.68)
+                            } else if on {
                                 crate::ui::lerp_color(tone.bg, base, 0.20)
                             } else {
                                 tone.sidebar
@@ -723,23 +730,32 @@ impl App {
                                 1.0_f32,
                                 if on { base } else { tone.line },
                             ))
-                            .corner_radius(8.)
-                            .min_size(Vec2::new(72., 30.)),
+                            .corner_radius(if paper {
+                                egui::CornerRadius {
+                                    nw: 8,
+                                    ne: 8,
+                                    sw: 1,
+                                    se: 1,
+                                }
+                            } else {
+                                egui::CornerRadius::same(8)
+                            })
+                            .min_size(Vec2::new(72., if paper { 34. } else { 30. })),
                     )
                     .on_hover_text("누르면 이 위키의 트리 보기 · 더블클릭: 이름 바꾸기");
                 // Switching tabs changes only the tree; open memos stay.
                 if r.clicked() {
-                    self.extra.wiki_tab = t;
-                    self.extra.folder_selected = None;
+                    app.extra.wiki_tab = t;
+                    app.extra.folder_selected = None;
                 }
                 if r.double_clicked() {
-                    self.extra.wiki_rename = Some(crate::extras::WikiRename::Tab(t));
-                    self.extra.wiki_rename_focus = true;
+                    app.extra.wiki_rename = Some(crate::extras::WikiRename::Tab(t));
+                    app.extra.wiki_rename_focus = true;
                 }
                 r.context_menu(|ui| {
                     if ui.button("이름 바꾸기").clicked() {
-                        self.extra.wiki_rename = Some(crate::extras::WikiRename::Tab(t));
-                        self.extra.wiki_rename_focus = true;
+                        app.extra.wiki_rename = Some(crate::extras::WikiRename::Tab(t));
+                        app.extra.wiki_rename_focus = true;
                         ui.close_menu();
                     }
                     ui.menu_button("색 바꾸기", |ui| {
@@ -748,7 +764,7 @@ impl App {
                                 let (rect, cr) =
                                     ui.allocate_exact_size(Vec2::splat(22.), egui::Sense::click());
                                 ui.painter().circle_filled(rect.center(), 9., c);
-                                if self.extra.wiki_tab_colors.get(&t) == Some(&c) {
+                                if app.extra.wiki_tab_colors.get(&t) == Some(&c) {
                                     ui.painter().circle_stroke(
                                         rect.center(),
                                         10.5,
@@ -756,25 +772,25 @@ impl App {
                                     );
                                 }
                                 if cr.clicked() {
-                                    self.extra.wiki_tab_colors.insert(t, c);
+                                    app.extra.wiki_tab_colors.insert(t, c);
                                     ui.close_menu();
                                 }
                             }
                         });
                     });
-                    let remaining = self.extra.wiki_tabs.len() - self.extra.deleted_wiki_tabs.len();
+                    let remaining = app.extra.wiki_tabs.len() - app.extra.deleted_wiki_tabs.len();
                     ui.add_enabled_ui(remaining > 1, |ui| {
                         if ui
                             .button(RichText::new("삭제").color(crate::ui::accent(ui)))
                             .on_disabled_hover_text("마지막 위키 탭은 삭제할 수 없습니다")
                             .clicked()
                         {
-                            self.extra.delete_wiki_tab = Some(t);
+                            app.extra.delete_wiki_tab = Some(t);
                             ui.close_menu();
                         }
                     });
                 });
-                self.targets.push(crate::dragging::Target {
+                app.targets.push(crate::dragging::Target {
                     viewport: ui.ctx().viewport_id(),
                     layer: ui.layer_id(),
                     rect: r.rect.intersect(ui.clip_rect()),
@@ -792,24 +808,35 @@ impl App {
                 .on_hover_text("새 위키 탭")
                 .clicked()
             {
-                let n = self.extra.wiki_tabs.len() + 1;
-                self.extra.wiki_tabs.push(format!("위키 {n}"));
-                self.extra.wiki_tab = n - 1;
-                self.extra.folder_selected = None;
+                let n = app.extra.wiki_tabs.len() + 1;
+                app.extra.wiki_tabs.push(format!("위키 {n}"));
+                app.extra.wiki_tab = n - 1;
+                app.extra.folder_selected = None;
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .add(egui::Button::new(RichText::new("+  새 폴더").strong()))
-                    .clicked()
-                {
-                    self.create_wiki_folder(self.extra.folder_selected);
-                }
-                crate::ui::hint(
-                    ui,
-                    "미분류 메모를 위 트리로 끌어 분류 · 트리에서 우클릭: 새 노트",
-                );
+        };
+        let tab_tools = |app: &mut Self, ui: &mut egui::Ui| {
+            if ui
+                .add(egui::Button::new(RichText::new("+  새 폴더").strong()))
+                .clicked()
+            {
+                app.create_wiki_folder(app.extra.folder_selected);
+            }
+            crate::ui::hint(
+                ui,
+                "미분류 메모를 위 트리로 끌어 분류 · 트리에서 우클릭: 새 노트",
+            );
+        };
+        if paper {
+            ui.horizontal_wrapped(|ui| tab_buttons(self, ui));
+            ui.horizontal(|ui| tab_tools(self, ui));
+        } else {
+            ui.horizontal(|ui| {
+                tab_buttons(self, ui);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    tab_tools(self, ui)
+                });
             });
-        });
+        }
     }
     fn wiki_tabs_light3(&mut self, ui: &mut egui::Ui) {
         let tone = crate::ui::t(ui);
@@ -980,7 +1007,23 @@ impl App {
             .id_salt("wiki_tree_scroll")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                if crate::ui::variant(ui) == 2 {
+                if crate::ui::paper(ui) {
+                    ui.add_space(8.);
+                    ui.horizontal(|ui| {
+                        ui.add_space(6.);
+                        crate::ui::section_header(
+                            ui,
+                            crate::icons::Icon::Folder,
+                            self.extra
+                                .wiki_tabs
+                                .get(tab)
+                                .map(String::as_str)
+                                .unwrap_or("위키"),
+                            None,
+                        );
+                    });
+                    crate::ui::divider(ui);
+                } else if crate::ui::variant(ui) == 2 {
                     ui.add_space(10.);
                     ui.horizontal(|ui| {
                         ui.add_space(10.);
@@ -1258,7 +1301,24 @@ impl App {
                 }
             }
             None => {
-                ui.painter().rect_filled(body, 12., tone.sidebar);
+                if crate::ui::paper(ui) {
+                    ui.painter().rect(
+                        body,
+                        6.,
+                        egui::Color32::WHITE,
+                        egui::Stroke::new(
+                            1_f32,
+                            if focused {
+                                crate::ui::accent(ui)
+                            } else {
+                                tone.line
+                            },
+                        ),
+                        egui::StrokeKind::Inside,
+                    );
+                } else {
+                    ui.painter().rect_filled(body, 12., tone.sidebar);
+                }
                 self.in_rect(ui, body, ("wiki_empty_pane", k), |a, ui| {
                     ui.add_space(body.height() * 0.36);
                     ui.vertical_centered(|ui| {

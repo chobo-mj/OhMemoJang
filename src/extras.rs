@@ -1146,15 +1146,16 @@ impl App {
     fn utilities_light1(&mut self, ui: &mut egui::Ui) {
         let top = ui.cursor().min;
         let previous_tab = self.extra.utilities_tab;
-        ui::tabs(
+        use crate::icons::Icon;
+        ui::paper_tabs(
             ui,
             &mut self.extra.utilities_tab,
             &[
-                "업무일지",
-                "표 모아보기",
-                "이미지 모아보기",
-                "링크 · 즐겨찾기",
-                "휴지통",
+                ("업무일지", Icon::Book),
+                ("표 모아보기", Icon::Grid),
+                ("이미지 모아보기", Icon::Palette),
+                ("링크 · 즐겨찾기", Icon::Star),
+                ("휴지통", Icon::Trash),
             ],
         );
         ui.add_space(12.);
@@ -1164,13 +1165,21 @@ impl App {
             self.desktop.trash_selection.clear();
             self.desktop.trash_selected_groups.clear();
         }
-        match self.extra.utilities_tab {
-            0 => self.journal(ui),
-            1 => self.content_tables(ui),
-            2 => self.content_images(ui),
-            3 => self.real_bookmark_gallery(ui),
-            _ => self.trash_ui(ui),
-        }
+        egui::Frame::NONE
+            .fill(Color32::WHITE)
+            .stroke(egui::Stroke::new(1_f32, ui::t(ui).line))
+            .corner_radius(6)
+            .inner_margin(egui::Margin::symmetric(14, 12))
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                match self.extra.utilities_tab {
+                    0 => self.journal(ui),
+                    1 => self.content_tables(ui),
+                    2 => self.content_images(ui),
+                    3 => self.real_bookmark_gallery(ui),
+                    _ => self.trash_ui(ui),
+                }
+            });
         // What the page shows (the tutorial lights it and keeps clear of it).
         let shown = egui::Rect::from_min_max(top, ui.min_rect().max);
         crate::tutorial::mark(

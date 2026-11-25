@@ -278,7 +278,25 @@ impl App {
         let memo_rect = egui::Rect::from_min_max(egui::pos2(split, full.top()), full.max);
         let variant = ui::variant(ui);
         let tree_content = if variant == 0 {
-            tree_rect
+            let tone = ui::t(ui);
+            ui.painter().rect(
+                tree_rect,
+                6.,
+                Color32::WHITE,
+                Stroke::new(1_f32, tone.line),
+                egui::StrokeKind::Inside,
+            );
+            let inner = tree_rect.shrink(8.);
+            let header = egui::Rect::from_min_size(inner.min, Vec2::new(inner.width(), 28.));
+            ui.painter().rect_filled(header, 3., tone.sidebar);
+            ui.painter().text(
+                header.left_center() + Vec2::new(8., 0.),
+                egui::Align2::LEFT_CENTER,
+                "프로젝트 구조",
+                egui::TextStyle::Button.resolve(ui.style()),
+                tone.ink,
+            );
+            egui::Rect::from_min_max(inner.min + Vec2::new(0., 34.), inner.max)
         } else if variant == 1 {
             let tone = ui::t(ui);
             ui.painter()
@@ -332,15 +350,7 @@ impl App {
         tree.set_clip_rect(tree_content.intersect(ui.clip_rect()));
         egui::ScrollArea::vertical()
             .id_salt("catalog_project_items")
-            .max_height(
-                (height
-                    - match variant {
-                        0 => 0.,
-                        1 => 12.,
-                        _ => 62.,
-                    })
-                .max(0.),
-            )
+            .max_height(tree_content.height().max(0.))
             .auto_shrink([false, false])
             .show_rows(&mut tree, 30., rows.len(), |ui, range| {
                 self.catalog_drag_scroll(ui);

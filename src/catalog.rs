@@ -634,10 +634,16 @@ impl App {
         let previous_tab = self.catalog.tab;
         match ui::variant(ui) {
             0 => {
-                ui::tabs(
+                use crate::icons::Icon;
+                ui::paper_tabs(
                     ui,
                     &mut self.catalog.tab,
-                    &["프로젝트 보기", "폴더 보기", "전체 메모 보기", "관계 보드"],
+                    &[
+                        ("프로젝트 보기", Icon::Grid),
+                        ("폴더 보기", Icon::Folder),
+                        ("전체 메모 보기", Icon::Notes),
+                        ("관계 보드", Icon::Arrange),
+                    ],
                 );
                 ui.add_space(12.);
             }
@@ -1117,7 +1123,9 @@ impl App {
                 ui.set_min_width(table_width);
                 let (rect, _) = ui.allocate_exact_size(Vec2::new(table_width, 34.), Sense::hover());
                 let tone = ui::t(ui);
-                if ui::variant(ui) != 0 {
+                if ui::paper(ui) {
+                    ui.painter().rect_filled(rect, 3., tone.sidebar);
+                } else if ui::variant(ui) != 0 {
                     ui.painter().rect_filled(rect, 6., tone.field);
                 }
                 ui.painter().line_segment(
@@ -1386,11 +1394,12 @@ impl App {
                 let fill = if selected {
                     ui.visuals().selection.bg_fill
                 } else if ui.rect_contains_pointer(rect) {
-                    ui::t(ui).hover.gamma_multiply(0.6)
+                    ui::t(ui).hover
+                } else if at.is_multiple_of(2) {
+                    Color32::WHITE
                 } else {
-                    Color32::TRANSPARENT
+                    ui::t(ui).bg
                 };
-                let _ = at;
                 ui.painter().rect_filled(rect, 6., fill);
                 ui.painter().line_segment(
                     [rect.left_bottom(), rect.right_bottom()],
@@ -2060,8 +2069,12 @@ impl App {
         else {
             let tone = ui::t(ui);
             egui::Frame::NONE
-                .fill(tone.sidebar)
-                .stroke(if ui::variant(ui) == 2 {
+                .fill(if ui::paper(ui) {
+                    Color32::WHITE
+                } else {
+                    tone.sidebar
+                })
+                .stroke(if ui::variant(ui) == 2 || ui::paper(ui) {
                     Stroke::new(1.0_f32, tone.line)
                 } else {
                     Stroke::NONE
@@ -2071,7 +2084,11 @@ impl App {
                 .show(ui, |ui| {
                     ui.set_min_height(height - 36.);
                     ui.set_min_width(ui.available_width());
-                    if ui::variant(ui) == 2 {
+                    if ui::paper(ui) {
+                        ui::section_header(ui, icons::Icon::Notes, "미리보기", None);
+                        ui::divider(ui);
+                        ui.add_space((height * 0.24 - 26.).max(0.));
+                    } else if ui::variant(ui) == 2 {
                         ui.label(
                             RichText::new("미리보기")
                                 .size(12.)

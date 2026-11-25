@@ -15,56 +15,71 @@ fn dragged_sticker_bar(cell: Rect, pointer: egui::Pos2, height: f32) -> Rect {
 }
 impl App {
     pub fn filters(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.;
-            let combo = egui::ComboBox::from_id_salt(ui.id().with("projects"))
-                .width(150_f32.min(ui.available_width()))
-                .selected_text(format!(
-                    "# {}",
-                    crate::refinements::project_label(self.project_filter, &self.data.projects)
-                ))
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.project_filter, None, "모든 프로젝트");
-                    ui.selectable_value(
-                        &mut self.project_filter,
-                        Some(NO_PROJECT),
-                        "프로젝트 없음",
-                    );
-                    for (i, p) in self.data.projects.iter().enumerate() {
-                        if self.extra.hidden_projects.contains(&i)
-                            || self.extra.deleted_projects.contains(&i)
-                        {
-                            continue;
-                        }
-                        ui.selectable_value(&mut self.project_filter, Some(i), p);
-                    }
-                    // The open list too: it must stay usable in the tutorial.
-                    crate::tutorial::mark(
-                        ui.ctx(),
-                        crate::tutorial::Spot::Filter,
-                        ui.min_rect().expand(8.),
-                    );
+        if ui::paper(ui) {
+            ui.horizontal(|ui| {
+                self.project_filter_combo(ui);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    self.new_schedule_button(ui)
                 });
-            crate::tutorial::mark(ui.ctx(), crate::tutorial::Spot::Filter, combo.response.rect);
-            if ui::pill(ui, self.recurring, "정기 일정 포함").clicked() {
-                self.recurring = !self.recurring;
-            }
-            if ui::pill(ui, self.extra.created_basis, "생성일 기준").clicked() {
-                self.extra.created_basis = !self.extra.created_basis;
-            }
-            if ui::pill(ui, self.extra.show_done, "완료 메모 보기").clicked() {
-                self.extra.show_done = !self.extra.show_done;
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui::primary(ui, "+ 새 일정").clicked() {
-                    self.new_schedule(match self.page {
-                        2 => Local::now().date_naive(),
-                        3 => Local::now().date_naive() + Duration::days(1),
-                        _ => self.day,
-                    });
-                }
             });
-        });
+            ui.horizontal_wrapped(|ui| self.agenda_filter_toggles(ui));
+        } else {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.;
+                self.project_filter_combo(ui);
+                self.agenda_filter_toggles(ui);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    self.new_schedule_button(ui)
+                });
+            });
+        }
+    }
+    fn project_filter_combo(&mut self, ui: &mut egui::Ui) {
+        let combo = egui::ComboBox::from_id_salt(ui.id().with("projects"))
+            .width(150_f32.min(ui.available_width()))
+            .selected_text(format!(
+                "# {}",
+                crate::refinements::project_label(self.project_filter, &self.data.projects)
+            ))
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut self.project_filter, None, "모든 프로젝트");
+                ui.selectable_value(&mut self.project_filter, Some(NO_PROJECT), "프로젝트 없음");
+                for (i, p) in self.data.projects.iter().enumerate() {
+                    if self.extra.hidden_projects.contains(&i)
+                        || self.extra.deleted_projects.contains(&i)
+                    {
+                        continue;
+                    }
+                    ui.selectable_value(&mut self.project_filter, Some(i), p);
+                }
+                // The open list too: it must stay usable in the tutorial.
+                crate::tutorial::mark(
+                    ui.ctx(),
+                    crate::tutorial::Spot::Filter,
+                    ui.min_rect().expand(8.),
+                );
+            });
+        crate::tutorial::mark(ui.ctx(), crate::tutorial::Spot::Filter, combo.response.rect);
+    }
+    fn agenda_filter_toggles(&mut self, ui: &mut egui::Ui) {
+        if ui::pill(ui, self.recurring, "정기 일정 포함").clicked() {
+            self.recurring = !self.recurring;
+        }
+        if ui::pill(ui, self.extra.created_basis, "생성일 기준").clicked() {
+            self.extra.created_basis = !self.extra.created_basis;
+        }
+        if ui::pill(ui, self.extra.show_done, "완료 메모 보기").clicked() {
+            self.extra.show_done = !self.extra.show_done;
+        }
+    }
+    fn new_schedule_button(&mut self, ui: &mut egui::Ui) {
+        if ui::primary(ui, "+ 새 일정").clicked() {
+            self.new_schedule(match self.page {
+                2 => Local::now().date_naive(),
+                3 => Local::now().date_naive() + Duration::days(1),
+                _ => self.day,
+            });
+        }
     }
     pub fn task_row_on(&mut self, ui: &mut egui::Ui, i: usize, occurrence: Option<NaiveDate>) {
         let tone = ui::t(ui);
@@ -98,7 +113,14 @@ impl App {
                 ui.painter()
                     .rect_filled(rect.shrink2(Vec2::new(1., 2.)), 9., tone.field);
             }
-            if ui::variant(ui) == 0 && selected {
+            if ui::paper(ui) && selected {
+                ui.painter().rect_filled(rect, 4., tone.accent_soft);
+                ui.painter().vline(
+                    rect.left() + 1.,
+                    (rect.top() + 5.)..=(rect.bottom() - 5.),
+                    Stroke::new(2_f32, ui::accent(ui)),
+                );
+            } else if ui::variant(ui) == 0 && selected {
                 ui.painter().rect_filled(rect, 6., tone.accent_soft);
             } else if ui::variant(ui) == 0 && hovered {
                 ui.painter()
@@ -348,7 +370,17 @@ impl App {
             egui::pos2(list_rect.right() + 16., rect.top()),
             Vec2::new(preview_width, height),
         );
-        let list_content = if ui::variant(ui) == 2 {
+        let list_content = if ui::paper(ui) {
+            let tone = ui::t(ui);
+            ui.painter().rect(
+                list_rect,
+                6.,
+                Color32::WHITE,
+                Stroke::new(1_f32, tone.line),
+                egui::StrokeKind::Inside,
+            );
+            list_rect.shrink2(Vec2::new(10., 10.))
+        } else if ui::variant(ui) == 2 {
             let tone = ui::t(ui);
             let surface = if ui.visuals().dark_mode {
                 tone.sidebar
@@ -488,7 +520,14 @@ impl App {
                 ui.add_space(18.);
             }
         }
-        if rows.is_empty() {
+        if rows.is_empty() && ui::paper(ui) {
+            ui::empty_state(
+                ui,
+                icons::Icon::Notes,
+                "표시할 메모가 없습니다",
+                "필터를 바꾸거나 새 메모를 추가해 보세요",
+            );
+        } else if rows.is_empty() {
             ui.add_space(40.);
             ui.vertical_centered(|ui| {
                 ui.label(
@@ -2069,6 +2108,15 @@ impl App {
             .max_inner_size([5000., 5000.])
             .show(ui, &mut scene, |ui| {
                 let (canvas, _) = ui.allocate_exact_size(Vec2::new(1450., 950.), Sense::hover());
+                if ui::paper(ui) {
+                    let paper = ui.painter_at(canvas);
+                    let tone = ui::t(ui);
+                    paper.rect_filled(canvas, 4., Color32::WHITE);
+                    for line in 1..=(canvas.height() / 32.) as usize {
+                        paper.hline(canvas.x_range(), canvas.top() + (line * 32) as f32, Stroke::new(1_f32, tone.field));
+                    }
+                    paper.vline(canvas.left() + 28., canvas.y_range(), Stroke::new(1_f32, tone.pressed));
+                }
                 let ids: Vec<_> = (0..self.data.notes.len())
                     .filter(|&i| {
                         self.board_project_matches(i)
@@ -2308,7 +2356,22 @@ fn group_header(ui: &mut egui::Ui, label: &str, count: usize) {
     let tone = ui::t(ui);
     ui.horizontal(|ui| {
         ui.add_space(4.);
-        if ui::variant(ui) == 0 {
+        if ui::paper(ui) {
+            egui::Frame::NONE
+                .fill(tone.accent_soft)
+                .corner_radius(3.)
+                .inner_margin(egui::Margin::symmetric(7, 3))
+                .show(ui, |ui| {
+                    ui.label(RichText::new(label).strong().size(13.5).color(tone.ink));
+                });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    RichText::new(format!("{count}건"))
+                        .size(12.)
+                        .color(tone.muted),
+                );
+            });
+        } else if ui::variant(ui) == 0 {
             ui.label(RichText::new(label).strong().size(13.5));
             ui.label(RichText::new(count.to_string()).size(12.).color(tone.faint));
         } else {

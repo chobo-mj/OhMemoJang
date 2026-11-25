@@ -244,12 +244,23 @@ impl ClipboardHistory {
             self.settings_card(ui);
         }
         ui.add_space(10.0);
-        ui.horizontal(|ui| {
-            let r = ui.add(
-                egui::TextEdit::singleline(&mut self.search)
-                    .hint_text("기록 검색")
-                    .desired_width(200.0),
-            );
+        let paper = ui::paper(ui);
+        let search_and_filters = |ui: &mut egui::Ui| {
+            let r = if paper {
+                ui::search_field(
+                    ui,
+                    &mut self.search,
+                    "clipboard_record_search",
+                    "기록 검색",
+                    200.,
+                )
+            } else {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.search)
+                        .hint_text("기록 검색")
+                        .desired_width(200.0),
+                )
+            };
             if r.changed() {
                 self.search_edited = now;
             }
@@ -260,7 +271,13 @@ impl ClipboardHistory {
                     self.needs_refresh = true;
                 }
             }
-        });
+        };
+        if paper {
+            ui.horizontal_wrapped(search_and_filters);
+            ui::divider(ui);
+        } else {
+            ui.horizontal(search_and_filters);
+        }
         ui.add_space(4.0);
     }
 
@@ -709,6 +726,8 @@ fn row(
     } else {
         if ui::variant(ui) == 2 {
             c.field
+        } else if ui::paper(ui) {
+            Color32::WHITE
         } else {
             c.bg
         }
@@ -725,7 +744,24 @@ fn row(
         painter.rect_filled(bar, 2., ui::accent(ui));
     }
     // A compact colored tile gives each content type a recognizable silhouette.
-    let left = Rect::from_min_size(rect.min + Vec2::new(10.0, 11.0), Vec2::splat(46.0));
+    let paper = ui::paper(ui);
+    let left = if paper {
+        // Keep the type aligned in a margin column, like a notebook index.
+        let gutter = Rect::from_min_size(rect.min + Vec2::splat(1.), Vec2::new(65., ROW_H - 2.));
+        painter.rect_filled(
+            gutter,
+            egui::CornerRadius {
+                nw: 9,
+                sw: 9,
+                ne: 0,
+                se: 0,
+            },
+            if selected { ui::MEMO_YELLOW } else { c.sidebar },
+        );
+        Rect::from_center_size(gutter.center(), Vec2::splat(44.))
+    } else {
+        Rect::from_min_size(rect.min + Vec2::new(10.0, 11.0), Vec2::splat(46.0))
+    };
     let (label, base_tint) = kind_label(&m.kind);
     let base_tint = if m.kind == "link" {
         ui::accent(ui)
@@ -760,7 +796,9 @@ fn row(
             } else {
                 Color32::from_rgba_unmultiplied(tint.r(), tint.g(), tint.b(), 24)
             };
-            painter.rect_filled(left, 9.0, tile_fill);
+            if !paper {
+                painter.rect_filled(left, 9.0, tile_fill);
+            }
             painter.text(
                 left.center(),
                 Align2::CENTER_CENTER,
@@ -770,7 +808,7 @@ fn row(
             );
         }
     }
-    let text_left = left.right() + 10.0;
+    let text_left = left.right() + if paper { 24. } else { 10. };
     // Right side, in order: comment, pin, 복사, 삭제.
     let buttons_w = 92.0;
     let comment_w = (rect.width() * 0.22).clamp(110.0, 200.0);

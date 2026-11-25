@@ -1106,37 +1106,38 @@ impl App {
     }
     pub fn ppt_settings(&mut self, ui: &mut egui::Ui) {
         let tone = crate::ui::t(ui);
+        use crate::icons::Icon;
         let tabs = [
-            "일반",
-            "메인창",
-            "메모창",
-            "캘린더",
-            "알람",
-            "단축키",
-            "백업 / 복원",
-            "정보",
+            ("일반", Icon::Settings),
+            ("메인창", Icon::Home),
+            ("메모창", Icon::Sticky),
+            ("캘린더", Icon::Calendar),
+            ("알람", Icon::Alarm),
+            ("단축키", Icon::Grid),
+            ("백업 / 복원", Icon::Folder),
+            ("정보", Icon::Help),
         ];
-        let icons = [
-            crate::icons::Icon::Settings,
-            crate::icons::Icon::Home,
-            crate::icons::Icon::Sticky,
-            crate::icons::Icon::Calendar,
-            crate::icons::Icon::Alarm,
-            crate::icons::Icon::Grid,
-            crate::icons::Icon::Folder,
-            crate::icons::Icon::Help,
-        ];
+        if crate::ui::paper(ui) {
+            let previous = self.desktop.settings_tab;
+            crate::ui::paper_tabs(ui, &mut self.desktop.settings_tab, &tabs);
+            if previous != self.desktop.settings_tab {
+                self.desktop.last_action.clear();
+            }
+            ui.add_space(10.);
+            self.settings_content(ui, &tabs);
+            return;
+        }
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
                 ui.set_width(150.);
                 ui.label(RichText::new("설정").size(18.).strong());
                 ui.add_space(12.);
-                for (i, text) in tabs.iter().enumerate() {
+                for (i, &(text, icon)) in tabs.iter().enumerate() {
                     if crate::studio::nav_button(
                         ui,
                         text,
                         self.desktop.settings_tab == i,
-                        icons[i],
+                        icon,
                         None,
                         false,
                     )
@@ -1155,26 +1156,29 @@ impl App {
                 egui::Stroke::new(1.0_f32, tone.line),
             );
             ui.add_space(18.);
-            egui::ScrollArea::vertical()
-                .id_salt("settings_content")
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    ui.vertical(|ui| {
-                        ui.set_width((ui.available_width() - 12.).clamp(320., 600.));
-                        ui.label(
-                            RichText::new(tabs[self.desktop.settings_tab.min(tabs.len() - 1)])
-                                .size(17.)
-                                .strong(),
-                        );
-                        ui.add_space(14.);
-                        self.settings_page(ui);
-                        if !self.desktop.last_action.is_empty() {
-                            ui.add_space(12.);
-                            ui.colored_label(crate::ui::accent(ui), &self.desktop.last_action);
-                        }
-                    });
-                });
+            self.settings_content(ui, &tabs);
         });
+    }
+    fn settings_content(&mut self, ui: &mut egui::Ui, tabs: &[(&str, crate::icons::Icon)]) {
+        egui::ScrollArea::vertical()
+            .id_salt("settings_content")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.vertical(|ui| {
+                    ui.set_width((ui.available_width() - 12.).clamp(320., 600.));
+                    ui.label(
+                        RichText::new(tabs[self.desktop.settings_tab.min(tabs.len() - 1)].0)
+                            .size(17.)
+                            .strong(),
+                    );
+                    ui.add_space(14.);
+                    self.settings_page(ui);
+                    if !self.desktop.last_action.is_empty() {
+                        ui.add_space(12.);
+                        ui.colored_label(crate::ui::accent(ui), &self.desktop.last_action);
+                    }
+                });
+            });
     }
     fn settings_page(&mut self, ui: &mut egui::Ui) {
         use crate::ui::{caption, hint, segmented, toggle_row};

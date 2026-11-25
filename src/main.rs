@@ -370,11 +370,11 @@ impl App {
             );
         }
     }
-    fn app_tone(&self) -> ui::Tone {
+    fn app_tone(&self, ctx: &egui::Context) -> ui::Tone {
         if self.dark {
             ui::theme_tone(true, self.dark_brighter)
         } else {
-            ui::light_tone(self.light_theme)
+            ui::light_tone(ui::palette_variant(ctx, self.light_theme))
         }
     }
     fn theme_with(&self, ctx: &egui::Context, dark: bool, brighter: bool) {
@@ -745,7 +745,7 @@ impl App {
             builder,
             |ctx, _| {
                 self.theme(ctx);
-                let tone = self.app_tone();
+                let tone = self.app_tone(ctx);
                 egui::CentralPanel::default()
                     .frame(
                         egui::Frame::NONE
@@ -897,7 +897,7 @@ impl App {
         self.desktop.purge_save = None;
     }
     fn main_ui(&mut self, ctx: &egui::Context) {
-        let tone = self.app_tone();
+        let tone = self.app_tone(ctx);
         if self.sidebar {
             let left = ctx.screen_rect().left();
             let edge = left + self.sidebar_width;
@@ -1061,10 +1061,25 @@ impl App {
                 self.sidebar = true;
             }
             let tone = ui::t(ui);
-            let (mark, _) = ui.allocate_exact_size(Vec2::new(4., 22.), egui::Sense::hover());
-            ui.painter().rect_filled(mark, 2., ui::accent(ui));
-            ui.add_space(3.);
-            ui.label(RichText::new(title).size(22.).strong().color(tone.ink));
+            if ui::paper(ui) {
+                let highlight = ui.painter().add(egui::Shape::Noop);
+                let title_rect = ui
+                    .label(RichText::new(title).size(25.).strong().color(tone.ink))
+                    .rect;
+                let underline = egui::Rect::from_min_max(
+                    title_rect.left_bottom() - Vec2::new(1., 9.),
+                    title_rect.right_bottom() + Vec2::new(4., -1.),
+                );
+                ui.painter().set(
+                    highlight,
+                    egui::Shape::rect_filled(underline, 1., ui::MEMO_YELLOW),
+                );
+            } else {
+                let (mark, _) = ui.allocate_exact_size(Vec2::new(4., 22.), egui::Sense::hover());
+                ui.painter().rect_filled(mark, 2., ui::accent(ui));
+                ui.add_space(3.);
+                ui.label(RichText::new(title).size(22.).strong().color(tone.ink));
+            }
             if self.extra.search_mode {
                 ui.add_space(6.);
                 if ui::pill(

@@ -3110,11 +3110,14 @@ pub fn nav_button(
 ) -> egui::Response {
     let tone = crate::ui::t(ui);
     let accent_color = crate::ui::accent(ui);
+    let paper = crate::ui::paper(ui);
     let (rect, r) = ui.allocate_exact_size(
         Vec2::new(
             ui.available_width(),
             if crate::ui::variant(ui) == 2 {
                 36.
+            } else if paper {
+                33.
             } else {
                 30.
             },
@@ -3126,14 +3129,18 @@ pub fn nav_button(
         ui.painter().rect_filled(
             rect.shrink2(Vec2::new(0., 1.)),
             8.,
-            if selected || accent {
+            if paper && accent {
+                tone.ink
+            } else if paper && selected {
+                crate::ui::MEMO_YELLOW
+            } else if selected || accent {
                 tone.accent_soft
             } else {
                 tone.hover
             },
         );
     }
-    if selected {
+    if selected && !paper {
         let marker = Rect::from_min_size(
             rect.left_top() + Vec2::new(0., 7.),
             Vec2::new(
@@ -3147,7 +3154,11 @@ pub fn nav_button(
         );
         ui.painter().rect_filled(marker, 2., accent_color);
     }
-    let highlight = if ui.visuals().dark_mode {
+    let highlight = if paper && accent {
+        crate::ui::MEMO_YELLOW
+    } else if paper {
+        tone.ink
+    } else if ui.visuals().dark_mode {
         Color32::from_rgb(255, 164, 140)
     } else {
         accent_color
