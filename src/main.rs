@@ -17,6 +17,7 @@ mod guide;
 mod guide_stage;
 mod holidays;
 mod icons;
+mod keys;
 mod lists;
 mod magnet;
 mod media;
@@ -30,6 +31,7 @@ mod refinements;
 mod repeat;
 mod schedule;
 mod selection;
+mod shortcut_settings;
 mod storage;
 mod studio;
 mod system;
@@ -168,11 +170,49 @@ struct App {
     completion_edit: String,
     edit_error: String,
     hotkeys: Option<GlobalHotKeyManager>,
-    registered: Vec<HotKey>,
-    shortcuts: [String; 3],
+    /// The global shortcut each action holds now (`shortcut_settings::GLOBAL`).
+    registered: [Option<HotKey>; 4],
+    shortcuts: [String; 4],
+    /// A shortcut being changed in the settings.
+    shortcut_edit: shortcut_settings::Editing,
     /// The search box takes the keyboard on the next frame (search shortcut).
     focus_search: bool,
     hotkey_status: String,
+}
+/// What the theme of a window depends on, for a window drawn while the
+/// program's state is borrowed elsewhere.
+struct Look {
+    dark: bool,
+    brighter: bool,
+    light: usize,
+    font: String,
+    font_size: f32,
+}
+impl Look {
+    fn apply(&self, ctx: &egui::Context) {
+        let selected = egui::FontFamily::Name(self.font.clone().into());
+        let family = if ctx.fonts(|f| f.families().contains(&selected)) {
+            selected
+        } else {
+            egui::FontFamily::Proportional
+        };
+        if self.dark {
+            ui::apply(ctx, true, self.brighter, family, self.font_size * 4. / 3.);
+        } else {
+            ui::apply_light(ctx, self.light, family, self.font_size * 4. / 3.);
+        }
+    }
+    fn tone(&self, ctx: &egui::Context) -> ui::Tone {
+        if self.dark {
+            ui::theme_tone(true, self.brighter)
+        } else {
+            ui::light_tone(ui::palette_variant(ctx, self.light))
+        }
+    }
+    fn apply_tone(&self, ctx: &egui::Context) -> ui::Tone {
+        self.apply(ctx);
+        self.tone(ctx)
+    }
 }
 /// Side of an icon button in the icon-only sidebar.
 const COMPACT_ICON: f32 = 38.;
@@ -336,45 +376,31 @@ impl App {
             completion_edit: String::new(),
             edit_error: String::new(),
             hotkeys: None,
-            registered: vec![],
+            registered: [None; 4],
             shortcuts: [
                 "Ctrl+Alt+N".into(),
                 "Ctrl+Alt+C".into(),
                 "Ctrl+Alt+S".into(),
+                "Alt+V".into(),
             ],
+            shortcut_edit: Default::default(),
             focus_search: false,
             hotkey_status: String::new(),
         }
     }
     fn theme(&self, ctx: &egui::Context) {
-        let selected = egui::FontFamily::Name(self.desktop.font.clone().into());
-        let family = if ctx.fonts(|f| f.families().contains(&selected)) {
-            selected
-        } else {
-            egui::FontFamily::Proportional
-        };
-        if self.dark {
-            ui::apply(
-                ctx,
-                true,
-                self.dark_brighter,
-                family,
-                self.desktop.font_size * 4. / 3.,
-            );
-        } else {
-            ui::apply_light(
-                ctx,
-                self.light_theme,
-                family,
-                self.desktop.font_size * 4. / 3.,
-            );
-        }
+        self.look().apply(ctx);
     }
     fn app_tone(&self, ctx: &egui::Context) -> ui::Tone {
-        if self.dark {
-            ui::theme_tone(true, self.dark_brighter)
-        } else {
-            ui::light_tone(ui::palette_variant(ctx, self.light_theme))
+        self.look().tone(ctx)
+    }
+    fn look(&self) -> Look {
+        Look {
+            dark: self.dark,
+            brighter: self.dark_brighter,
+            light: self.light_theme,
+            font: self.desktop.font.clone(),
+            font_size: self.desktop.font_size,
         }
     }
     fn theme_with(&self, ctx: &egui::Context, dark: bool, brighter: bool) {
@@ -392,23 +418,26 @@ impl App {
             self.desktop.font_size * 4. / 3.,
         );
     }
+    /// Registers every global shortcut on its own: one another program
+    /// holds does not keep the others from working.
     fn apply_shortcuts(&mut self) {
-        let parsed = self
-            .shortcuts
+        let clipboy_on = self.clipboard.clipboy_enabled();
+        let wanted: Vec<(bool, Option<HotKey>)> = (0..self.shortcuts.len())
+            .map(|k| {
+                let on = k != shortcut_settings::CLIPBOY || clipboy_on;
+                let key = keys::Combo::parse(&self.shortcuts[k]).and_then(|c| c.to_hotkey());
+                (on, key)
+            })
+            .collect();
+        self.clipboard.set_clipboy_key(keys::Combo::parse(
+            &self.shortcuts[shortcut_settings::CLIPBOY],
+        ));
+        let ids: Vec<u32> = wanted
             .iter()
-            .map(|s| s.parse::<HotKey>())
-            .collect::<Result<Vec<_>, _>>();
-        let Ok(new) = parsed else {
-            self.hotkey_status = "Ctrl+Alt+N 형식으로 입력하세요".into();
-            return;
-        };
-        if new
-            .iter()
-            .map(|h| h.id())
-            .collect::<std::collections::HashSet<_>>()
-            .len()
-            != new.len()
-        {
+            .filter(|w| w.0)
+            .filter_map(|w| w.1.map(|h| h.id()))
+            .collect();
+        if ids.iter().collect::<std::collections::HashSet<_>>().len() != ids.len() {
             self.hotkey_status = "각 동작에 서로 다른 단축키를 지정하세요".into();
             return;
         }
@@ -416,55 +445,38 @@ impl App {
             self.hotkey_status = "전역 단축키를 시작할 수 없습니다".into();
             return;
         };
-        let old = self.registered.clone();
-        for h in &old {
-            let _ = m.unregister(*h);
+        for h in self.registered.iter_mut().filter_map(Option::take) {
+            let _ = m.unregister(h);
         }
-        self.registered.clear();
-        for h in &new {
-            if let Err(e) = m.register(*h) {
-                for h in &self.registered {
-                    let _ = m.unregister(*h);
-                }
-                self.registered.clear();
-                let mut restored = true;
-                for h in old {
-                    if m.register(h).is_ok() {
-                        self.registered.push(h);
-                    } else {
-                        restored = false;
-                    }
-                }
-                if !restored {
-                    for h in &self.registered {
-                        let _ = m.unregister(*h);
-                    }
-                    self.registered.clear();
-                }
-                self.hotkey_status = if restored {
-                    format!("등록 실패·기존 설정 복구: {e}")
-                } else {
-                    format!("등록 및 복구 실패·단축키 비활성: {e}")
-                };
-                return;
+        let mut failed = vec![];
+        for (k, (on, key)) in wanted.into_iter().enumerate() {
+            if !on {
+                continue;
             }
-            self.registered.push(*h);
+            match key {
+                Some(h) if m.register(h).is_ok() => self.registered[k] = Some(h),
+                _ => failed.push(shortcut_settings::GLOBAL[k]),
+            }
         }
-        self.hotkey_status = "전역 단축키 사용 중 · 앱 실행 중에 동작".into();
+        self.hotkey_status = if failed.is_empty() {
+            "전역 단축키 사용 중 · 앱 실행 중에 동작".into()
+        } else {
+            format!(
+                "{}: 다른 프로그램이 쓰고 있어 동작하지 않아요 · 다른 키로 바꿔 주세요",
+                failed.join(", ")
+            )
+        };
     }
     fn shortcut_label(&self, action: usize) -> String {
-        self.registered
-            .get(action)
-            .map(|h| {
-                h.to_string()
-                    .replace("control+", "Ctrl+")
-                    .replace("alt+", "Alt+")
-                    .replace("shift+", "Shift+")
-                    .replace("super+", "Win+")
-                    .replace("Key", "")
-                    .replace("Digit", "")
-            })
-            .unwrap_or_else(|| "사용 안 함".into())
+        match (
+            self.registered.get(action).copied().flatten(),
+            self.shortcuts
+                .get(action)
+                .and_then(|s| keys::Combo::parse(s)),
+        ) {
+            (Some(_), Some(c)) => c.to_string(),
+            _ => "사용 안 함".into(),
+        }
     }
     fn open_note(&mut self, i: usize) {
         if self.data.notes[i].locked {
@@ -531,7 +543,7 @@ impl App {
 impl Drop for App {
     fn drop(&mut self) {
         if let Some(m) = &self.hotkeys {
-            for h in &self.registered {
+            for h in self.registered.iter().flatten() {
                 let _ = m.unregister(*h);
             }
         }
@@ -579,12 +591,16 @@ impl eframe::App for App {
         // Shortcuts, the tray and a second launch wake the program
         // themselves; the timed wake-up below is only for what is due later.
         for id in wake::take_hotkeys() {
+            let slot = self
+                .registered
+                .iter()
+                .position(|h| h.is_some_and(|h| h.id() == id));
             // Quick memo and new sticker both open a new sticker memo.
-            if self.registered.first().is_some_and(|h| h.id() == id)
-                || self.registered.get(2).is_some_and(|h| h.id() == id)
-            {
+            if slot == Some(0) || slot == Some(2) {
                 self.new_sticker();
-            } else if self.registered.get(1).is_some_and(|h| h.id() == id) {
+            } else if slot == Some(shortcut_settings::CLIPBOY) {
+                self.clipboard.toggle_clipboy(ctx.input(|i| i.time));
+            } else if slot == Some(1) {
                 self.show_calendar();
                 ctx.send_viewport_cmd_to(
                     egui::ViewportId::from_hash_of("calendar"),
@@ -601,6 +617,10 @@ impl eframe::App for App {
             .frame(egui::Frame::NONE)
             .show(ctx, |_| {});
         self.main_window(ctx);
+        self.shortcut_edit_frame();
+        if self.clipboard.take_clipboy_switched() {
+            self.apply_shortcuts();
+        }
         self.calendar_dock(ctx);
         self.daily_today(ctx);
         self.monitor_picker(ctx);
@@ -618,6 +638,9 @@ impl eframe::App for App {
         self.desktop_dialogs(ctx);
         self.check_alarms(ctx);
         self.tray_notice(ctx);
+        let look = self.look();
+        self.clipboard
+            .clipboy_window(ctx, &|c: &egui::Context| look.apply_tone(c));
         // Last: every window has said where its parts are.
         self.tutorial_window(ctx);
         self.keep_prefs();
@@ -700,7 +723,7 @@ impl App {
         self.tray = tray::Tray::default();
         // 2. Global shortcuts.
         if let Some(m) = self.hotkeys.take() {
-            for h in self.registered.drain(..) {
+            for h in self.registered.iter_mut().filter_map(Option::take) {
                 let _ = m.unregister(h);
             }
         }
@@ -837,22 +860,19 @@ impl App {
             self.extra.picker = None;
             self.link_source = None;
         }
-        if ctx.input_mut(|i| {
-            i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::H)
-        }) {
+        use keys::{consume, Action};
+        if ctx.input_mut(|i| consume(i, Action::CloseStickers)) {
             for w in self.studio.windows.values_mut() {
                 w.open = false;
             }
         }
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::P)) {
+        if ctx.input_mut(|i| consume(i, Action::Project)) {
             self.desktop.project_popup = true;
         }
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::F)) {
+        if ctx.input_mut(|i| consume(i, Action::Find)) {
             self.search_shortcut();
         }
-        if ctx.input_mut(|i| {
-            i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::T)
-        }) {
+        if ctx.input_mut(|i| consume(i, Action::Topmost)) {
             let i = self.catalog.selected.unwrap_or(self.active);
             self.data.notes[i].topmost = !self.data.notes[i].topmost;
         }
@@ -1461,7 +1481,7 @@ impl App {
                 ui.add_space(10.);
                 ui::divider(ui);
                 ui.add_space(10.);
-                for (i, name) in ["빠른 메모", "분리 캘린더", "새 스티커", "검색"]
+                for (i, name) in ["빠른 메모", "분리 캘린더", "새 스티커", "클립보이"]
                     .iter()
                     .enumerate()
                 {

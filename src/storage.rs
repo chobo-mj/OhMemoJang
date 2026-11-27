@@ -257,6 +257,8 @@ pub struct SettingsRec {
     /// None means a save made before the light-only themes existed.
     pub light_theme: Option<usize>,
     pub shortcuts: Vec<String>,
+    /// The program's own shortcuts by `keys::Action::id` ("Ctrl+B" ...).
+    pub key_bindings: std::collections::BTreeMap<String, String>,
     pub hide_completed: bool,
     pub hide_locked: bool,
     pub show_preview: bool,
@@ -323,6 +325,7 @@ impl Default for SettingsRec {
             dark_brighter: false,
             light_theme: None,
             shortcuts: vec![],
+            key_bindings: Default::default(),
             hide_completed: false,
             hide_locked: false,
             show_preview: false,
@@ -1008,6 +1011,10 @@ impl App {
         settings.dark_brighter = self.dark_brighter;
         settings.light_theme = Some(self.light_theme.min(2));
         settings.shortcuts = self.shortcuts.to_vec();
+        settings.key_bindings = crate::keys::ACTIONS
+            .iter()
+            .map(|&a| (a.id().to_owned(), crate::keys::combo(a).to_string()))
+            .collect();
         settings.show_done = self.extra.show_done;
         settings.cal_box_color = color(self.cal.box_color);
         settings.cal_box_size = self.cal.box_size;
@@ -1223,10 +1230,17 @@ impl App {
         self.dark = st.dark;
         self.dark_brighter = st.dark_brighter;
         self.light_theme = st.light_theme.filter(|v| *v < 3).unwrap_or(1);
-        for (k, v) in st.shortcuts.iter().enumerate().take(3) {
+        for (k, v) in st.shortcuts.iter().enumerate().take(self.shortcuts.len()) {
             if !v.trim().is_empty() {
                 self.shortcuts[k] = v.clone();
             }
+        }
+        for a in crate::keys::ACTIONS {
+            let saved = st
+                .key_bindings
+                .get(a.id())
+                .and_then(|t| crate::keys::Combo::parse(t));
+            crate::keys::set(a, &saved.unwrap_or_else(|| a.default_combo()));
         }
         self.extra.show_done = st.show_done;
         if st.cal_box_color[3] > 0 {

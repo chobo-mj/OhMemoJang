@@ -2681,31 +2681,28 @@ impl App {
         }
     }
     fn memo_shortcuts(&mut self, ctx: &egui::Context, i: usize, w: &mut Window) {
-        if ctx.input_mut(|v| {
-            v.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::T)
-        }) {
+        use crate::keys::{consume, Action};
+        if ctx.input_mut(|v| consume(v, Action::Topmost)) {
             self.data.notes[i].topmost = !self.data.notes[i].topmost;
         }
-        if ctx.input_mut(|v| {
-            v.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::H)
-        }) {
+        if ctx.input_mut(|v| consume(v, Action::CloseStickers)) {
             w.open = false;
             for other in self.studio.windows.values_mut() {
                 other.open = false;
             }
         }
-        if ctx.input_mut(|v| v.consume_key(egui::Modifiers::CTRL, egui::Key::P)) {
+        if ctx.input_mut(|v| consume(v, Action::Project)) {
             self.desktop.project_popup = true;
             self.desktop.focus_dialog = true;
         }
-        if ctx.input_mut(|v| v.consume_key(egui::Modifiers::CTRL, egui::Key::F)) {
+        if ctx.input_mut(|v| consume(v, Action::Find)) {
             self.catalog.focus_find();
             self.catalog.tab = crate::catalog::ALL_MEMOS_TAB;
             self.page = 4;
             self.main_open = true;
             ctx.send_viewport_cmd_to(main_viewport(), egui::ViewportCommand::Focus);
         }
-        if ctx.input_mut(|v| v.consume_key(egui::Modifiers::CTRL, egui::Key::H)) {
+        if ctx.input_mut(|v| consume(v, Action::Replace)) {
             self.catalog.replace_open = true;
             self.catalog.selected = Some(i);
             self.page = 4;

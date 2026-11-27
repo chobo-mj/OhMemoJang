@@ -666,7 +666,7 @@ impl App {
     fn catalog_find_bar(&mut self, ui: &mut egui::Ui, ids: &[usize]) -> std::rc::Rc<Vec<FindHit>> {
         if ui
             .ctx()
-            .input(|i| i.modifiers.command && !i.modifiers.shift && i.key_pressed(egui::Key::H))
+            .input(|i| crate::keys::pressed(i, crate::keys::Action::Replace))
         {
             self.catalog.replace_open = true;
         }

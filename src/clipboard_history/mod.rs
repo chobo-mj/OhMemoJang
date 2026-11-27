@@ -6,6 +6,7 @@
 //! * `win` (Windows only): hidden windows, the clipboard listener, capture
 //!   and restore. One thread so capture and restore writes are serialized.
 //! * `worker`: validation, previews, SQLite, retention.
+mod clipboy;
 mod formats;
 mod store;
 mod view;
@@ -19,6 +20,7 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, AtomicUsize, Orderin
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+pub use clipboy::note_hotkey;
 pub use store::{ItemMeta, Policy, Query};
 
 /// Raw bytes of one capture, waiting for the storage worker.
@@ -140,7 +142,15 @@ pub enum Cmd {
         req: u64,
         query: Query,
     },
+    /// The newest items for 클립보이.
+    ListClipboy {
+        req: u64,
+    },
     Thumb(i64),
+    /// The first cells of a table item.
+    Grid(i64),
+    /// A text item made without copying (the tutorial's practice item).
+    Sample(String),
     Detail(i64),
     /// Enlarged image preview (decoded on demand).
     Full(i64),
@@ -151,6 +161,10 @@ pub enum Cmd {
     Delete(i64),
     DeleteBefore(i64),
     DeleteAll {
+        watermark: u64,
+    },
+    /// 클립보이's 전체비우기: pinned and commented items stay.
+    ClearUnprotected {
         watermark: u64,
     },
     Policy {
@@ -177,10 +191,18 @@ pub enum Event {
         has_more: bool,
         append: bool,
     },
+    ClipboyList {
+        req: u64,
+        items: Vec<ItemMeta>,
+    },
     Thumb {
         id: i64,
         size: [usize; 2],
         rgba: Vec<u8>,
+    },
+    Grid {
+        id: i64,
+        cells: Vec<Vec<String>>,
     },
     Detail {
         id: i64,
@@ -219,6 +241,8 @@ pub struct Settings {
     pub period_limit: bool,
     pub retention_days: u32,
     pub ignore_own_copy: bool,
+    /// 클립보이 opens with its global shortcut.
+    pub clipboy: bool,
 }
 
 impl Default for Settings {
@@ -231,6 +255,7 @@ impl Default for Settings {
             period_limit: true,
             retention_days: 30,
             ignore_own_copy: true,
+            clipboy: true,
         }
     }
 }
@@ -266,6 +291,7 @@ max_items={}
 period_limit={}
 retention_days={}
 ignore_own_copy={}
+clipboy={}
 default_on=1
 ",
             self.enabled,
@@ -274,7 +300,8 @@ default_on=1
             self.max_items,
             self.period_limit,
             self.retention_days,
-            self.ignore_own_copy
+            self.ignore_own_copy,
+            self.clipboy
         )
     }
     pub fn from_text(text: &str) -> Self {
@@ -305,6 +332,7 @@ default_on=1
                         .unwrap_or(s.retention_days)
                 }
                 "ignore_own_copy" => s.ignore_own_copy = v != "false",
+                "clipboy" => s.clipboy = v != "false",
                 "default_on" => default_on = true,
                 _ => {}
             }
@@ -388,6 +416,8 @@ pub struct ClipboardHistory {
     search_focused: bool,
     /// Comments being typed, by item (saved when the box loses focus).
     comment_drafts: HashMap<i64, String>,
+    /// The 클립보이 popup.
+    boy: clipboy::Clipboy,
 }
 
 impl ClipboardHistory {
@@ -529,10 +559,13 @@ impl ClipboardHistory {
                         }
                     }
                 }
+                Event::ClipboyList { req, items } => self.boy.listed(req, items),
+                Event::Grid { id, cells } => self.boy.grid(id, cells),
                 Event::Thumb { id, size, rgba } => {
                     let img = egui::ColorImage::from_rgba_unmultiplied(size, &rgba);
                     let tex =
                         ctx.load_texture(format!("clip{id}"), img, egui::TextureOptions::LINEAR);
+                    self.boy.thumb(id, &tex);
                     self.textures.insert(id, tex);
                 }
                 Event::Detail { id, text, table } => {
@@ -551,9 +584,13 @@ impl ClipboardHistory {
                         self.full = Some((id, tex));
                     }
                 }
-                Event::Changed => self.needs_refresh = true,
+                Event::Changed => {
+                    self.needs_refresh = true;
+                    self.boy.stale = true;
+                }
                 Event::Stats { count, bytes } => self.stats = (count, bytes),
                 Event::Restored { outcome } => {
+                    self.boy.restored(&outcome, ctx.input(|i| i.time));
                     let msg = match outcome {
                         RestoreOutcome::Full => "복사됨 — 붙여넣을 곳에서 Ctrl+V".to_owned(),
                         RestoreOutcome::Partial(done) => {
@@ -630,6 +667,7 @@ mod tests {
             period_limit: false,
             retention_days: 90,
             ignore_own_copy: false,
+            clipboy: false,
         };
         assert_eq!(Settings::from_text(&s.to_text()), s);
         let bad = Settings::from_text("max_items=7\nretention_days=x\nenabled=true\nzzz");
@@ -638,6 +676,9 @@ mod tests {
         assert_eq!(s.policy().retention_days, 0);
         assert!(s.policy().max_items > 1_000_000);
         assert!(Settings::default().collecting(), "on by default");
+        assert!(Settings::default().clipboy, "클립보이 on by default");
+        // A settings file from before 클립보이 leaves it on.
+        assert!(Settings::from_text("enabled=true\ndefault_on=1").clipboy);
     }
 
     #[test]

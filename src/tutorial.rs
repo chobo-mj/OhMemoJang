@@ -49,6 +49,8 @@ pub enum Spot {
     NavClipboard,
     /// The 클립보드 히스토리 page.
     Clipboard,
+    /// The 클립보이 window.
+    Clipboy,
 }
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -118,6 +120,8 @@ const DOCK_DEADLINE_TITLE: &str = "분리창 연습 · 계약서 회신";
 const DRAG_TITLE: &str = "드래그 연습 · 회의 준비";
 const DEADLINE_TITLE: &str = "드래그 연습 · 보고서 제출";
 const ARRANGE_TITLES: [&str; 3] = ["정렬 연습 · 하나", "정렬 연습 · 둘", "정렬 연습 · 셋"];
+/// Put in the clipboard history for the 클립보이 step, pasted by the user.
+const CLIPBOY_SAMPLE: &str = "클립보이 연습 · 붙여넣기 성공!";
 
 /// What a step is about (also picks its mini demo).
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -135,6 +139,7 @@ enum K {
     Complete,
     Journal,
     Clipboard,
+    Clipboy,
     Detach,
     DockDrag,
     DockShift,
@@ -237,6 +242,12 @@ const STEPS: &[Step] = &[
         title: "클립보드 히스토리",
         text: "Ctrl+C로 복사한 글·링크·표·이미지가 ‘클립보드 히스토리’에 저절로 모여요. 항목을 한 번 누르면 다시 복사되니 Ctrl+V로 붙여 넣으면 돼요. 위쪽 검색과 필터로 찾고, 압정을 누르면 맨 위에 고정돼요. 비밀번호처럼 민감한 걸 복사할 땐 ‘일시 중지’를 눌러요.",
         todo: "왼쪽 메뉴의 ‘클립보드 히스토리’를 눌러 보세요.",
+    },
+    Step {
+        key: K::Clipboy,
+        title: "클립보이로 바로 붙여 넣기",
+        text: "Alt+V를 누르면 최근에 복사한 100개를 담은 ‘클립보이’가 커서 옆에 떠요. 항목을 누르면 지금 커서 자리에 바로 붙여 넣어지고, ‘복사’는 클립보드에만 담아요. 위쪽 압정을 꽂으면 다른 곳을 눌러도 닫히지 않고, ‘전체비우기’는 압정·코멘트 항목만 남겨요.",
+        todo: "연습 스티커 본문 끝을 누르고 Alt+V → ‘클립보이 연습 · 붙여넣기 성공!’을 눌러 보세요.",
     },
     Step {
         key: K::Detach,
@@ -511,6 +522,10 @@ impl App {
             }
             K::Complete => self.show_main_page(ctx, 0),
             K::Journal | K::Clipboard => {}
+            K::Clipboy => {
+                self.clipboard.clipboy_sample(CLIPBOY_SAMPLE);
+                self.open_role(ctx, Role::Practice, true);
+            }
             K::Detach => {
                 self.extra.utilities_tab = 0;
                 self.show_main_page(ctx, 5);
@@ -575,6 +590,7 @@ impl App {
             K::Complete => note(Role::Complete).is_some_and(|c| c.done),
             K::Journal => self.page == 6 && self.extra.utilities_tab == 0 && !self.settings,
             K::Clipboard => self.page == 7 && !self.settings,
+            K::Clipboy => practice.is_some_and(|p| p.body.contains(CLIPBOY_SAMPLE)),
             K::Detach => self.cal.state != crate::calendar_dock::DockState::Hidden,
             K::DockDrag => note(Role::DockDrag).is_some_and(|d| d.date.is_some() && !d.deadline),
             K::DockShift => {
@@ -637,6 +653,10 @@ impl App {
             K::Complete => vec![Spot::List],
             K::Journal => vec![Spot::NavUtilities, Spot::Utilities],
             K::Clipboard => vec![Spot::NavClipboard, Spot::Clipboard],
+            K::Clipboy => note(Role::Practice)
+                .into_iter()
+                .chain([Spot::Clipboy])
+                .collect(),
             K::Detach => vec![Spot::Detach],
             K::DockDrag => note(Role::DockDrag)
                 .into_iter()
@@ -1475,6 +1495,7 @@ fn draw_demo(ui: &mut egui::Ui, demo: K, now: f64) {
         }
         K::Range => range_demo(&p, rect, t),
         K::Clipboard => clipboard_demo(&p, rect, t),
+        K::Clipboy => clipboy_demo(&p, rect, t),
         K::Filter => filter_demo(&p, rect, t),
         K::Complete => complete_demo(&p, rect, t),
         K::Journal => journal_demo(&p, rect, t),
@@ -1919,6 +1940,80 @@ fn clipboard_demo(p: &egui::Painter, rect: egui::Rect, t: f64) {
                 crate::ui::ACCENT,
             );
         }
+    }
+}
+
+/// Alt+V by a memo, 클립보이 opens beside it, a click pastes at the cursor.
+fn clipboy_demo(p: &egui::Painter, rect: egui::Rect, t: f64) {
+    let memo = egui::Rect::from_min_size(rect.min + Vec2::new(14., 22.), Vec2::new(130., 74.));
+    p.rect_filled(memo, 6., PAPER);
+    text(p, memo.min + Vec2::new(8., 8.), "장보기 목록", 11., INK);
+    let pasted = t > 3.2;
+    let line = if pasted {
+        "클립보이 연습 · 성공!"
+    } else {
+        ""
+    };
+    let typed = text(p, memo.min + Vec2::new(8., 30.), line, 10., INK);
+    caret(p, typed, t);
+    if (0.4..1.4).contains(&t) {
+        let key =
+            egui::Rect::from_min_size(memo.left_bottom() + Vec2::new(0., 8.), Vec2::new(46., 22.));
+        p.rect_filled(key, 4., INK);
+        p.text(
+            key.center(),
+            egui::Align2::CENTER_CENTER,
+            "Alt+V",
+            font(11.),
+            Color32::WHITE,
+        );
+    }
+    if !(1.2..3.4).contains(&t) {
+        return;
+    }
+    let k = ease((t - 1.2) / 0.4);
+    let panel = egui::Rect::from_min_max(
+        egui::pos2(memo.right() + 14., rect.top() + 14.),
+        egui::pos2(rect.right() - 14., rect.bottom() - 10.),
+    );
+    p.rect_filled(panel, 6., Color32::WHITE.gamma_multiply(k));
+    text(
+        p,
+        panel.min + Vec2::new(8., 5.),
+        "클립보이 (3/100)",
+        9.,
+        SOFT.gamma_multiply(k),
+    );
+    for (r, s) in [
+        "클립보이 연습 · 붙여…",
+        "https://example.com",
+        "3분기 매출 표",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let row = egui::Rect::from_min_size(
+            panel.min + Vec2::new(6., 22. + r as f32 * 24.),
+            Vec2::new(panel.width() - 12., 22.),
+        );
+        if r == 0 && t > 2.4 {
+            p.rect_filled(row, 4., crate::ui::ACCENT.gamma_multiply(0.25 * k));
+        }
+        p.rect_filled(
+            egui::Rect::from_min_size(row.min + Vec2::new(2., 3.), Vec2::splat(16.)),
+            3.,
+            Color32::from_gray(230).gamma_multiply(k),
+        );
+        text(
+            p,
+            row.min + Vec2::new(24., 4.),
+            s,
+            10.,
+            INK.gamma_multiply(k),
+        );
+    }
+    if t > 1.9 {
+        cursor(p, panel.min + Vec2::new(70., 36.));
     }
 }
 
@@ -2372,6 +2467,8 @@ mod tests {
         assert!(at(K::DockShift) < at(K::Range));
         assert!(at(K::Range) < at(K::Stand));
         assert!(at(K::Journal) < at(K::Clipboard));
+        assert!(at(K::Clipboard) < at(K::Clipboy));
+        assert!(at(K::Clipboy) < at(K::Detach));
         let today = Local::now().date_naive();
         a.tutorial_live.notes_at = a.data.notes.len();
         assert!(!a.step_done(at(K::DockDrag)));
@@ -2404,6 +2501,12 @@ mod tests {
         a.settings = true;
         assert!(!a.step_done(at(K::Clipboard)));
         assert!(!STEPS[at(K::Clipboard)].auto());
+        // Pasted from 클립보이 into the practice memo: done by itself.
+        assert!(!a.step_done(at(K::Clipboy)));
+        let p = a.role(Role::Practice).unwrap();
+        a.data.notes[p].body.push_str(CLIPBOY_SAMPLE);
+        assert!(a.step_done(at(K::Clipboy)));
+        assert!(STEPS[at(K::Clipboy)].auto());
         assert!(STEPS[at(K::Range)].auto());
     }
     #[test]

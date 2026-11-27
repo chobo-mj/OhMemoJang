@@ -159,6 +159,20 @@ impl Worker {
         match cmd {
             Cmd::CaptureReady => self.drain(),
             Cmd::List { req, query } => self.list(req, query),
+            Cmd::ListClipboy { req } => {
+                let items = match &self.store {
+                    Some(s) => s
+                        .list(&Query {
+                            limit: super::clipboy::MAX_ITEMS,
+                            ..Default::default()
+                        })
+                        .unwrap_or_default(),
+                    None => vec![],
+                };
+                self.emit(Event::ClipboyList { req, items });
+            }
+            Cmd::Grid(id) => self.grid(id),
+            Cmd::Sample(text) => self.sample(&text),
             Cmd::Thumb(id) => self.thumb(id),
             Cmd::Detail(id) => self.detail(id),
             Cmd::Full(id) => self.full(id),
@@ -188,6 +202,15 @@ impl Worker {
                 self.shared.pending().retain(|r| r.captured_ms >= ms);
                 if let Some(s) = &mut self.store {
                     let _ = s.delete_before(ms);
+                }
+                self.after_delete();
+            }
+            Cmd::ClearUnprotected { watermark } => {
+                self.shared.epoch.fetch_add(1, Relaxed);
+                self.watermark = self.watermark.max(watermark);
+                self.shared.pending().clear();
+                if let Some(s) = &mut self.store {
+                    let _ = s.delete_unprotected();
                 }
                 self.after_delete();
             }
@@ -337,6 +360,56 @@ impl Worker {
             });
         let text = text_full.map(|t| t.chars().take(20_000).collect());
         self.emit(Event::Detail { id, text, table });
+    }
+
+    /// The top left of a copied table, for the small picture in 클립보이.
+    fn grid(&mut self, id: i64) {
+        let Some(s) = &self.store else { return };
+        let cells = s
+            .preview(id, "table")
+            .ok()
+            .flatten()
+            .and_then(|b| serde_json::from_slice::<Vec<Vec<String>>>(&b).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .take(4)
+            .map(|row| {
+                row.into_iter()
+                    .take(4)
+                    .map(|c| c.chars().take(6).collect())
+                    .collect()
+            })
+            .collect();
+        self.emit(Event::Grid { id, cells });
+    }
+
+    /// Stores `text` as if it had been copied (the tutorial's practice item),
+    /// whether or not collection is on.
+    fn sample(&mut self, text: &str) {
+        let raw = Raw {
+            seq: 0,
+            generation: 0,
+            captured_ms: now_ms(),
+            reduced: false,
+            formats: vec![(K_TEXT, string_to_utf16le(text))],
+        };
+        let (Some(item), Some(store)) = (build_item(raw), &mut self.store) else {
+            return;
+        };
+        if store
+            .insert_unless_repeat(
+                &item,
+                &Policy {
+                    retention_days: 0,
+                    ..self.policy
+                },
+                now_ms(),
+            )
+            .is_ok()
+        {
+            self.stats();
+            self.emit(Event::Changed);
+        }
     }
 
     /// Decodes the stored image once, scaled to the preview size.

@@ -438,6 +438,11 @@ impl Store {
         self.conn
             .execute("DELETE FROM items WHERE captured_at<?1", [ms])
     }
+    /// Clears the history except pinned items and items with a comment.
+    pub fn delete_unprotected(&mut self) -> rusqlite::Result<usize> {
+        self.conn
+            .execute("DELETE FROM items WHERE pinned=0 AND trim(comment)=''", [])
+    }
     pub fn delete_all(&mut self) -> rusqlite::Result<usize> {
         let n = self.conn.execute("DELETE FROM items", [])?;
         let _ = self.conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
@@ -789,6 +794,23 @@ mod tests {
             .unwrap();
         assert_eq!(got.len(), 1);
         assert!(got[0].comment.is_empty() && !got[0].pinned);
+    }
+
+    #[test]
+    fn clearing_keeps_pinned_and_commented_items() {
+        let mut s = Store::memory();
+        let p = Policy {
+            retention_days: 0,
+            ..Default::default()
+        };
+        for k in 1..=4 {
+            s.insert(&item(k, &format!("t{k}"), 1), &p, 10).unwrap();
+        }
+        s.set_pinned(1, true).unwrap();
+        s.set_comment(2, "보관").unwrap();
+        s.set_comment(3, "   ").unwrap();
+        assert_eq!(s.delete_unprotected().unwrap(), 2);
+        assert_eq!(ids(&s), vec![1, 2]);
     }
 
     #[test]

@@ -1582,8 +1582,13 @@ fn content_impl(
     let editing = focused || hover;
     doc.editing = editing;
     if focused && !doc.ime && !had_preedit {
-        for (key, kind) in [(Key::B, 0), (Key::I, 1), (Key::U, 2)] {
-            if ui.input_mut(|i| i.consume_key(Modifiers::CTRL, key)) {
+        use crate::keys::Action;
+        for (action, kind) in [
+            (Action::Bold, 0),
+            (Action::Italic, 1),
+            (Action::Underline, 2),
+        ] {
+            if ui.input_mut(|i| crate::keys::consume(i, action)) {
                 doc.toggle_format(kind);
             }
         }
@@ -1632,9 +1637,8 @@ fn content_impl(
         }
         let outdent = ui.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::Tab));
         let indent = ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Tab));
-        let stamp =
-            ui.input_mut(|i| i.consume_key(Modifiers::CTRL | Modifiers::SHIFT, Key::Semicolon));
-        let date = !stamp && ui.input_mut(|i| i.consume_key(Modifiers::CTRL, Key::Semicolon));
+        let stamp = ui.input_mut(|i| crate::keys::consume(i, crate::keys::Action::DateTime));
+        let date = !stamp && ui.input_mut(|i| crate::keys::consume(i, crate::keys::Action::Date));
         if outdent || indent || date || stamp {
             let text = &mut doc.tabs[doc.active].body;
             let insert = if indent {

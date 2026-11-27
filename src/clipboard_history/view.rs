@@ -167,9 +167,12 @@ impl ClipboardHistory {
                      인터넷으로 전송하지 않으며, 언제든 일시 중지하거나 전체 삭제할 수 있습니다.",
                 );
                 ui.add_space(8.0);
-                if ui::primary(ui, "수집 시작").clicked() {
-                    self.set_state(true, false);
-                }
+                ui.horizontal(|ui| {
+                    if ui::primary(ui, "수집 시작").clicked() {
+                        self.set_state(true, false);
+                    }
+                    self.clipboy_switch(ui);
+                });
             });
             ui.add_space(6.0);
         } else {
@@ -211,6 +214,7 @@ impl ClipboardHistory {
                     if ui.button("수집 끄기").clicked() {
                         self.set_state(false, false);
                     }
+                    self.clipboy_switch(ui);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if crate::icons::toggle_icon(
                             ui,

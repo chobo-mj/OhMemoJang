@@ -1666,65 +1666,7 @@ impl App {
                     crate::system::alert_sound();
                 }
             }
-            5 => {
-                settings_group(ui, "전역 단축키", |ui| {
-                    hint(ui, "다른 프로그램을 쓰는 중에도 동작합니다");
-                    ui.add_space(4.);
-                    for (i, name) in ["빠른 메모", "캘린더 분리창", "새 스티커 메모"]
-                        .iter()
-                        .enumerate()
-                    {
-                        crate::ui::field(ui, name, |ui| {
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.shortcuts[i])
-                                    .desired_width(200.)
-                                    .margin(egui::Margin::symmetric(8, 5)),
-                            );
-                        });
-                    }
-                    ui.horizontal(|ui| {
-                        if crate::ui::primary(ui, "단축키 적용").clicked() {
-                            self.apply_shortcuts();
-                        }
-                        hint(ui, &self.hotkey_status);
-                    });
-                    hint(ui, "예: Ctrl+Alt+N · 충돌하면 기존 설정으로 복구됩니다");
-                });
-                ui.add_space(14.);
-                settings_group(ui, "메모 본문영역 서식 단축키", |ui| {
-                    for (key, label) in [
-                        ("Ctrl+B / I / U", "굵게 / 기울임 / 밑줄"),
-                        ("~~ Space", "직전 단어 취소선"),
-                        ("~~~ Space", "한 줄 전체 취소선"),
-                        ("[] Space", "체크박스 넣기"),
-                        ("Ctrl+;", "날짜 넣기"),
-                        ("Ctrl+Shift+;", "날짜와 시간 넣기"),
-                        ("#이름 Space", "본문 첫 줄에서 프로젝트 지정"),
-                    ] {
-                        crate::ui::field(ui, label, |ui| {
-                            ui.label(key);
-                        });
-                    }
-                });
-                ui.add_space(14.);
-                settings_group(ui, "프로그램 사용 중", |ui| {
-                    let tone = crate::ui::t(ui);
-                    for (key, label) in [
-                        ("Ctrl+Shift+H", "모든 스티커 닫기"),
-                        ("Shift+드래그", "날짜에 이날까지 업무 추가 (선택창 생략)"),
-                        ("Ctrl+T", "항상 위에 켜기/끄기"),
-                        ("Ctrl+F", "빠른 검색"),
-                        ("Ctrl+H", "찾아 바꾸기"),
-                        ("Ctrl+P", "프로젝트 선택"),
-                        ("Esc Esc", "메모 닫기"),
-                    ] {
-                        ui.horizontal(|ui| {
-                            ui.add_sized([180., 22.], egui::Label::new(RichText::new(label)));
-                            crate::ui::chip(ui, key, tone.field, tone.muted);
-                        });
-                    }
-                });
-            }
+            5 => self.shortcut_settings(ui),
             6 => {
                 section(ui, "데이터 위치");
                 ui.horizontal(|ui| {
@@ -1816,7 +1758,7 @@ impl App {
 }
 /// A titled box around one group of settings: a clearly readable heading and
 /// a visible outline, as wide as the page.
-fn settings_group(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
+pub(crate) fn settings_group(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
     let tone = crate::ui::t(ui);
     let width = ui.available_width();
     egui::Frame::NONE

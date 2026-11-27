@@ -24,6 +24,8 @@ pub fn watch_hotkeys() {
     std::thread::spawn(|| {
         while let Ok(e) = GlobalHotKeyEvent::receiver().recv() {
             if e.state == HotKeyState::Pressed {
+                // Right away, while the keys are still down.
+                crate::clipboard_history::note_hotkey();
                 HOTKEYS.lock().unwrap_or_else(|e| e.into_inner()).push(e.id);
                 now();
             }
