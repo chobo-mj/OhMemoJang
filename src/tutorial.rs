@@ -527,6 +527,8 @@ impl App {
                 self.open_role(ctx, Role::Practice, true);
             }
             K::Detach => {
+                // Left open by the 클립보이 step.
+                self.close_role(Role::Practice);
                 self.extra.utilities_tab = 0;
                 self.show_main_page(ctx, 5);
             }
