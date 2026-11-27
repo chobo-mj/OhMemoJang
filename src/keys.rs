@@ -368,23 +368,47 @@ pub enum Recorded {
     Unsupported,
 }
 
-pub use rec::Recorder;
+pub use rec::{recorder_parent, run_recorder, Recorder};
+
+/// The line the recorder writes for what it saw, and back.
+fn recorded_line(r: &Recorded) -> String {
+    match r {
+        Recorded::Combo(c) => format!("combo {c}"),
+        Recorded::Cancel => "cancel".into(),
+        Recorded::Unsupported => "unsupported".into(),
+    }
+}
+
+fn parse_recorded(line: &str) -> Option<Recorded> {
+    match line.trim() {
+        "cancel" => Some(Recorded::Cancel),
+        "unsupported" => Some(Recorded::Unsupported),
+        l => l
+            .strip_prefix("combo ")
+            .and_then(Combo::parse)
+            .map(Recorded::Combo),
+    }
+}
 
 /// Takes key presses while one of the program's windows is in front, before
 /// Windows' own shortcuts and other programs' global shortcuts see them, so
 /// any combination can be pressed and checked. Nothing pressed reaches a
 /// program while it records.
+///
+/// The keyboard hook runs in a second copy of the program started for it:
+/// Windows does not call a process's own low-level hook for keys going to
+/// that process's window in front, which is where the user presses them.
 #[cfg(windows)]
 mod rec {
-    use super::{Combo, Recorded};
+    use super::{parse_recorded, recorded_line, Combo, Recorded};
     use eframe::egui;
     use std::cell::RefCell;
     use std::collections::HashSet;
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::io::{BufRead, Read, Write};
     use std::sync::{Arc, Mutex};
     use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-    use windows_sys::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
+    use windows_sys::Win32::System::Threading::GetCurrentThreadId;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, GetForegroundWindow, GetMessageW, GetWindowThreadProcessId, KillTimer,
         PeekMessageW, PostThreadMessageW, SetTimer, SetWindowsHookExW, UnhookWindowsHookEx,
@@ -392,17 +416,22 @@ mod rec {
         WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER,
     };
 
+    /// Starts the program as the recorder for the copy with this process id.
+    const ARG: &str = "--shortcut-recorder";
     const WM_STOP: u32 = WM_APP + 0x51;
-    /// A combination was taken: the program is woken from the thread's
-    /// loop, not from the hook.
+    /// A combination was taken: written out from the thread's loop, not
+    /// from the hook.
     const WM_GOT: u32 = WM_APP + 0x52;
 
     struct Hook {
-        out: Arc<Mutex<Option<Recorded>>>,
+        /// The program the keys are recorded for.
+        parent: u32,
         /// Modifier keys held: Win, Ctrl, Alt, Shift.
         held: [bool; 4],
         /// Keys whose press was taken: their release is taken too.
         taken: HashSet<u32>,
+        /// What was seen, waiting to be written out.
+        seen: Vec<Recorded>,
     }
 
     thread_local! {
@@ -419,14 +448,14 @@ mod rec {
         }
     }
 
-    unsafe fn ours_in_front() -> bool {
+    unsafe fn in_front(process: u32) -> bool {
         let mut pid = 0;
         GetWindowThreadProcessId(GetForegroundWindow(), &mut pid);
-        pid == GetCurrentProcessId()
+        pid == process
     }
 
-    /// Short, and never waiting on the program: Windows drops a low-level
-    /// hook that answers too slowly (and lets that key through).
+    /// Short, and never waiting on anything: Windows drops a low-level hook
+    /// that answers too slowly (and lets that key through).
     unsafe extern "system" fn hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
         if code >= 0 {
             let k = &*(l as *const KBDLLHOOKSTRUCT);
@@ -448,7 +477,7 @@ mod rec {
                     }
                     return h.taken.remove(&vk);
                 }
-                if !down || own || !ours_in_front() {
+                if !down || own || !in_front(h.parent) {
                     return false;
                 }
                 h.taken.insert(vk);
@@ -457,13 +486,13 @@ mod rec {
                     return true;
                 }
                 let [win, ctrl, alt, shift] = h.held;
-                let got = if vk == 0x1B && !(win || ctrl || alt || shift) {
-                    Recorded::Cancel
-                } else {
-                    Combo::from_vk(vk, win, ctrl, alt, shift)
-                        .map_or(Recorded::Unsupported, Recorded::Combo)
-                };
-                *h.out.lock().unwrap_or_else(|e| e.into_inner()) = Some(got);
+                h.seen
+                    .push(if vk == 0x1B && !(win || ctrl || alt || shift) {
+                        Recorded::Cancel
+                    } else {
+                        Combo::from_vk(vk, win, ctrl, alt, shift)
+                            .map_or(Recorded::Unsupported, Recorded::Combo)
+                    });
                 PostThreadMessageW(GetCurrentThreadId(), WM_GOT, 0, 0);
                 true
             });
@@ -474,73 +503,146 @@ mod rec {
         CallNextHookEx(std::ptr::null_mut(), code, w, l)
     }
 
+    /// The process id given with the recorder argument, if this copy was
+    /// started as a recorder.
+    pub fn recorder_parent() -> Option<u32> {
+        let mut args = std::env::args().skip(1);
+        (args.next()? == ARG).then(|| args.next()?.parse().ok())?
+    }
+
+    /// The recorder copy: writes a line for each combination pressed while
+    /// the program `parent` is in front, until its input is closed.
+    pub fn run_recorder(parent: u32) {
+        let mut out = std::io::stdout();
+        // SAFETY: the thread owns its hook and message loop.
+        unsafe {
+            let main = GetCurrentThreadId();
+            let mut msg: MSG = std::mem::zeroed();
+            PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_NOREMOVE);
+            // The program closes the input to stop it (or ended).
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 64];
+                let mut input = std::io::stdin();
+                while matches!(input.read(&mut buf), Ok(n) if n > 0) {}
+                PostThreadMessageW(main, WM_STOP, 0, 0);
+            });
+            HOOK.with(|h| {
+                *h.borrow_mut() = Some(Hook {
+                    parent,
+                    held: [false; 4],
+                    taken: HashSet::new(),
+                    seen: vec![],
+                })
+            });
+            let hhook = SetWindowsHookExW(
+                WH_KEYBOARD_LL,
+                Some(hook),
+                GetModuleHandleW(std::ptr::null()),
+                0,
+            );
+            let _ = writeln!(out, "{}", if hhook.is_null() { "failed" } else { "ready" });
+            let _ = out.flush();
+            if hhook.is_null() {
+                return;
+            }
+            // After the stop, the releases of the keys taken are still taken
+            // (a second at most), so no program sees a key let go that it
+            // never saw pressed.
+            let mut stopping = false;
+            loop {
+                let left = HOOK.with(|h| h.borrow().as_ref().map_or(0, |h| h.taken.len()));
+                if stopping && left == 0 {
+                    break;
+                }
+                if GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) <= 0 {
+                    break;
+                }
+                match msg.message {
+                    WM_GOT => {
+                        let seen = HOOK.with(|h| {
+                            h.borrow_mut()
+                                .as_mut()
+                                .map(|h| std::mem::take(&mut h.seen))
+                                .unwrap_or_default()
+                        });
+                        for r in seen {
+                            let _ = writeln!(out, "{}", recorded_line(&r));
+                        }
+                        let _ = out.flush();
+                    }
+                    WM_STOP if !stopping => {
+                        stopping = true;
+                        SetTimer(std::ptr::null_mut(), 0, 1000, None);
+                    }
+                    WM_TIMER if stopping => {
+                        KillTimer(std::ptr::null_mut(), msg.wParam);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            UnhookWindowsHookEx(hhook);
+        }
+    }
+
     pub struct Recorder {
         out: Arc<Mutex<Option<Recorded>>>,
-        thread: Arc<AtomicU32>,
+        child: Option<std::process::Child>,
     }
 
     impl Recorder {
         pub fn start(ctx: &egui::Context) -> Option<Self> {
-            let out = Arc::new(Mutex::new(None));
-            let thread = Arc::new(AtomicU32::new(0));
-            let (ready, started) = std::sync::mpsc::sync_channel(1);
-            let (hook_out, hook_thread, ctx) = (out.clone(), thread.clone(), ctx.clone());
-            std::thread::Builder::new()
-                .name("shortcut-recorder".into())
-                .spawn(move || unsafe {
-                    let mut msg: MSG = std::mem::zeroed();
-                    PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_NOREMOVE);
-                    HOOK.with(|h| {
-                        *h.borrow_mut() = Some(Hook {
-                            out: hook_out,
-                            held: [false; 4],
-                            taken: HashSet::new(),
-                        })
-                    });
-                    let hhook = SetWindowsHookExW(
-                        WH_KEYBOARD_LL,
-                        Some(hook),
-                        GetModuleHandleW(std::ptr::null()),
-                        0,
-                    );
-                    if hhook.is_null() {
-                        let _ = ready.send(false);
-                        return;
-                    }
-                    hook_thread.store(GetCurrentThreadId(), Ordering::SeqCst);
-                    let _ = ready.send(true);
-                    // After the stop request, keep taking the releases of the
-                    // keys taken (a second at most), so no program sees a
-                    // key let go that it never saw pressed.
-                    let mut stopping = false;
-                    loop {
-                        let left = HOOK.with(|h| h.borrow().as_ref().map_or(0, |h| h.taken.len()));
-                        if stopping && left == 0 {
-                            break;
-                        }
-                        if GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) <= 0 {
-                            break;
-                        }
-                        match msg.message {
-                            WM_GOT => ctx.request_repaint_of(egui::ViewportId::ROOT),
-                            WM_STOP if !stopping => {
-                                stopping = true;
-                                SetTimer(std::ptr::null_mut(), 0, 1000, None);
-                            }
-                            WM_TIMER if stopping => {
-                                KillTimer(std::ptr::null_mut(), msg.wParam);
-                                break;
-                            }
-                            _ => {}
-                        }
-                    }
-                    UnhookWindowsHookEx(hhook);
-                    HOOK.with(|h| *h.borrow_mut() = None);
-                })
+            use std::os::windows::process::CommandExt;
+            use std::process::{Command, Stdio};
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            let mut child = Command::new(std::env::current_exe().ok()?)
+                .arg(ARG)
+                .arg(std::process::id().to_string())
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn()
                 .ok()?;
-            match started.recv_timeout(std::time::Duration::from_secs(1)) {
-                Ok(true) => Some(Self { out, thread }),
-                _ => None,
+            let Some(lines) = child.stdout.take() else {
+                let _ = child.kill();
+                return None;
+            };
+            let out = Arc::new(Mutex::new(None));
+            let (ready, started) = std::sync::mpsc::sync_channel(1);
+            let (seen, ctx) = (out.clone(), ctx.clone());
+            std::thread::spawn(move || {
+                for line in std::io::BufReader::new(lines).lines() {
+                    let Ok(line) = line else { break };
+                    match line.trim() {
+                        "ready" => {
+                            let _ = ready.try_send(true);
+                        }
+                        "failed" => {
+                            let _ = ready.try_send(false);
+                        }
+                        l => {
+                            if let Some(r) = parse_recorded(l) {
+                                *seen.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
+                                ctx.request_repaint_of(egui::ViewportId::ROOT);
+                            }
+                        }
+                    }
+                }
+            });
+            let mut me = Self {
+                out,
+                child: Some(child),
+            };
+            match started.recv_timeout(std::time::Duration::from_secs(3)) {
+                Ok(true) => Some(me),
+                _ => {
+                    if let Some(mut c) = me.child.take() {
+                        let _ = c.kill();
+                        let _ = c.wait();
+                    }
+                    None
+                }
             }
         }
 
@@ -552,13 +654,21 @@ mod rec {
 
     impl Drop for Recorder {
         fn drop(&mut self) {
-            let id = self.thread.load(Ordering::SeqCst);
-            if id != 0 {
-                // SAFETY: posting to a thread that may already be gone is harmless.
-                unsafe {
-                    PostThreadMessageW(id, WM_STOP, 0, 0);
+            let Some(mut child) = self.child.take() else {
+                return;
+            };
+            // Closing its input stops it; it ends by itself shortly after.
+            drop(child.stdin.take());
+            std::thread::spawn(move || {
+                for _ in 0..60 {
+                    if !matches!(child.try_wait(), Ok(None)) {
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
                 }
-            }
+                let _ = child.kill();
+                let _ = child.wait();
+            });
         }
     }
 }
@@ -567,6 +677,11 @@ mod rec {
 mod rec {
     use super::Recorded;
     use eframe::egui;
+
+    pub fn recorder_parent() -> Option<u32> {
+        None
+    }
+    pub fn run_recorder(_: u32) {}
 
     pub struct Recorder;
 
@@ -641,6 +756,19 @@ mod tests {
             let combo = Combo::from_vk(vk, false, true, true, false).unwrap();
             assert!(combo.to_hotkey().is_some(), "{combo}");
         }
+    }
+
+    #[test]
+    fn the_recorder_lines_read_back() {
+        for r in [
+            Recorded::Combo(Combo::parse("Win+Shift+;").unwrap()),
+            Recorded::Cancel,
+            Recorded::Unsupported,
+        ] {
+            assert_eq!(parse_recorded(&recorded_line(&r)), Some(r));
+        }
+        assert_eq!(parse_recorded("ready"), None);
+        assert_eq!(parse_recorded("combo Ctrl+"), None);
     }
 
     #[test]

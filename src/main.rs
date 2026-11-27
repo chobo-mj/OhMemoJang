@@ -1639,6 +1639,11 @@ fn sidebar_edge_step(
     out
 }
 fn main() -> eframe::Result {
+    // Started by another copy to record a shortcut (settings › 단축키).
+    if let Some(parent) = keys::recorder_parent() {
+        keys::run_recorder(parent);
+        return Ok(());
+    }
     system::log_crashes();
     system::gl_log_init();
     let by_windows = std::env::args().any(|x| x == "--tray");

@@ -430,6 +430,7 @@ impl ClipboardHistory {
         if text.as_deref().is_some_and(Settings::needs_default_on) {
             let _ = std::fs::write(dir.join("settings.txt"), settings.to_text());
         }
+        clipboy::watch_own_input(ctx);
         let shared = Arc::new(Shared::new());
         shared.collecting.store(settings.collecting(), Relaxed);
         shared

@@ -10,8 +10,47 @@ use crate::icons::Icon;
 use crate::ui;
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
 pub use native::note_hotkey;
+
+/// A key or a mouse button pressed in one of the program's own windows,
+/// which the hooks are not told about.
+static OWN_KEY: AtomicBool = AtomicBool::new(false);
+static OWN_CLICK: AtomicBool = AtomicBool::new(false);
+
+fn viewport() -> egui::ViewportId {
+    egui::ViewportId::from_hash_of("clipboy")
+}
+
+/// Every window but 클립보이 itself reports keys and clicks for it.
+pub fn watch_own_input(ctx: &egui::Context) {
+    ctx.on_begin_pass(
+        "clipboy-own-input",
+        std::sync::Arc::new(|ctx| {
+            if ctx.viewport_id() == viewport() {
+                return;
+            }
+            let (key, click) = ctx.input(|i| {
+                (
+                    i.events.iter().any(|e| {
+                        matches!(
+                            e,
+                            egui::Event::Key { pressed: true, .. } | egui::Event::Text(_)
+                        )
+                    }),
+                    i.pointer.any_pressed(),
+                )
+            });
+            if key {
+                OWN_KEY.store(true, Relaxed);
+            }
+            if click {
+                OWN_CLICK.store(true, Relaxed);
+            }
+        }),
+    );
+}
 
 /// How many of the newest items it lists.
 pub const MAX_ITEMS: usize = 100;
@@ -83,6 +122,8 @@ impl Clipboy {
         if self.closed_by_key.take().is_some_and(|t| now - t < 0.5) {
             return;
         }
+        OWN_KEY.store(false, Relaxed);
+        OWN_CLICK.store(false, Relaxed);
         self.open = true;
         self.anchor = anchor;
         self.loaded = false;
@@ -210,14 +251,21 @@ impl ClipboardHistory {
             return;
         }
         let now = ctx.input(|i| i.time);
-        if let Some((outside, typed)) = self.boy.watch.as_ref().map(native::Watch::take) {
-            if (outside || typed) && !self.boy.keep {
-                if typed {
-                    self.boy.closed_by_key = Some(now);
-                }
-                self.boy.close();
-                return;
+        let (outside, typed) = self
+            .boy
+            .watch
+            .as_ref()
+            .map_or((false, false), native::Watch::take);
+        let (outside, typed) = (
+            outside | OWN_CLICK.swap(false, Relaxed),
+            typed | OWN_KEY.swap(false, Relaxed),
+        );
+        if (outside || typed) && !self.boy.keep {
+            if typed {
+                self.boy.closed_by_key = Some(now);
             }
+            self.boy.close();
+            return;
         }
         if std::mem::take(&mut self.boy.stale) {
             self.boy.req += 1;
@@ -240,44 +288,39 @@ impl ClipboardHistory {
         let mut want_thumbs = vec![];
         let mut want_grids = vec![];
         let boy = &mut self.boy;
-        ctx.show_viewport_immediate(
-            egui::ViewportId::from_hash_of("clipboy"),
-            builder,
-            |ctx, _| {
-                let tone = look(ctx);
-                crate::win_style::shape(ctx, 1.);
-                if !boy.placed {
-                    if let Some(h) = crate::win_style::hwnd(ctx) {
-                        native::style(h);
-                        if let Some((r, _)) = place {
-                            native::place(h, r);
-                        }
-                        boy.watch = native::Watch::start(ctx.clone(), h);
-                        boy.placed = true;
+        ctx.show_viewport_immediate(viewport(), builder, |ctx, _| {
+            let tone = look(ctx);
+            crate::win_style::shape(ctx, 1.);
+            if !boy.placed {
+                if let Some(h) = crate::win_style::hwnd(ctx) {
+                    native::style(h);
+                    if let Some((r, _)) = place {
+                        native::place(h, r);
                     }
+                    boy.watch = native::Watch::start(ctx.clone(), h);
+                    boy.placed = true;
                 }
-                crate::tutorial::mark(ctx, crate::tutorial::Spot::Clipboy, ctx.screen_rect());
-                egui::CentralPanel::default()
-                    .frame(
-                        egui::Frame::NONE
-                            .fill(tone.bg)
-                            .stroke(Stroke::new(1.0_f32, tone.line_strong))
-                            .inner_margin(egui::Margin::same(10)),
-                    )
-                    .show(ctx, |ui| {
-                        boy.ui(ui, tone, now, collecting, &mut acts);
-                        for m in &boy.items {
-                            if m.kind == "image" && m.has_thumb && !boy.thumbs_asked.contains(&m.id)
-                            {
-                                want_thumbs.push(m.id);
-                            }
-                            if m.kind == "table" && !boy.grids_asked.contains(&m.id) {
-                                want_grids.push(m.id);
-                            }
+            }
+            crate::tutorial::mark(ctx, crate::tutorial::Spot::Clipboy, ctx.screen_rect());
+            egui::CentralPanel::default()
+                .frame(
+                    egui::Frame::NONE
+                        .fill(tone.bg)
+                        .stroke(Stroke::new(1.0_f32, tone.line_strong))
+                        .inner_margin(egui::Margin::same(10)),
+                )
+                .show(ctx, |ui| {
+                    boy.ui(ui, tone, now, collecting, &mut acts);
+                    for m in &boy.items {
+                        if m.kind == "image" && m.has_thumb && !boy.thumbs_asked.contains(&m.id) {
+                            want_thumbs.push(m.id);
                         }
-                    });
-            },
-        );
+                        if m.kind == "table" && !boy.grids_asked.contains(&m.id) {
+                            want_grids.push(m.id);
+                        }
+                    }
+                });
+        });
         for id in want_thumbs {
             self.boy.thumbs_asked.insert(id);
             self.send(Cmd::Thumb(id));
