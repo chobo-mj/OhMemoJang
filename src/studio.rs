@@ -3434,7 +3434,10 @@ mod tests {
         assert!(a.sidebar_width >= 160., "the search box is shown");
         assert_eq!(a.page, 5, "the page stays");
         // There is no global search shortcut any more.
-        assert_eq!(a.shortcuts.len(), 3);
+        assert_eq!(a.shortcuts.len(), crate::shortcut_settings::GLOBAL.len());
+        assert!(!crate::shortcut_settings::GLOBAL
+            .iter()
+            .any(|n| n.contains("검색")));
     }
     #[test]
     fn a_calendar_drag_memo_closed_blank_is_erased_and_a_written_one_stays() {
