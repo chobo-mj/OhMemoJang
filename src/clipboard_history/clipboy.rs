@@ -135,9 +135,9 @@ impl Clipboy {
             }
             self.note = Some(("붙여 넣었어요".into(), now));
         } else if ok {
-            self.note = Some(("복사했어요 · Ctrl+V로 붙여 넣기".into(), now));
+            self.note = Some(("복사했어요".into(), now));
         } else {
-            self.note = Some(("클립보드에 넣지 못했어요".into(), now));
+            self.note = Some(("복사하지 못했어요".into(), now));
         }
     }
 }

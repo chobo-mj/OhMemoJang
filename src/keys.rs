@@ -393,10 +393,12 @@ mod rec {
     };
 
     const WM_STOP: u32 = WM_APP + 0x51;
+    /// A combination was taken: the program is woken from the thread's
+    /// loop, not from the hook.
+    const WM_GOT: u32 = WM_APP + 0x52;
 
     struct Hook {
         out: Arc<Mutex<Option<Recorded>>>,
-        ctx: egui::Context,
         /// Modifier keys held: Win, Ctrl, Alt, Shift.
         held: [bool; 4],
         /// Keys whose press was taken: their release is taken too.
@@ -423,7 +425,8 @@ mod rec {
         pid == GetCurrentProcessId()
     }
 
-    /// Short: Windows drops a low-level hook that answers too slowly.
+    /// Short, and never waiting on the program: Windows drops a low-level
+    /// hook that answers too slowly (and lets that key through).
     unsafe extern "system" fn hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
         if code >= 0 {
             let k = &*(l as *const KBDLLHOOKSTRUCT);
@@ -461,7 +464,7 @@ mod rec {
                         .map_or(Recorded::Unsupported, Recorded::Combo)
                 };
                 *h.out.lock().unwrap_or_else(|e| e.into_inner()) = Some(got);
-                h.ctx.request_repaint();
+                PostThreadMessageW(GetCurrentThreadId(), WM_GOT, 0, 0);
                 true
             });
             if take {
@@ -490,7 +493,6 @@ mod rec {
                     HOOK.with(|h| {
                         *h.borrow_mut() = Some(Hook {
                             out: hook_out,
-                            ctx,
                             held: [false; 4],
                             taken: HashSet::new(),
                         })
@@ -520,6 +522,7 @@ mod rec {
                             break;
                         }
                         match msg.message {
+                            WM_GOT => ctx.request_repaint_of(egui::ViewportId::ROOT),
                             WM_STOP if !stopping => {
                                 stopping = true;
                                 SetTimer(std::ptr::null_mut(), 0, 1000, None);

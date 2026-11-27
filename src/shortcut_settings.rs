@@ -191,7 +191,7 @@ impl App {
             };
             let pressed = ui
                 .add(
-                    egui::Button::new(RichText::new(text).monospace())
+                    egui::Button::new(RichText::new(text))
                         .min_size(egui::vec2(170., 26.))
                         .selected(waiting),
                 )
@@ -272,11 +272,9 @@ impl App {
                 ("~~ Space", "직전 단어 취소선"),
                 ("~~~ Space", "한 줄 전체 취소선"),
                 ("[] Space", "체크박스 넣기"),
-                ("#이름 Space", "본문 첫 줄에서 프로젝트 지정"),
+                ("#이름 Space", "첫 줄에서 프로젝트 지정"),
             ] {
-                crate::ui::field(ui, label, |ui| {
-                    ui.label(key);
-                });
+                fixed_row(ui, label, key);
             }
             hint(ui, "글자로 입력하는 규칙(~~ Space 등)은 바꿀 수 없어요");
         });
@@ -292,18 +290,31 @@ impl App {
                 self.shortcut_row(ui, Slot::App(a));
             }
             ui.add_space(6.);
-            let tone = crate::ui::t(ui);
             for (key, label) in [
-                ("Shift+드래그", "날짜에 이날까지 업무 추가 (선택창 생략)"),
+                ("Shift+드래그", "이날까지 업무 추가"),
                 ("Esc Esc", "메모 닫기"),
             ] {
-                ui.horizontal(|ui| {
-                    ui.add_sized([180., 22.], egui::Label::new(RichText::new(label)));
-                    crate::ui::chip(ui, key, tone.field, tone.muted);
-                });
+                fixed_row(ui, label, key);
             }
+            hint(ui, "Shift+드래그: 날짜에 놓을 때 선택창 없이 이날까지 업무로 지정 · 마우스 동작과 두 번 누르기는 바꿀 수 없어요");
         });
     }
+}
+
+/// A shortcut that cannot be changed, in the same columns as the others.
+fn fixed_row(ui: &mut egui::Ui, label: &str, key: &str) {
+    ui.horizontal(|ui| {
+        let tone = crate::ui::t(ui);
+        ui.allocate_ui_with_layout(
+            egui::vec2(150., 24.),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.set_min_size(egui::vec2(150., 24.));
+                ui.label(RichText::new(label).color(tone.muted));
+            },
+        );
+        ui.label(RichText::new(key).color(tone.muted));
+    });
 }
 
 #[cfg(test)]
