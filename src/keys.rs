@@ -5,6 +5,10 @@
 use eframe::egui;
 use std::sync::Mutex;
 
+/// Marks the key presses the program sends itself (클립보이's Ctrl+V), so
+/// its keyboard watches can tell them from the user's.
+pub const OWN_INPUT: usize = 0x4F4D_4A43;
+
 /// A key with its modifier keys, written like "Ctrl+Shift+H".
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Combo {
@@ -388,7 +392,6 @@ mod rec {
         WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER,
     };
 
-    const LLKHF_INJECTED: u32 = 0x10;
     const WM_STOP: u32 = WM_APP + 0x51;
 
     struct Hook {
@@ -427,7 +430,9 @@ mod rec {
             let msg = w as u32;
             let down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
             let up = msg == WM_KEYUP || msg == WM_SYSKEYUP;
-            let injected = k.flags & LLKHF_INJECTED != 0;
+            // Keys sent by other programs count (an on-screen keyboard),
+            // the program's own do not.
+            let own = k.dwExtraInfo == super::OWN_INPUT;
             let take = HOOK.with(|h| {
                 let Ok(mut h) = h.try_borrow_mut() else {
                     return false;
@@ -440,7 +445,7 @@ mod rec {
                     }
                     return h.taken.remove(&vk);
                 }
-                if !down || injected || !ours_in_front() {
+                if !down || own || !ours_in_front() {
                     return false;
                 }
                 h.taken.insert(vk);

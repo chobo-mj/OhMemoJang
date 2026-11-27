@@ -56,6 +56,8 @@ pub struct Clipboy {
     key: Option<crate::keys::Combo>,
     /// Turned on or off on the page: the shortcut is registered again.
     switched: bool,
+    /// Just opened: the list starts at the top.
+    from_top: bool,
 }
 
 impl Clipboy {
@@ -85,6 +87,7 @@ impl Clipboy {
         self.anchor = anchor;
         self.loaded = false;
         self.stale = true;
+        self.from_top = true;
     }
 
     /// 전체비우기 as the list shows it until the worker's answer.
@@ -132,12 +135,9 @@ impl Clipboy {
             }
             self.note = Some(("붙여 넣었어요".into(), now));
         } else if ok {
-            self.note = Some(("복사했어요 · Ctrl+V로 붙여 넣으세요".into(), now));
+            self.note = Some(("복사했어요 · Ctrl+V로 붙여 넣기".into(), now));
         } else {
-            self.note = Some((
-                "클립보드에 넣지 못했어요 · 잠시 뒤 다시 눌러 주세요".into(),
-                now,
-            ));
+            self.note = Some(("클립보드에 넣지 못했어요".into(), now));
         }
     }
 }
@@ -343,7 +343,16 @@ impl Clipboy {
             if crate::icons::toggle_icon(ui, Icon::Pin, tip, self.keep).clicked() {
                 acts.push(Act::Keep);
             }
-            ui.label(RichText::new("클립보이").strong().color(tone.ink));
+            // What the last click did shows for a moment in place of the name.
+            match &self.note {
+                Some((text, at)) if now - at < 2.5 => {
+                    ui.label(RichText::new(text).size(12.).color(ui::accent(ui)));
+                }
+                _ => {
+                    self.note = None;
+                    ui.label(RichText::new("클립보이").strong().color(tone.ink));
+                }
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .button("전체비우기")
@@ -357,13 +366,6 @@ impl Clipboy {
                 );
             });
         });
-        if let Some((text, at)) = &self.note {
-            if now - at < 2.5 {
-                ui.label(RichText::new(text).size(12.).color(ui::accent(ui)));
-            } else {
-                self.note = None;
-            }
-        }
         ui.add_space(4.);
         egui::Frame::NONE
             .stroke(Stroke::new(1.0_f32, tone.line_strong))
@@ -393,15 +395,21 @@ impl Clipboy {
                     return;
                 }
                 ui.spacing_mut().item_spacing.y = 0.;
-                egui::ScrollArea::vertical()
+                // A scroll bar that is always there, not one that shows up
+                // only under the pointer.
+                ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+                let mut area = egui::ScrollArea::vertical()
                     .id_salt("clipboy_list")
                     .auto_shrink([false, false])
-                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
-                    .show_rows(ui, ROW_H, self.items.len(), |ui, rows| {
-                        for i in rows {
-                            self.row(ui, i, tone, acts);
-                        }
-                    });
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible);
+                if std::mem::take(&mut self.from_top) {
+                    area = area.vertical_scroll_offset(0.);
+                }
+                area.show_rows(ui, ROW_H, self.items.len(), |ui, rows| {
+                    for i in rows {
+                        self.row(ui, i, tone, acts);
+                    }
+                });
             });
     }
 
@@ -677,7 +685,7 @@ mod native {
                     wScan: 0,
                     dwFlags: if up { KEYEVENTF_KEYUP } else { 0 },
                     time: 0,
-                    dwExtraInfo: 0,
+                    dwExtraInfo: crate::keys::OWN_INPUT,
                 },
             },
         }
@@ -849,8 +857,6 @@ mod native {
 
     const WM_CLICK: u32 = WM_APP + 0x61;
     const WM_TYPED: u32 = WM_APP + 0x62;
-    const LLKHF_INJECTED: u32 = 0x10;
-    const LLMHF_INJECTED: u32 = 0x01;
 
     thread_local! {
         /// Keys already held when the watch began (the shortcut's own key):
@@ -870,7 +876,9 @@ mod native {
             if msg == WM_KEYUP || msg == WM_SYSKEYUP {
                 HELD.with(|h| h.borrow_mut().remove(&k.vkCode));
             } else if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
-                && k.flags & LLKHF_INJECTED == 0
+                // Its own Ctrl+V is not the user typing; keys other programs
+                // send (an on-screen keyboard) are.
+                && k.dwExtraInfo != crate::keys::OWN_INPUT
                 && !modifier(k.vkCode)
                 && !HELD.with(|h| h.borrow().contains(&k.vkCode))
             {
@@ -888,14 +896,12 @@ mod native {
             )
         {
             let m = &*(l as *const MSLLHOOKSTRUCT);
-            if m.flags & LLMHF_INJECTED == 0 {
-                PostThreadMessageW(
-                    GetCurrentThreadId(),
-                    WM_CLICK,
-                    m.pt.x as isize as WPARAM,
-                    m.pt.y as LPARAM,
-                );
-            }
+            PostThreadMessageW(
+                GetCurrentThreadId(),
+                WM_CLICK,
+                m.pt.x as isize as WPARAM,
+                m.pt.y as LPARAM,
+            );
         }
         CallNextHookEx(std::ptr::null_mut(), code, w, l)
     }
